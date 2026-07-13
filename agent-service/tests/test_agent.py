@@ -78,6 +78,9 @@ def _reset_agent():
 
     app.agent._reset_graph()
     app.agent._conversations.clear()
+    app.agent._session_locks.clear()
+    app.agent._session_generations.clear()
+    app.agent._active_tasks.clear()
     pending = getattr(app.agent, "_pending_confirmations", None)
     if pending is not None:
         pending.clear()
@@ -740,3 +743,322 @@ async def test_one_turn_can_complete_multiple_one_time_confirmations():
     assert [action["args"]["todo_id"] for action in actions] == [30, 31]
     assert delete.ainvoke.await_count == 2
     assert _pending_confirmations == {}
+
+
+@pytest.mark.asyncio
+async def test_retry_resumes_after_tool_success_without_repeating_side_effect():
+    """A failed final LLM call reuses the durable tool journal on retry."""
+    from app.agent import _conversations, _tools_by_name, process_message
+
+    class ScriptedModel:
+        def __init__(self):
+            self.ainvoke = AsyncMock(
+                side_effect=[
+                    _aim(
+                        tool_calls=[
+                            _tc("create_todo", {"title": "只创建一次"}, "stable-call")
+                        ]
+                    ),
+                    RuntimeError("final model failed"),
+                    _aim("恢复成功"),
+                ]
+            )
+
+        def bind_tools(self, _tools):
+            return self
+
+    model = ScriptedModel()
+    create = StubTool(result={"id": 88, "title": "只创建一次"})
+    first_events: list[dict[str, Any]] = []
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": create}),
+    ):
+        with pytest.raises(RuntimeError, match="final model failed"):
+            await process_message("recoverable", "创建一次", first_events.append)
+        incomplete = _conversations["recoverable"]["incomplete"]
+        assert incomplete["actions"][0]["result"]["id"] == 88
+
+        reply, actions, _ = await process_message("recoverable", "创建一次")
+
+    create.ainvoke.assert_awaited_once_with({"title": "只创建一次"})
+    assert reply == "恢复成功"
+    assert actions[0]["result"]["id"] == 88
+    failure = next(event for event in first_events if event["type"] == "step_failed")
+    assert failure["step_id"] == "respond"
+
+
+@pytest.mark.asyncio
+async def test_retry_after_action_event_send_failure_reuses_journaled_side_effect():
+    from app.agent import _tools_by_name, process_message
+
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "已写入"}, "send-call")]),
+            _aim("恢复回复"),
+        ]
+    )
+    create = StubTool(result={"id": 89, "title": "已写入"})
+
+    async def fail_after_action(event: dict[str, Any]) -> None:
+        if event["type"] == "action_completed":
+            raise RuntimeError("socket send failed")
+
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": create}),
+    ):
+        with pytest.raises(RuntimeError, match="socket send failed"):
+            await process_message("send-resume", "创建", fail_after_action)
+        reply, actions, _ = await process_message("send-resume", "创建")
+
+    create.ainvoke.assert_awaited_once_with({"title": "已写入"})
+    assert reply == "恢复回复"
+    assert actions[0]["result"]["id"] == 89
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_stays_recoverable_until_reply_delivery_is_acked():
+    """A failed final reply send can replay the result without replaying tools."""
+    from app.agent import _conversations, _tools_by_name, process_message
+
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "待交付"}, "delivery")]),
+            _aim("最终回复"),
+        ]
+    )
+    create = StubTool(result={"id": 90})
+
+    async def collect(_event):
+        pass
+
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": create}),
+    ):
+        await process_message("delivery-session", "创建", collect)
+        assert (
+            _conversations["delivery-session"]["incomplete"]["phase"] == "ready_reply"
+        )
+        reply, actions, _ = await process_message("delivery-session", "创建")
+
+    create.ainvoke.assert_awaited_once()
+    assert reply == "最终回复"
+    assert actions[0]["result"]["id"] == 90
+    assert _conversations["delivery-session"]["incomplete"] is None
+
+
+@pytest.mark.asyncio
+async def test_same_session_turns_are_serial_but_different_sessions_run_in_parallel():
+    """Session gates prevent lost updates without globally serializing the service."""
+    from app.agent import _conversations, process_message
+
+    active = 0
+    max_active = 0
+    first_entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class CoordinatedModel:
+        def bind_tools(self, _tools):
+            return self
+
+        async def ainvoke(self, _messages):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            first_entered.set()
+            await release.wait()
+            active -= 1
+            return _aim("完成")
+
+    with patch("app.agent._build_llm", return_value=CoordinatedModel()):
+        first = asyncio.create_task(process_message("same", "第一条"))
+        await first_entered.wait()
+        second = asyncio.create_task(process_message("same", "第二条"))
+        other = asyncio.create_task(process_message("other", "并行条目"))
+        await asyncio.sleep(0)
+        assert max_active == 2
+        release.set()
+        await asyncio.gather(first, second, other)
+
+    assert max_active == 2
+    same_contents = [message.content for message in _conversations["same"]["messages"]]
+    assert "第一条" in same_contents
+    assert "第二条" in same_contents
+
+
+@pytest.mark.asyncio
+async def test_tool_call_limit_stops_execution_with_stable_diagnostic():
+    """Runaway tool plans stop before an unbounded number of side effects."""
+    from app.agent import _conversations, _tools_by_name, process_message
+
+    events: list[dict[str, Any]] = []
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(
+                tool_calls=[
+                    _tc("create_todo", {"title": "允许"}, "one"),
+                    _tc("create_todo", {"title": "禁止"}, "two"),
+                ]
+            )
+        ]
+    )
+    create = StubTool(result={"id": 1})
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"create_todo": create}),
+        patch("app.agent.MAX_TOOL_CALLS", 1),
+    ):
+        with pytest.raises(Exception, match="Agent execution limit exceeded"):
+            await process_message("limited", "循环", events.append)
+
+    create.ainvoke.assert_awaited_once()
+    failure = next(event for event in events if event["type"] == "step_failed")
+    assert failure["error_code"] == "AGENT_LIMIT_EXCEEDED"
+    assert failure["retryable"] is False
+    assert (
+        _conversations["limited"]["incomplete"]["error_code"] == "AGENT_LIMIT_EXCEEDED"
+    )
+
+
+@pytest.mark.parametrize(
+    "error,retryable",
+    [
+        (ConnectionError("无法连接到后端服务"), True),
+        (TimeoutError("timeout"), True),
+        (ValueError("待办不存在"), False),
+        (ValueError("参数校验失败"), False),
+        (RuntimeError("permanent failure"), False),
+    ],
+)
+def test_tool_failure_retryability_is_classified(error, retryable):
+    from app.agent import _failure_metadata
+
+    assert _failure_metadata(error)[1] is retryable
+
+
+@pytest.mark.asyncio
+async def test_storage_limits_evict_lru_and_expired_sessions_with_pending_state():
+    """Bounded storage removes old sessions and their confirmation entries."""
+    from app.agent import (
+        _PendingEntry,
+        _conversations,
+        _pending_confirmations,
+        _prune_sessions,
+        _session_locks,
+    )
+    from app.schemas import PendingConfirmation
+
+    _conversations.update(
+        {
+            "expired": {"messages": [], "updated_at": 0.0},
+            "old": {"messages": [], "updated_at": 90.0},
+            "recent": {"messages": [], "updated_at": 99.0},
+        }
+    )
+    _session_locks.update({key: asyncio.Lock() for key in _conversations})
+    pending_future = asyncio.get_running_loop().create_future()
+    _pending_confirmations["expired-confirmation"] = _PendingEntry(
+        binding=PendingConfirmation(
+            confirmation_id="expired-confirmation",
+            session_id="expired",
+            tool="delete_todo",
+            args={"todo_id": 1},
+            message="confirm",
+        ),
+        future=pending_future,
+    )
+    with (
+        patch("app.agent.SESSION_TTL_SECONDS", 50),
+        patch("app.agent.MAX_SESSIONS", 1),
+    ):
+        _prune_sessions(now=100.0)
+
+    assert list(_conversations) == ["recent"]
+    assert set(_session_locks) == {"recent"}
+    assert _pending_confirmations == {}
+    assert pending_future.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_delete_tombstone_prevents_noncooperative_inflight_turn_resurrection():
+    """A cancelled turn that finishes late cannot recreate deleted history."""
+    from app.agent import (
+        SessionDeletedError,
+        _conversations,
+        _tools_by_name,
+        delete_history,
+        process_message,
+    )
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def late_tool(_args):
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await release.wait()
+            return {"id": 55}
+
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "晚到"}, "late")]),
+            _aim("完成"),
+        ]
+    )
+    tool = StubTool(side_effect=late_tool)
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        turn = asyncio.create_task(process_message("delete-race", "创建"))
+        await entered.wait()
+        assert await delete_history("delete-race") is True
+        assert "delete-race" not in _conversations
+        release.set()
+        with pytest.raises(SessionDeletedError):
+            await turn
+
+    assert "delete-race" not in _conversations
+
+
+@pytest.mark.asyncio
+async def test_tool_round_limit_stops_before_next_round_side_effect():
+    from app.agent import _tools_by_name, process_message
+
+    events: list[dict[str, Any]] = []
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "一次"}, "one")]),
+            _aim(tool_calls=[_tc("create_todo", {"title": "二次"}, "two")]),
+        ]
+    )
+    create = StubTool(result={"id": 1})
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"create_todo": create}),
+        patch("app.agent.MAX_TOOL_ROUNDS", 1),
+    ):
+        with pytest.raises(Exception, match="Agent execution limit exceeded"):
+            await process_message("round-limit", "循环", events.append)
+
+    create.ainvoke.assert_awaited_once()
+    assert any(event.get("error_code") == "AGENT_LIMIT_EXCEEDED" for event in events)
+
+
+def test_message_budget_keeps_system_and_recent_context():
+    from app.agent import _trim_messages
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    messages = [SystemMessage(content="system")] + [
+        HumanMessage(content=str(index)) for index in range(10)
+    ]
+    with patch("app.agent.MAX_MESSAGES_PER_SESSION", 4):
+        trimmed = _trim_messages(messages)
+
+    assert len(trimmed) == 4
+    assert trimmed[0].content == "system"
+    assert [message.content for message in trimmed[1:]] == ["7", "8", "9"]

@@ -22,12 +22,47 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
-from .agent import delete_history, get_history, process_message, resolve_confirmation
+from .agent import (
+    complete_turn,
+    delete_history,
+    get_history,
+    process_message,
+    resolve_confirmation,
+)
 from .schemas import ChatRequest, ConfirmationResponse
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Agent TodoList - Agent Service", version="0.1.0")
+
+
+class _WebSocketWriter:
+    """Single ordered write boundary shared by endpoint and Agent sink."""
+
+    def __init__(self, ws: WebSocket):
+        self._ws = ws
+        self._lock = asyncio.Lock()
+
+    async def send_json(self, event: dict) -> None:
+        async with self._lock:
+            await self._ws.send_json(event)
+
+
+async def _cancel_and_drain(task: asyncio.Task, timeout: float = 0.1) -> None:
+    """Cancel a task and consume its result without unbounded cleanup waits."""
+    if task.done():
+        with suppress(BaseException):
+            task.result()
+        return
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=timeout)
+    if done:
+        with suppress(BaseException):
+            task.result()
+    else:
+        task.add_done_callback(
+            lambda finished: finished.exception() if not finished.cancelled() else None
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +177,7 @@ async def history(session_id: str = Query(..., min_length=1)):
 @app.delete("/api/agent/history")
 async def delete_history_endpoint(session_id: str = Query(..., min_length=1)):
     """Delete a conversation session."""
-    existed = delete_history(session_id)
+    existed = await delete_history(session_id)
     if not existed:
         raise _err(40402, "会话不存在", 404)
     return _ok({"deleted": True, "session_id": session_id})
@@ -163,6 +198,7 @@ async def stream(ws: WebSocket):
         reply* -> done
     """
     await ws.accept()
+    writer = _WebSocketWriter(ws)
 
     try:
         raw = await ws.receive_text()
@@ -173,10 +209,11 @@ async def stream(ws: WebSocket):
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            parsed = {"message": raw}
-        request = ChatRequest.model_validate(parsed)
+            parsed = raw
+        payload = parsed if isinstance(parsed, dict) else {"message": raw}
+        request = ChatRequest.model_validate(payload)
     except (ValidationError, TypeError, ValueError) as exc:
-        await ws.send_json(
+        await writer.send_json(
             {
                 "type": "step_failed",
                 "step_id": "request",
@@ -186,7 +223,7 @@ async def stream(ws: WebSocket):
                 "duration_ms": 0,
             }
         )
-        await ws.send_json({"type": "done"})
+        await writer.send_json({"type": "done"})
         await ws.close(code=1008)
         return
 
@@ -194,7 +231,7 @@ async def stream(ws: WebSocket):
     # connection's session while process_message is still awaiting approval.
     session_id = request.session_id or str(uuid.uuid4())
     process_task = asyncio.create_task(
-        process_message(session_id, request.message, on_event=ws.send_json)
+        process_message(session_id, request.message, on_event=writer.send_json)
     )
     receive_task: asyncio.Task[dict] | None = asyncio.create_task(ws.receive_json())
 
@@ -209,13 +246,12 @@ async def stream(ws: WebSocket):
 
             if process_task in completed:
                 if receive_task is not None:
-                    receive_task.cancel()
-                    with suppress(asyncio.CancelledError, WebSocketDisconnect):
-                        await receive_task
+                    await _cancel_and_drain(receive_task)
                     receive_task = None
                 reply, _actions, _sid = process_task.result()
-                await ws.send_json({"type": "reply", "content": reply})
-                await ws.send_json({"type": "done"})
+                await writer.send_json({"type": "reply", "content": reply})
+                await writer.send_json({"type": "done"})
+                await complete_turn(session_id, request.message)
                 await ws.close()
                 return
 
@@ -223,7 +259,7 @@ async def stream(ws: WebSocket):
             try:
                 control = ConfirmationResponse.model_validate(receive_task.result())
             except ValidationError as exc:
-                await ws.send_json(
+                await writer.send_json(
                     {
                         "type": "step_failed",
                         "step_id": "confirmation",
@@ -237,7 +273,7 @@ async def stream(ws: WebSocket):
                 if not resolve_confirmation(
                     session_id, control.confirmation_id, control.approved
                 ):
-                    await ws.send_json(
+                    await writer.send_json(
                         {
                             "type": "step_failed",
                             "step_id": "confirmation",
@@ -249,34 +285,27 @@ async def stream(ws: WebSocket):
                     )
             receive_task = asyncio.create_task(ws.receive_json())
     except WebSocketDisconnect:
-        process_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await process_task
+        await _cancel_and_drain(process_task)
     except Exception as exc:
         logger.exception("Agent streaming failed")
         if not process_task.done():
-            process_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await process_task
+            await _cancel_and_drain(process_task)
         with suppress(RuntimeError, WebSocketDisconnect):
-            await ws.send_json(
-                {
-                    "type": "step_failed",
-                    "step_id": "understand",
-                    "error_code": "AGENT_ERROR",
-                    "message": str(exc),
-                    "retryable": False,
-                    "duration_ms": 0,
-                }
-            )
-            await ws.send_json({"type": "done"})
+            if not getattr(exc, "event_emitted", False):
+                await writer.send_json(
+                    {
+                        "type": "step_failed",
+                        "step_id": getattr(exc, "phase", "agent"),
+                        "error_code": "AGENT_ERROR",
+                        "message": str(exc),
+                        "retryable": False,
+                        "duration_ms": 0,
+                    }
+                )
+            await writer.send_json({"type": "done"})
             await ws.close(code=1011)
     finally:
         if receive_task is not None and not receive_task.done():
-            receive_task.cancel()
-            with suppress(asyncio.CancelledError, WebSocketDisconnect):
-                await receive_task
+            await _cancel_and_drain(receive_task)
         if not process_task.done():
-            process_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await process_task
+            await _cancel_and_drain(process_task)

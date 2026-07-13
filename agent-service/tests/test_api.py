@@ -17,6 +17,9 @@ def _reset_agent():
 
     app.agent._reset_graph()
     app.agent._conversations.clear()
+    app.agent._session_locks.clear()
+    app.agent._session_generations.clear()
+    app.agent._active_tasks.clear()
     app.agent._pending_confirmations.clear()
 
 
@@ -383,3 +386,177 @@ def test_websocket_rejects_unvalidated_confirmation_frame(client):
     resolve.assert_not_called()
     assert failure["type"] == "step_failed"
     assert failure["error_code"] == "INVALID_CLIENT_EVENT"
+
+
+@pytest.mark.parametrize("raw", ["null", "123", '"hello"'])
+def test_websocket_json_scalars_remain_plain_text_messages(client, raw):
+    """Only JSON objects are protocol envelopes; scalars retain raw text."""
+    seen: list[str] = []
+
+    async def capture(session_id, message, on_event=None):
+        seen.append(message)
+        return "ok", [], session_id
+
+    with patch("app.main.process_message", new=AsyncMock(side_effect=capture)):
+        with client.websocket_connect("/api/agent/stream") as ws:
+            ws.send_text(raw)
+            assert ws.receive_json()["type"] == "reply"
+            assert ws.receive_json()["type"] == "done"
+
+    assert seen == [raw]
+
+
+@pytest.mark.asyncio
+async def test_websocket_writer_serializes_concurrent_sends():
+    """All Agent and endpoint events pass through one non-overlapping writer."""
+    from app.main import stream
+
+    class FakeWebSocket:
+        def __init__(self):
+            self.events = []
+            self.active_writes = 0
+            self.max_active_writes = 0
+            self.receive_forever = asyncio.Event()
+
+        async def accept(self):
+            pass
+
+        async def receive_text(self):
+            return '{"message":"并发事件","session_id":"writer"}'
+
+        async def receive_json(self):
+            await self.receive_forever.wait()
+
+        async def send_json(self, event):
+            self.active_writes += 1
+            self.max_active_writes = max(self.max_active_writes, self.active_writes)
+            await asyncio.sleep(0)
+            self.events.append(event)
+            self.active_writes -= 1
+
+        async def close(self, code=1000):
+            pass
+
+    async def concurrent_events(session_id, message, on_event=None):
+        await asyncio.gather(
+            on_event({"type": "reply", "content": "一"}),
+            on_event({"type": "reply", "content": "二"}),
+        )
+        return "最终", [], session_id
+
+    ws = FakeWebSocket()
+    with patch(
+        "app.main.process_message", new=AsyncMock(side_effect=concurrent_events)
+    ):
+        await stream(ws)
+
+    assert ws.max_active_writes == 1
+    assert [event["type"] for event in ws.events[-2:]] == ["reply", "done"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_drain_is_bounded_for_uncooperative_task():
+    """Endpoint cleanup returns even when cancellation is temporarily ignored."""
+    from app.main import _cancel_and_drain
+
+    release = asyncio.Event()
+
+    async def uncooperative():
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    task = asyncio.create_task(uncooperative())
+    await asyncio.sleep(0)
+    started = asyncio.get_running_loop().time()
+    await _cancel_and_drain(task, timeout=0.001)
+    assert asyncio.get_running_loop().time() - started < 0.05
+    release.set()
+    await task
+
+
+def test_websocket_reports_the_actual_failed_phase(client):
+    """A final model failure is reported as respond, never understand."""
+    from app.agent import AgentExecutionError
+
+    async def fail_respond(session_id, message, on_event=None):
+        raise AgentExecutionError("final failed", phase="respond")
+
+    with patch("app.main.process_message", new=AsyncMock(side_effect=fail_respond)):
+        with client.websocket_connect("/api/agent/stream") as ws:
+            ws.send_text("触发失败")
+            failure = ws.receive_json()
+            done = ws.receive_json()
+
+    assert failure["type"] == "step_failed"
+    assert failure["step_id"] == "respond"
+    assert done["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_websocket_send_failure_cleans_up_without_hanging():
+    from app.main import stream
+
+    class FailingWebSocket:
+        async def accept(self):
+            pass
+
+        async def receive_text(self):
+            return '{"message":"触发写失败","session_id":"send-failure"}'
+
+        async def receive_json(self):
+            await asyncio.Future()
+
+        async def send_json(self, _event):
+            raise RuntimeError("socket write failed")
+
+        async def close(self, code=1000):
+            pass
+
+    async def emit_once(session_id, message, on_event=None):
+        await on_event({"type": "reply", "content": "写入"})
+        return "never", [], session_id
+
+    with patch("app.main.process_message", new=AsyncMock(side_effect=emit_once)):
+        await asyncio.wait_for(stream(FailingWebSocket()), timeout=0.1)
+
+
+@pytest.mark.asyncio
+async def test_websocket_disconnect_and_process_failure_are_drained_together():
+    from app.agent import AgentExecutionError
+    from app.main import stream
+    from starlette.websockets import WebSocketDisconnect
+
+    trigger = asyncio.Event()
+
+    class RacingWebSocket:
+        def __init__(self):
+            self.events = []
+
+        async def accept(self):
+            pass
+
+        async def receive_text(self):
+            return '{"message":"竞态","session_id":"race"}'
+
+        async def receive_json(self):
+            trigger.set()
+            await asyncio.sleep(0)
+            raise WebSocketDisconnect(code=1001)
+
+        async def send_json(self, event):
+            self.events.append(event)
+
+        async def close(self, code=1000):
+            pass
+
+    async def fail_together(session_id, message, on_event=None):
+        await trigger.wait()
+        raise AgentExecutionError("racing failure", phase="respond")
+
+    ws = RacingWebSocket()
+    with patch("app.main.process_message", new=AsyncMock(side_effect=fail_together)):
+        await asyncio.wait_for(stream(ws), timeout=0.1)
+
+    assert len([event for event in ws.events if event["type"] == "step_failed"]) <= 1

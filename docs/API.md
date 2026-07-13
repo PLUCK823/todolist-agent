@@ -322,6 +322,10 @@ WS /api/agent/stream
 
 前端应根据步骤事件展示等待、运行、完成和失败状态。后端接口超时对应 `step_failed(error_code="TOOL_TIMEOUT", retryable=true)`，可用于展示重试入口。
 
+Agent 会在每个工具完成后先记录该 turn 的 action journal，再继续调用模型或发送后续事件。如果工具已经成功但最终模型/连接失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重试；服务端从未完成阶段恢复并复用已记录的 tool-call ID，不会重复执行已经产生副作用的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
+
+服务端为每个 session 串行执行 turn，不同 session 仍可并行。会话采用 TTL/LRU 有界缓存，并限制每个会话保留的消息数、单 turn 的工具轮数和工具调用总数；超限返回 `step_failed(error_code="AGENT_LIMIT_EXCEEDED", retryable=false)`。删除历史会建立 tombstone 并取消同 session 的在途处理，晚到结果不能重新创建已删除的历史或确认状态。
+
 ### 3.3 获取对话历史
 
 ```http
