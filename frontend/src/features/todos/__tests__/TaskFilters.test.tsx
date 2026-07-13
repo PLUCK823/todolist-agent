@@ -24,6 +24,8 @@ describe('TaskFilters', () => {
     const onChange = vi.fn()
     render(<TaskFilters filters={{}} onChange={onChange} />)
 
+    expect(screen.getByRole('searchbox', { name: '搜索任务' })).toHaveAttribute('name', 'todo-search')
+
     await user.type(screen.getByRole('searchbox', { name: '搜索任务' }), '文档')
     await user.selectOptions(screen.getByLabelText('任务排序'), 'due_date:asc')
 

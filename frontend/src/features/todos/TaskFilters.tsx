@@ -31,6 +31,7 @@ export function TaskFilters({ filters, onChange, keyword = '', onKeywordChange }
         <svg className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5" stroke="currentColor" strokeWidth="1.5"/><path d="m12.4 12.4 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
         <input
           type="search"
+          name="todo-search"
           aria-label="搜索任务"
           autoComplete="off"
           value={keyword}

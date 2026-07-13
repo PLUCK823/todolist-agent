@@ -112,6 +112,7 @@ function ConfirmDialogContent({
 }) {
   const animatedIn = phase === "entered";
   const interactive = phase !== "exiting";
+  const canDismiss = interactive && !pending;
   const [restoreFocusTo] = useState<HTMLElement | null>(() => {
     const activeElement = document.activeElement;
     return activeElement instanceof HTMLElement && activeElement !== document.body
@@ -136,11 +137,11 @@ function ConfirmDialogContent({
   // Close on Escape
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (interactive && e.key === "Escape") {
+      if (canDismiss && e.key === "Escape") {
         onCancel();
       }
     },
-    [interactive, onCancel],
+    [canDismiss, onCancel],
   );
 
   useEffect(() => {
@@ -154,10 +155,10 @@ function ConfirmDialogContent({
   }, [handleKeyDown]);
 
   const handleBackdropClick = useCallback(() => {
-    if (interactive) {
+    if (canDismiss) {
       onCancel();
     }
-  }, [interactive, onCancel]);
+  }, [canDismiss, onCancel]);
 
   const handleDialogClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -214,8 +215,9 @@ function ConfirmDialogContent({
         <div className="flex justify-end gap-3 px-6 pb-6">
           <button
             type="button"
-            onClick={interactive ? onCancel : undefined}
-            disabled={!interactive}
+            onClick={canDismiss ? onCancel : undefined}
+            disabled={!canDismiss}
+            aria-busy={pending || undefined}
             className="px-4 py-2 text-sm font-medium text-[#6b7280] bg-white border border-[#e5e7eb] rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#7165ea] focus:ring-offset-2 transition-colors cursor-pointer"
           >
             {cancelLabel}

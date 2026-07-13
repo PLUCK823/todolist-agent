@@ -311,6 +311,26 @@ func TestUpdate(t *testing.T) {
 	}
 }
 
+func TestUpdate_ClearsDueDateToNull(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewTodoRepository(db)
+	todo := createTestTodo(t, repo, "Clear due date", "medium")
+	if todo.DueDate == nil {
+		t.Fatal("expected seeded due date")
+	}
+	todo.DueDate = nil
+	if err := repo.Update(todo); err != nil {
+		t.Fatalf("Update() failed: %v", err)
+	}
+	reloaded, err := repo.GetByID(todo.ID)
+	if err != nil {
+		t.Fatalf("GetByID() failed: %v", err)
+	}
+	if reloaded == nil || reloaded.DueDate != nil {
+		t.Fatalf("expected due_date NULL after Save, got %#v", reloaded)
+	}
+}
+
 func TestDelete(t *testing.T) {
 	db := setupTestDB(t)
 	repo := NewTodoRepository(db)

@@ -72,8 +72,15 @@ export function useDeleteTodo() {
   })
 }
 
+interface TodoListCompletionPatch {
+  key: readonly unknown[]
+  originalItem: Todo | undefined
+  originalIndex: number
+  totalDelta: number
+}
+
 export interface TodoCompletionSnapshot {
-  lists: Array<[readonly unknown[], PaginatedData<Todo> | undefined]>
+  lists: TodoListCompletionPatch[]
   detail: Todo | undefined
   id: number
 }
@@ -87,20 +94,26 @@ function filtersFromKey(key: readonly unknown[]): TodoFilters | null {
 }
 
 export function applyTodoCompletion(client: QueryClient, id: number, completed: boolean): TodoCompletionSnapshot {
-  const lists = client.getQueriesData<PaginatedData<Todo>>({ queryKey: todoKeys.lists() })
+  const cachedLists = client.getQueriesData<PaginatedData<Todo>>({ queryKey: todoKeys.lists() })
   const detail = client.getQueryData<Todo>(todoKeys.detail(id))
-  lists.forEach(([key, current]) => {
+  const lists: TodoListCompletionPatch[] = []
+  cachedLists.forEach(([key, current]) => {
     const filters = filtersFromKey(key)
     if (!current || !filters) return
-    const contains = current.items.some((todo) => todo.id === id)
-    if (!contains) return
-    const excluded = filters.completed !== undefined && filters.completed !== completed
+    const originalIndex = current.items.findIndex((todo) => todo.id === id)
+    const originalItem = originalIndex >= 0 ? current.items[originalIndex] : undefined
+    const isTarget = filters.completed === completed
+    const isSource = filters.completed === !completed
+    const totalDelta = isTarget ? 1 : isSource ? -1 : 0
+    const items = isSource
+      ? current.items.filter((todo) => todo.id !== id)
+      : current.items.map((todo) => todo.id === id ? { ...todo, completed } : todo)
+
+    lists.push({ key, originalItem, originalIndex, totalDelta })
     client.setQueryData<PaginatedData<Todo>>(key, {
       ...current,
-      total: excluded ? Math.max(0, current.total - 1) : current.total,
-      items: excluded
-        ? current.items.filter((todo) => todo.id !== id)
-        : current.items.map((todo) => todo.id === id ? { ...todo, completed } : todo),
+      total: Math.max(0, current.total + totalDelta),
+      items,
     })
   })
   client.setQueryData<Todo>(todoKeys.detail(id), (current) => current ? { ...current, completed } : current)
@@ -108,7 +121,20 @@ export function applyTodoCompletion(client: QueryClient, id: number, completed: 
 }
 
 export function restoreTodoCompletion(client: QueryClient, snapshot: TodoCompletionSnapshot) {
-  snapshot.lists.forEach(([key, value]) => client.setQueryData(key, value))
+  snapshot.lists.forEach(({ key, originalItem, originalIndex, totalDelta }) => {
+    client.setQueryData<PaginatedData<Todo>>(key, (current) => {
+      if (!current) return current
+      const items = current.items.filter((todo) => todo.id !== snapshot.id)
+      if (originalItem && originalIndex >= 0) {
+        items.splice(Math.min(originalIndex, items.length), 0, originalItem)
+      }
+      return {
+        ...current,
+        total: Math.max(0, current.total - totalDelta),
+        items: items.slice(0, current.page_size),
+      }
+    })
+  })
   client.setQueryData(todoKeys.detail(snapshot.id), snapshot.detail)
 }
 
@@ -124,7 +150,9 @@ function useToggleTodo(completed: boolean) {
       if (context) restoreTodoCompletion(client, context)
     },
     onSuccess: (todo) => client.setQueryData(todoKeys.detail(todo.id), todo),
-    onSettled: () => client.invalidateQueries({ queryKey: todoKeys.lists() }),
+    onSettled: () => {
+      void client.invalidateQueries({ queryKey: todoKeys.lists() }).catch(() => undefined)
+    },
   })
 }
 

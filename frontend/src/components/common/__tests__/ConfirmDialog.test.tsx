@@ -53,11 +53,18 @@ describe("ConfirmDialog", () => {
   });
 
   describe("interactions", () => {
-    it("disables and marks confirm busy while pending", () => {
-      renderDialog({ confirmDisabled: true, pending: true });
+    it("disables all closing controls and gestures while pending", () => {
+      const onCancel = vi.fn();
+      renderDialog({ confirmDisabled: true, pending: true, onCancel });
       const confirm = screen.getByRole("button", { name: "确认" });
+      const cancel = screen.getByRole("button", { name: "取消" });
       expect(confirm).toBeDisabled();
       expect(confirm).toHaveAttribute("aria-busy", "true");
+      expect(cancel).toBeDisabled();
+      expect(cancel).toHaveAttribute("aria-busy", "true");
+      fireEvent.keyDown(document, { key: "Escape" });
+      fireEvent.click(screen.getByRole("presentation"));
+      expect(onCancel).not.toHaveBeenCalled();
     });
     it("calls onConfirm when the confirm button is clicked", async () => {
       const onConfirm = vi.fn();
