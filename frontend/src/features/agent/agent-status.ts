@@ -31,3 +31,14 @@ export function getAgentStatusPresentation(status: AgentSessionStatus, steps: Ag
   }
   return presentations.failed
 }
+
+export function getTodoToolPresentation(steps: AgentStep[]): AgentStatusPresentation {
+  const toolSteps = steps.filter((step) => step.tool || step.action)
+  if (toolSteps.some((step) => step.status === 'failed')) {
+    return { label: '调用异常', tone: 'attention', isError: true }
+  }
+  if (toolSteps.some((step) => step.status === 'completed')) {
+    return { label: '最近调用成功', tone: 'complete', isError: false }
+  }
+  return { label: '尚未验证 · 随任务验证', tone: 'busy', isError: false }
+}

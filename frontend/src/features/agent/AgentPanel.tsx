@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useRef, useState, type KeyboardEvent } from 'react'
 import { IconButton } from '../../shared/ui/IconButton'
 import AgentStepTimeline from './AgentStepTimeline'
 import { useAgentSessionContext } from './agent-session-context'
 import { getAgentStatusPresentation } from './agent-status'
+import { formatAgentMessageTime } from './agent-display'
+import { useAgentAutoScroll } from './useAgentAutoScroll'
 
 const suggestions = ['查看未完成任务', '创建明日计划']
 
@@ -16,9 +18,11 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
   const draft = controlledDraft ?? internalDraft
   const setDraft = onDraftChange ?? setInternalDraft
   const endRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const status = getAgentStatusPresentation(session.status, session.steps)
 
-  useEffect(() => { endRef.current?.scrollIntoView?.({ behavior: 'smooth' }) }, [session.messages, session.steps])
+  const revision = `${session.status}:${session.messages.at(-1)?.id ?? ''}:${session.steps.at(-1)?.id ?? ''}:${session.steps.at(-1)?.status ?? ''}`
+  const onScroll = useAgentAutoScroll(bodyRef, endRef, revision)
 
   function send() {
     const message = draft.trim()
@@ -40,7 +44,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
         <div><h2>智能助手</h2><p role={status.isError ? 'alert' : 'status'} data-tone={status.tone}><span aria-hidden="true" />{status.label}</p></div>
       </header>
 
-      <div className="agent-panel__body" role="log" aria-live="polite" aria-label="对话消息">
+      <div ref={bodyRef} className="agent-panel__body" role="log" aria-live="polite" aria-label="对话消息" onScroll={onScroll}>
         {!session.messages.length ? (
           <section className="agent-panel__welcome">
             <span className="agent-panel__eyebrow">TODAY / FOCUS</span>
@@ -49,12 +53,15 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
           </section>
         ) : null}
         <div className="agent-panel__suggestions">{suggestions.map((suggestion) => <button type="button" key={suggestion} disabled={!session.canSend} onClick={() => session.send(suggestion)}>{suggestion}</button>)}</div>
-        {session.messages.map((message) => (
+        {session.messages.map((message) => {
+          const time = formatAgentMessageTime(message.createdAt)
+          return (
           <article key={message.id} className="agent-message" data-role={message.role}>
             <p>{message.content}</p>
-            <time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time>
+            {time ? <time dateTime={message.createdAt}>{time}</time> : null}
           </article>
-        ))}
+          )
+        })}
         <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
         <div ref={endRef} />
       </div>

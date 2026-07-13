@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import AgentStepTimeline from '../features/agent/AgentStepTimeline'
 import { useAgentSessionContext } from '../features/agent/agent-session-context'
-import { getAgentStatusPresentation } from '../features/agent/agent-status'
+import { getAgentStatusPresentation, getTodoToolPresentation } from '../features/agent/agent-status'
+import { formatAgentMessageTime } from '../features/agent/agent-display'
+import { useAgentAutoScroll } from '../features/agent/useAgentAutoScroll'
 import { useShell } from '../features/shell/shell-context'
 import { Button } from '../shared/ui/Button'
 
@@ -12,6 +14,11 @@ export default function AssistantPage() {
   const [draft, setDraft] = useState('')
   const [clearError, setClearError] = useState('')
   const agentStatus = getAgentStatusPresentation(session.status, session.steps)
+  const todoStatus = getTodoToolPresentation(session.steps)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const endRef = useRef<HTMLDivElement>(null)
+  const revision = `${session.status}:${session.messages.at(-1)?.id ?? ''}:${session.steps.at(-1)?.id ?? ''}:${session.steps.at(-1)?.status ?? ''}`
+  const onScroll = useAgentAutoScroll(scrollRef, endRef, revision)
 
   useEffect(() => {
     const shouldRestore = restoreExpanded.current
@@ -41,7 +48,7 @@ export default function AssistantPage() {
         </nav>
         <section aria-label="工具连接状态">
           <p>工具连接</p>
-          <div><span aria-hidden="true" /> <strong>Todo API</strong><small>已连接</small></div>
+          <div data-tone={todoStatus.tone} role={todoStatus.isError ? 'alert' : undefined}><span aria-hidden="true" /> <strong>Todo API</strong><small>{todoStatus.label}</small></div>
           <div data-tone={agentStatus.tone} role={agentStatus.isError ? 'alert' : undefined}><span aria-hidden="true" /> <strong>Agent Stream</strong><small>{agentStatus.label}</small></div>
         </section>
       </aside>
@@ -52,9 +59,13 @@ export default function AssistantPage() {
           <Button variant="ghost" size="sm" disabled={session.isClearing} onClick={() => void clear()}>{session.isClearing ? '正在清空…' : '清空对话'}</Button>
         </header>
         {clearError ? <p className="assistant-clear-error" role="alert">{clearError}</p> : null}
-        <div className="assistant-conversation__scroll" role="log" aria-live="polite">
+        <div ref={scrollRef} className="assistant-conversation__scroll" role="log" aria-live="polite" onScroll={onScroll}>
           {!session.messages.length ? <div className="assistant-empty"><span aria-hidden="true">✦</span><h2>从一句话开始</h2><p>创建任务、调整安排，或让我梳理今天的优先级。</p></div> : null}
-          {session.messages.map((message) => <article key={message.id} className="assistant-message" data-role={message.role}><span>{message.role === 'assistant' ? '✦' : '你'}</span><div><p>{message.content}</p><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div></article>)}
+          {session.messages.map((message) => {
+            const time = formatAgentMessageTime(message.createdAt)
+            return <article key={message.id} className="assistant-message" data-role={message.role}><span>{message.role === 'assistant' ? '✦' : '你'}</span><div><p>{message.content}</p>{time ? <time dateTime={message.createdAt}>{time}</time> : null}</div></article>
+          })}
+          <div ref={endRef} />
         </div>
         <form className="assistant-composer" onSubmit={submit}>
           <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={!session.canSend} />

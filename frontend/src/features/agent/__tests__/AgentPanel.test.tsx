@@ -103,6 +103,20 @@ describe('AgentStepTimeline', () => {
     expect(card).toHaveTextContent('null')
     expect(card).not.toHaveTextContent('[object Object]')
   })
+
+  it('safely renders cyclic results and hides invalid elapsed timers', () => {
+    const cyclic: Record<string, unknown> = { title: '结果' }
+    cyclic.self = cyclic
+    render(<AgentStepTimeline
+      steps={[
+        { id: 'cycle', label: '循环结果', status: 'completed', action: 'inspect', result: cyclic },
+        { id: 'bad-time', label: '无效时间', status: 'running', startedAt: 'not-a-date' },
+      ]}
+      capabilities={{ supportsStepRetry: false }} onRetry={vi.fn()} onConfirm={vi.fn()} onReject={vi.fn()}
+    />)
+    expect(screen.getByLabelText('inspect 执行结果')).toHaveTextContent('循环引用')
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+  })
 })
 
 describe('AgentPanel integration', () => {

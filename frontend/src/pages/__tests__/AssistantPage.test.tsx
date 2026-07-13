@@ -67,6 +67,17 @@ describe('AssistantPage', () => {
     expect(screen.queryByText('Agent Stream在线')).not.toBeInTheDocument()
   })
 
+  it('derives Todo API status from observed tool steps and hides invalid timestamps', () => {
+    renderPage({
+      messages: [{ id: 'bad-date', role: 'assistant', content: '仍可显示', createdAt: 'invalid' }],
+      steps: [{ id: 'tool-failed', label: '调用 Todo', status: 'failed', tool: 'list_todos', errorMessage: '接口异常' }],
+      status: 'failed',
+    })
+    const tools = screen.getByLabelText('工具连接状态')
+    expect(within(tools).getByText('调用异常')).toBeVisible()
+    expect(screen.queryByText(/Invalid Date|NaN/)).not.toBeInTheDocument()
+  })
+
   it('collapses the side Agent on entry and restores the previous state on leave', async () => {
     const user = userEvent.setup()
     const value = makeSession()

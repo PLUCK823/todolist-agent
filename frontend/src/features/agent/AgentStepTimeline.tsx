@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Button } from '../../shared/ui/Button'
 import type { AgentCapabilities, AgentStep } from './agent.types'
+import { safeSerializeAgentResult } from './agent-display'
 
 const statusLabels: Record<AgentStep['status'], string> = {
   waiting: '等待中',
@@ -18,7 +19,7 @@ function ActionResult({ action, result }: { action: string; result: Record<strin
   return (
     <section className="agent-step__result" aria-label={`${action} 执行结果`}>
       <span>{action}</span>
-      <pre>{JSON.stringify(result, null, 2)}</pre>
+      <pre>{safeSerializeAgentResult(result)}</pre>
     </section>
   )
 }
@@ -37,7 +38,8 @@ function AgentStepItem({ step, capabilities, onRetry, onConfirm, onReject }: {
     return () => window.clearInterval(timer)
   }, [step.startedAt, step.status])
 
-  const elapsed = step.durationMs ?? (step.startedAt ? Math.max(0, now - Date.parse(step.startedAt)) : undefined)
+  const startedAt = step.startedAt ? Date.parse(step.startedAt) : Number.NaN
+  const elapsed = step.durationMs ?? (Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined)
   return (
     <li className="agent-step" data-status={step.status}>
       <span className="agent-step__marker" aria-hidden="true" />
