@@ -102,4 +102,17 @@ describe('AppShell', () => {
     await user.keyboard('{Escape}')
     expect(screen.queryByTestId('agent-column')).not.toBeInTheDocument()
   })
+
+  it('lets the top command palette consume Escape before the mobile drawer', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+    const user = userEvent.setup()
+    renderShell()
+    await user.keyboard('{Meta>}k{/Meta}')
+    expect(screen.getByRole('dialog', { name: '快速询问' })).toBeVisible()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '快速询问' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('agent-column')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByTestId('agent-column')).not.toBeInTheDocument()
+  })
 })

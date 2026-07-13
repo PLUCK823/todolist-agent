@@ -127,7 +127,6 @@ function ToastItem({
       className="pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg min-w-[300px] max-w-sm"
       style={cardStyle}
       role="alert"
-      aria-live="polite"
     >
       <span
         className="flex-shrink-0 flex items-center justify-center w-5 h-5 text-sm font-bold leading-none"
@@ -167,6 +166,7 @@ function ToastRegion({ toasts, onRemove }: ToastRegionProps) {
     <div
       className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"
       aria-label="通知列表"
+      data-overlay-allow-interaction
     >
       {toasts.map((toast) => (
         <ToastItem key={toast.id} toast={toast} onRemove={onRemove} />

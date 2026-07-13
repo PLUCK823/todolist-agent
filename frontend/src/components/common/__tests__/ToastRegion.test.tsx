@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { ToastProvider } from "../ToastRegion";
 import { useToast } from "../../../shared/ui/toast-context";
+import { Dialog } from "../../../shared/ui/Dialog";
 
 // ---------------------------------------------------------------------------
 // Helper component that exposes toast actions for testing
@@ -57,6 +59,18 @@ function renderToastApp() {
       <ToastTester />
     </ToastProvider>,
   );
+}
+
+function ToastDialogHarness() {
+  const [open, setOpen] = useState(false);
+  const { addToast } = useToast();
+  return <>
+    <button type="button" onClick={() => addToast("info", "背景通知")}>先显示通知</button>
+    <button type="button" onClick={() => setOpen(true)}>打开测试弹窗</button>
+    <Dialog open={open} title="测试弹窗" onOpenChange={setOpen}>
+      <button type="button" onClick={() => addToast("success", "弹窗通知")}>弹窗内通知</button>
+    </Dialog>
+  </>;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,13 +150,30 @@ describe("ToastRegion", () => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
 
-    it("sets aria-live=polite on toast items", async () => {
+    it("uses the alert role as a single live-region semantic", async () => {
       renderToastApp();
       await userEvent.click(screen.getByTestId("add-success"));
-      expect(screen.getByRole("alert")).toHaveAttribute(
-        "aria-live",
-        "polite",
-      );
+      expect(screen.getByRole("alert")).not.toHaveAttribute("aria-live");
+    });
+
+    it("keeps a pre-existing toast portal interactive when a dialog opens", async () => {
+      const view = render(<ToastProvider><ToastDialogHarness /></ToastProvider>);
+      await userEvent.click(screen.getByRole("button", { name: "先显示通知" }));
+      const region = screen.getByLabelText("通知列表");
+      await userEvent.click(screen.getByRole("button", { name: "打开测试弹窗" }));
+      expect(region).toHaveAttribute("data-overlay-allow-interaction");
+      expect(region).not.toHaveAttribute("inert");
+      expect(view.container).toHaveAttribute("inert");
+    });
+
+    it("keeps a toast portal created after a dialog out of the inert background", async () => {
+      const view = render(<ToastProvider><ToastDialogHarness /></ToastProvider>);
+      await userEvent.click(screen.getByRole("button", { name: "打开测试弹窗" }));
+      await userEvent.click(screen.getByRole("button", { name: "弹窗内通知" }));
+      const region = screen.getByLabelText("通知列表");
+      expect(region).toHaveAttribute("data-overlay-allow-interaction");
+      expect(region).not.toHaveAttribute("inert");
+      expect(view.container).toHaveAttribute("inert");
     });
   });
 

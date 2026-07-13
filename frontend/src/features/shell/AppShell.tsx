@@ -22,7 +22,7 @@ function AppShellContent() {
   useEffect(() => {
     if (!showPanel) return
     const onEscape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || !(window.matchMedia?.('(max-width: 1000px)').matches ?? false)) return
+      if (event.defaultPrevented || event.key !== 'Escape' || !(window.matchMedia?.('(max-width: 1000px)').matches ?? false)) return
       event.preventDefault()
       closeAgent()
     }
