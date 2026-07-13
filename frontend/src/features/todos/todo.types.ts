@@ -1,8 +1,10 @@
+export type TodoPriority = 'high' | 'medium' | 'low'
+
 export interface Todo {
   id: number
   title: string
   description: string
-  priority: 'high' | 'medium' | 'low'
+  priority: TodoPriority
   completed: boolean
   due_date: string | null
   created_at: string
@@ -12,14 +14,14 @@ export interface Todo {
 export interface CreateTodoDTO {
   title: string
   description?: string
-  priority?: 'high' | 'medium' | 'low'
+  priority?: TodoPriority
   due_date?: string
 }
 
 export interface UpdateTodoDTO {
   title?: string
   description?: string
-  priority?: 'high' | 'medium' | 'low'
+  priority?: TodoPriority
   due_date?: string
 }
 
@@ -27,6 +29,12 @@ export interface ApiResponse<T> {
   code: number
   message: string
   data: T
+}
+
+export interface ApiErrorPayload {
+  code: number
+  message: string
+  data: null
 }
 
 export interface PaginatedData<T> {
@@ -40,7 +48,7 @@ export interface TodoFilters {
   page?: number
   page_size?: number
   completed?: boolean
-  priority?: 'high' | 'medium' | 'low'
+  priority?: TodoPriority
   keyword?: string
   sort_by?: 'created_at' | 'priority' | 'due_date'
   order?: 'asc' | 'desc'

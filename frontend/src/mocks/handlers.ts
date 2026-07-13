@@ -1,4 +1,4 @@
-import type { Todo, CreateTodoDTO, UpdateTodoDTO, ApiResponse, PaginatedData } from '../types/todo'
+import type { Todo, CreateTodoDTO, UpdateTodoDTO, ApiResponse, PaginatedData } from '../features/todos/todo.types'
 
 // In-memory seed data
 let nextId = 5

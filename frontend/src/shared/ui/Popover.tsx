@@ -15,10 +15,11 @@ export interface PopoverProps {
   open: boolean
   anchorRef: RefObject<HTMLElement | null>
   onOpenChange(open: boolean): void
+  ariaLabel?: string
   children: ReactNode
 }
 
-export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProps) {
+export function Popover({ open, anchorRef, onOpenChange, ariaLabel = '浮层', children }: PopoverProps) {
   const popoverRef = useRef<HTMLDivElement>(null)
   const popoverId = useId()
   const anchorId = `${popoverId}-anchor`
@@ -96,10 +97,14 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
 
       const anchor = anchorRef.current.getBoundingClientRect()
       const popover = popoverRef.current
-      popover.setAttribute(
-        'aria-labelledby',
-        `${anchorRef.current.id} ${popoverId}-label`,
-      )
+      if (ariaLabel === '浮层') {
+        popover.setAttribute(
+          'aria-labelledby',
+          `${anchorRef.current.id} ${popoverId}-label`,
+        )
+      } else {
+        popover.removeAttribute('aria-labelledby')
+      }
       const { left, top } = getPopoverPosition({
         anchor,
         popover: { width: popover.offsetWidth, height: popover.offsetHeight },
@@ -120,7 +125,7 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
       window.removeEventListener('resize', updatePosition)
       window.removeEventListener('scroll', updatePosition, true)
     }
-  }, [anchorRef, open, popoverId])
+  }, [anchorRef, ariaLabel, open, popoverId])
 
   useEffect(() => {
     if (!open) return
@@ -163,12 +168,12 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
       ref={popoverRef}
       id={popoverId}
       role="dialog"
-      aria-label="浮层"
+      aria-label={ariaLabel}
       tabIndex={-1}
       className="fixed z-50 min-w-52 rounded-[var(--radius-panel)] border border-[var(--border)] bg-white p-2 text-[var(--text)] shadow-[var(--shadow-panel)] focus:outline-none motion-safe:animate-[popover-enter_var(--motion-overlay)_both]"
     >
       <span id={`${popoverId}-label`} className="sr-only">
-        浮层
+        {ariaLabel}
       </span>
       {children}
     </div>,

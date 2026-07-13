@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { useTodos, useCompleteTodo, useUncompleteTodo } from '../hooks/useTodos'
-import type { Todo } from '../types/todo'
+import { useTodos, useCompleteTodo, useUncompleteTodo } from '../features/todos/todo.queries'
+import type { Todo } from '../features/todos/todo.types'
 
 export default function UpcomingPage() {
   const [showCompleted, setShowCompleted] = useState(false)

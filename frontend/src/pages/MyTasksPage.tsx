@@ -1,4 +1,4 @@
-import { TaskDashboard } from '../components/todo/TaskDashboard'
+import { TaskDashboard } from '../features/todos/TaskDashboard'
 
 export default function MyTasksPage() {
   return <TaskDashboard />
