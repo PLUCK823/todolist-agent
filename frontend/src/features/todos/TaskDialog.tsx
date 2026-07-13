@@ -9,6 +9,8 @@ interface TaskDialogProps {
   open: boolean
   mode: 'create' | 'edit'
   todo?: Todo | null
+  initialDueDate?: string
+  dueDateUtcOffset?: string
   onOpenChange(open: boolean): void
   onSubmit(data: TodoFormDTO): Promise<void>
 }
@@ -20,11 +22,19 @@ function toLocalInput(date: string | null | undefined) {
   return new Date(parsed.getTime() - offset).toISOString().slice(0, 16)
 }
 
-export function TaskDialog({ open, mode, todo, onOpenChange, onSubmit }: TaskDialogProps) {
+export function TaskDialog({
+  open,
+  mode,
+  todo,
+  initialDueDate,
+  dueDateUtcOffset,
+  onOpenChange,
+  onSubmit,
+}: TaskDialogProps) {
   const [title, setTitle] = useState(todo?.title ?? '')
   const [description, setDescription] = useState(todo?.description ?? '')
   const [priority, setPriority] = useState<TodoPriority>(todo?.priority ?? 'medium')
-  const [dueDate, setDueDate] = useState(toLocalInput(todo?.due_date))
+  const [dueDate, setDueDate] = useState(initialDueDate ?? toLocalInput(todo?.due_date))
   const [validationError, setValidationError] = useState('')
   const [requestError, setRequestError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -44,7 +54,7 @@ export function TaskDialog({ open, mode, todo, onOpenChange, onSubmit }: TaskDia
         description: description.trim(),
         priority,
         ...(dueDate
-          ? { due_date: new Date(dueDate).toISOString() }
+          ? { due_date: new Date(`${dueDate}${dueDateUtcOffset ? `:00${dueDateUtcOffset}` : ''}`).toISOString() }
           : mode === 'edit' ? { due_date: null } : {}),
       })
     } catch (error) {

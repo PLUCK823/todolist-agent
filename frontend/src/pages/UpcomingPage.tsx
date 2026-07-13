@@ -1,146 +1,162 @@
-import { useMemo, useState } from 'react'
-import { useTodos, useCompleteTodo, useUncompleteTodo } from '../features/todos/todo.queries'
-import type { Todo } from '../features/todos/todo.types'
+import { useMemo, useRef, useState } from 'react'
+import { Button } from '../shared/ui/Button'
+import { useToast } from '../shared/ui/toast-context'
+import { getApiErrorMessage } from '../features/todos/todo.api'
+import {
+  useCompleteTodo,
+  useCreateTodo,
+  useTodos,
+  useUncompleteTodo,
+  useUpdateTodo,
+} from '../features/todos/todo.queries'
+import { TaskDetailDialog } from '../features/todos/TaskDetailDialog'
+import { TaskDialog } from '../features/todos/TaskDialog'
+import { UpcomingTimeline } from '../features/todos/UpcomingTimeline'
+import { localDateKey } from '../features/todos/upcoming-calendar'
+import type { CreateTodoDTO, Todo, TodoFormDTO } from '../features/todos/todo.types'
 
-export default function UpcomingPage() {
+interface UpcomingPageProps {
+  now?: Date
+}
+
+export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
   const [showCompleted, setShowCompleted] = useState(false)
-  const { data, isLoading, isError, refetch } = useTodos({
-    sort_by: 'due_date',
-    order: 'asc',
-    page_size: 50,
-  })
+  const [selectedDateKey, setSelectedDateKey] = useState(() => localDateKey(now))
+  const [createOpen, setCreateOpen] = useState(false)
+  const [detailTodo, setDetailTodo] = useState<Todo | null>(null)
+  const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
+  const [pendingToggleIds, setPendingToggleIds] = useState<ReadonlySet<number>>(new Set())
+  const toggleGuardsRef = useRef(new Set<number>())
+  const toast = useToast()
+  // The backend has no due-date range filter. Fetch its documented maximum page size so
+  // the seven-day view is stable instead of accidentally depending on the first default page.
+  const query = useTodos({ page: 1, page_size: 100, sort_by: 'due_date', order: 'asc' })
+  const createMutation = useCreateTodo()
+  const updateMutation = useUpdateTodo()
   const completeMutation = useCompleteTodo()
   const uncompleteMutation = useUncompleteTodo()
+  const todos = useMemo(
+    () => (query.data?.items ?? []).filter((todo) => todo.due_date && (showCompleted || !todo.completed)),
+    [query.data, showCompleted],
+  )
 
-  const todos = useMemo(() => {
-    if (!data) return []
-    return data.items.filter(
-      (t: Todo) => t.due_date !== null && (showCompleted || !t.completed),
-    )
-  }, [data, showCompleted])
-
-  const groupedByDate = useMemo(() => {
-    const groups: Record<string, Todo[]> = {}
-    const today = new Date().toISOString().split('T')[0]
-
-    for (const todo of todos) {
-      const dateKey = todo.due_date!.split('T')[0]
-      let label: string
-      if (dateKey === today) {
-        label = '今天'
-      } else {
-        const d = new Date(dateKey)
-        label = `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
-      }
-      if (!groups[label]) groups[label] = []
-      groups[label].push(todo)
+  async function create(data: TodoFormDTO) {
+    const dto: CreateTodoDTO = {
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      ...(typeof data.due_date === 'string' ? { due_date: data.due_date } : {}),
     }
-    return groups
-  }, [todos])
+    await createMutation.mutateAsync(dto)
+    setCreateOpen(false)
+    toast.addToast('success', '安排已创建')
+  }
+
+  async function update(data: TodoFormDTO) {
+    if (!editingTodo) return
+    await updateMutation.mutateAsync({ id: editingTodo.id, dto: data })
+    setEditingTodo(null)
+    toast.addToast('success', '安排已更新')
+  }
+
+  function toggle(todo: Todo) {
+    if (toggleGuardsRef.current.has(todo.id)) return
+    toggleGuardsRef.current.add(todo.id)
+    setPendingToggleIds((current) => new Set(current).add(todo.id))
+    const mutation = todo.completed ? uncompleteMutation : completeMutation
+    void mutation.mutateAsync(todo.id)
+      .catch((error) => toast.addToast('error', getApiErrorMessage(error)))
+      .finally(() => {
+        toggleGuardsRef.current.delete(todo.id)
+        setPendingToggleIds((current) => {
+          const next = new Set(current)
+          next.delete(todo.id)
+          return next
+        })
+      })
+  }
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold" style={{ color: '#1a1a2e' }}>
-          近期安排
-        </h1>
-        <label className="flex items-center gap-2 text-sm" style={{ color: '#6b7280' }}>
-          <input
-            type="checkbox"
-            checked={showCompleted}
-            onChange={(e) => setShowCompleted(e.target.checked)}
-            className="rounded"
-          />
-          显示已完成
-        </label>
-      </div>
-
-      {isLoading && (
-        <div className="text-center py-12" style={{ color: '#6b7280' }}>
-          加载中...
+    <main className="mx-auto w-full max-w-[1120px] px-7 py-7 xl:px-9">
+      <header className="flex flex-wrap items-start justify-between gap-5">
+        <div>
+          <p className="m-0 text-[11px] font-bold tracking-[.18em] text-[var(--text-secondary)]">接下来 7 天</p>
+          <h1 className="mb-0 mt-2 text-[28px] font-extrabold tracking-[-.04em] text-[var(--text)]">近期安排</h1>
+          <p className="mb-0 mt-1 text-sm text-[var(--text-secondary)]">按时间查看即将到来的任务</p>
         </div>
-      )}
-
-      {isError && (
-        <div className="text-center py-12">
-          <p className="text-red-500 mb-4">加载失败，请重试</p>
-          <button
-            onClick={() => refetch()}
-            className="px-4 py-2 rounded-lg text-white"
-            style={{ backgroundColor: '#7165ea' }}
-          >
-            重试
-          </button>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-sm font-semibold text-[var(--text-secondary)] focus-within:shadow-[var(--focus-ring)]">
+            <input
+              type="checkbox"
+              checked={showCompleted}
+              onChange={(event) => setShowCompleted(event.target.checked)}
+              className="h-4 w-4 accent-[var(--primary-action)]"
+            />
+            显示已完成
+          </label>
+          <Button onClick={() => setCreateOpen(true)} leadingIcon={<span className="text-lg leading-none">＋</span>}>
+            添加安排
+          </Button>
         </div>
-      )}
+      </header>
 
-      {!isLoading && !isError && Object.keys(groupedByDate).length === 0 && (
-        <div className="text-center py-12" style={{ color: '#6b7280' }}>
-          <p className="text-lg">暂无近期安排</p>
-          <p className="text-sm mt-2">去「我的任务」中添加带截止日期的任务吧</p>
-        </div>
-      )}
-
-      {!isLoading &&
-        !isError &&
-        Object.entries(groupedByDate).map(([dateLabel, dateTodos]) => (
-          <div key={dateLabel} className="mb-6">
-            <h2
-              className="text-sm font-semibold mb-3 uppercase tracking-wide"
-              style={{ color: '#6b7280' }}
-            >
-              {dateLabel}
-            </h2>
-            <div className="space-y-2">
-              {dateTodos.map((todo) => (
-                <div
-                  key={todo.id}
-                  className={`flex items-center gap-3 p-3 rounded-lg bg-white border transition-opacity ${
-                    todo.completed ? 'opacity-60' : ''
-                  }`}
-                  style={{ borderColor: '#e5e7eb' }}
-                >
-                  <button
-                    onClick={() =>
-                      todo.completed
-                        ? uncompleteMutation.mutate(todo.id)
-                        : completeMutation.mutate(todo.id)
-                    }
-                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center text-xs flex-shrink-0 ${
-                      todo.completed ? 'border-green-500 bg-green-500 text-white' : 'border-gray-300'
-                    }`}
-                  >
-                    {todo.completed ? '✓' : ''}
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p
-                      className={`text-sm truncate ${todo.completed ? 'line-through' : ''}`}
-                      style={{ color: todo.completed ? '#6b7280' : '#1a1a2e' }}
-                    >
-                      {todo.title}
-                    </p>
-                    {todo.description && (
-                      <p className="text-xs truncate" style={{ color: '#9ca3af' }}>
-                        {todo.description}
-                      </p>
-                    )}
-                  </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                      todo.priority === 'high'
-                        ? 'bg-red-100 text-red-600'
-                        : todo.priority === 'medium'
-                          ? 'bg-yellow-100 text-yellow-600'
-                          : 'bg-gray-100 text-gray-500'
-                    }`}
-                  >
-                    {todo.priority === 'high' ? '高' : todo.priority === 'medium' ? '中' : '低'}
-                  </span>
-                </div>
-              ))}
-            </div>
+      {query.isLoading ? (
+        <div role="status" aria-label="正在加载近期安排" className="mt-5 grid gap-3">
+          <div className="grid grid-cols-7 gap-2">
+            {Array.from({ length: 7 }, (_, index) => <div key={index} className="h-[74px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-white/70" />)}
           </div>
-        ))}
-    </div>
+          <div className="h-24 animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-white/70" />
+        </div>
+      ) : query.isError ? (
+        <section role="alert" className="mt-5 rounded-[var(--radius-panel)] border border-red-100 bg-red-50 p-7 text-center">
+          <h2 className="m-0 text-base font-bold text-[var(--text)]">暂时无法加载近期安排</h2>
+          <p className="mb-4 mt-2 text-sm text-[var(--text-secondary)]">{getApiErrorMessage(query.error)}</p>
+          <Button size="sm" onClick={() => query.refetch()}>重新加载</Button>
+        </section>
+      ) : (
+        <UpcomingTimeline
+          now={now}
+          todos={todos}
+          selectedDateKey={selectedDateKey}
+          onSelectedDateChange={setSelectedDateKey}
+          pendingToggleIds={pendingToggleIds}
+          onOpen={setDetailTodo}
+          onToggle={toggle}
+        />
+      )}
+
+      {createOpen ? (
+        <TaskDialog
+          key={`create-${selectedDateKey}`}
+          open
+          mode="create"
+          initialDueDate={`${selectedDateKey}T09:00`}
+          dueDateUtcOffset="+08:00"
+          onOpenChange={setCreateOpen}
+          onSubmit={create}
+        />
+      ) : null}
+      {detailTodo ? (
+        <TaskDetailDialog
+          open
+          todo={detailTodo}
+          onOpenChange={(next) => { if (!next) setDetailTodo(null) }}
+          onEdit={() => {
+            setEditingTodo(detailTodo)
+            setDetailTodo(null)
+          }}
+        />
+      ) : null}
+      {editingTodo ? (
+        <TaskDialog
+          key={`edit-${editingTodo.id}`}
+          open
+          mode="edit"
+          todo={editingTodo}
+          onOpenChange={(next) => { if (!next) setEditingTodo(null) }}
+          onSubmit={update}
+        />
+      ) : null}
+    </main>
   )
 }
