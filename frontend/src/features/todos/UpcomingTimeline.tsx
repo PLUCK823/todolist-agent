@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Todo } from './todo.types'
-import { APP_TIME_ZONE, buildSevenDayWindow, localDateKey } from './upcoming-calendar'
+import { APP_TIME_ZONE } from './time-contract'
+import { buildSevenDayWindow, localDateKey } from './upcoming-calendar'
 
 function formatHeading(key: string, todayKey: string, showYear: boolean) {
   const [year, month, day] = key.split('-').map(Number)

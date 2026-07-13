@@ -26,6 +26,36 @@ func TestInitDB_SQLite(t *testing.T) {
 	sqlDB.Close()
 }
 
+func TestInitDB_CreatesDueDateIDCompositeIndex(t *testing.T) {
+	db, err := InitDB(Config{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var columns []struct {
+		SeqNo int    `gorm:"column:seqno"`
+		Name  string `gorm:"column:name"`
+	}
+	if err := db.Raw("PRAGMA index_info('idx_todos_due_date_id')").Scan(&columns).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(columns) != 2 || columns[0].Name != "due_date" || columns[1].Name != "id" {
+		t.Fatalf("expected due_date,id composite index, got %#v", columns)
+	}
+	var tableColumns []struct {
+		Name string `gorm:"column:name"`
+		PK   int    `gorm:"column:pk"`
+	}
+	if err := db.Raw("PRAGMA table_info('todos')").Scan(&tableColumns).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range tableColumns {
+		if column.Name == "id" && column.PK == 1 {
+			return
+		}
+	}
+	t.Fatal("expected id to remain the primary key")
+}
+
 func TestInitDB_UnsupportedDriver(t *testing.T) {
 	_, err := InitDB(Config{
 		Driver: "mysql",

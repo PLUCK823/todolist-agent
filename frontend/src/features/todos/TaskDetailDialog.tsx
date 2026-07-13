@@ -1,7 +1,7 @@
 import { Button } from '../../shared/ui/Button'
 import { Dialog } from '../../shared/ui/Dialog'
 import type { Todo } from './todo.types'
-import { formatAppDateTime } from './upcoming-calendar'
+import { formatAppDateTime } from './time-contract'
 
 interface TaskDetailDialogProps {
   open: boolean

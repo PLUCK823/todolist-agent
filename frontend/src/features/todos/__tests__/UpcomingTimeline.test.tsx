@@ -4,11 +4,10 @@ import { describe, expect, it, vi } from 'vitest'
 import { UpcomingTimeline } from '../UpcomingTimeline'
 import {
   buildSevenDayWindow,
-  dateTimeLocalToUtcRfc3339,
   localDateKey,
   upcomingUtcRange,
-  utcRfc3339ToDateTimeLocal,
 } from '../upcoming-calendar'
+import { dateTimeLocalToUtcRfc3339, utcRfc3339ToDateTimeLocal } from '../time-contract'
 import type { Todo } from '../todo.types'
 
 const todo = (overrides: Partial<Todo>): Todo => ({

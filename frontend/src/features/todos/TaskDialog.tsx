@@ -8,7 +8,7 @@ import {
   APP_TIME_ZONE,
   dateTimeLocalToUtcRfc3339,
   utcRfc3339ToDateTimeLocal,
-} from './upcoming-calendar'
+} from './time-contract'
 
 interface TaskDialogProps {
   open: boolean
@@ -39,6 +39,7 @@ export function TaskDialog({
   const [priority, setPriority] = useState<TodoPriority>(todo?.priority ?? 'medium')
   const [dueDate, setDueDate] = useState(initialDueDate ?? toLocalInput(todo?.due_date, timeZone))
   const [validationError, setValidationError] = useState('')
+  const [dueDateError, setDueDateError] = useState('')
   const [requestError, setRequestError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -49,16 +50,27 @@ export function TaskDialog({
       return
     }
     setValidationError('')
+    setDueDateError('')
     setRequestError('')
+    let normalizedDueDate: string | null | undefined
+    try {
+      normalizedDueDate = dueDate
+        ? dateTimeLocalToUtcRfc3339(dueDate, timeZone)
+        : mode === 'edit' ? null : undefined
+    } catch (error) {
+      if (error instanceof RangeError) {
+        setDueDateError('截止时间不存在，请重新选择')
+        return
+      }
+      throw error
+    }
     setSubmitting(true)
     try {
       await onSubmit({
         title: title.trim(),
         description: description.trim(),
         priority,
-        ...(dueDate
-          ? { due_date: dateTimeLocalToUtcRfc3339(dueDate, timeZone) }
-          : mode === 'edit' ? { due_date: null } : {}),
+        ...(normalizedDueDate !== undefined ? { due_date: normalizedDueDate } : {}),
       })
     } catch (error) {
       setRequestError(getApiErrorMessage(error))
@@ -122,7 +134,11 @@ export function TaskDialog({
             label="截止时间"
             type="datetime-local"
             value={dueDate}
-            onChange={(event) => setDueDate(event.target.value)}
+            error={dueDateError}
+            onChange={(event) => {
+              setDueDate(event.target.value)
+              if (dueDateError) setDueDateError('')
+            }}
           />
         </div>
         {requestError ? (

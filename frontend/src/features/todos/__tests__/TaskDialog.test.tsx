@@ -109,6 +109,17 @@ describe('TaskDialog', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ due_date: expect.stringMatching(/^2026-07-18T/) }))
   })
 
+  it('shows a deadline field error for a nonexistent DST local time', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    render(<TaskDialog open mode="create" timeZone="America/New_York" onOpenChange={vi.fn()} onSubmit={onSubmit} />)
+    await user.type(screen.getByLabelText('任务标题'), 'DST gap')
+    await user.type(screen.getByLabelText('截止时间'), '2026-03-08T02:30')
+    await user.click(screen.getByRole('button', { name: '创建任务' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('截止时间不存在，请重新选择')
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('loads and saves an editable deadline in the app IANA timezone', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn().mockResolvedValue(undefined)

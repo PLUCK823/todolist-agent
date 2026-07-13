@@ -8,7 +8,7 @@ import type {
   TodoFilters,
   UpdateTodoDTO,
 } from './todo.types'
-import { isRfc3339WithOffset } from './upcoming-calendar'
+import { isRfc3339WithOffset } from './time-contract'
 
 export class ApiError extends Error {
   readonly code: number
@@ -32,8 +32,9 @@ function isErrorPayload(value: unknown): value is ApiErrorPayload {
   )
 }
 
-function normalizeError(error: unknown): ApiError {
+function normalizeError(error: unknown): Error {
   if (error instanceof ApiError) return error
+  if (axios.isCancel(error)) return error
   if (error instanceof AxiosError) {
     if (!error.response) {
       return new ApiError(-1, '网络异常，请检查连接后重试', 0)
@@ -108,9 +109,10 @@ function validatePage(value: unknown, status: number): PaginatedData<Todo> {
   return { ...page, items: page.items.map((todo) => validateTodo(todo, status)) } as PaginatedData<Todo>
 }
 
-export async function fetchTodos(filters: TodoFilters = {}): Promise<PaginatedData<Todo>> {
+export async function fetchTodos(filters: TodoFilters = {}, signal?: AbortSignal): Promise<PaginatedData<Todo>> {
   const response = await client.get<ApiResponse<PaginatedData<Todo>>>('/todos', {
     params: toParams(filters),
+    signal,
   })
   return validatePage(response.data.data, response.status)
 }
