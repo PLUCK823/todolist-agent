@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from .agent import (
+    ProcessResult,
     complete_turn,
     delete_history,
     get_history,
@@ -248,10 +249,18 @@ async def stream(ws: WebSocket):
                 if receive_task is not None:
                     await _cancel_and_drain(receive_task)
                     receive_task = None
-                reply, _actions, _sid = process_task.result()
+                result = process_task.result()
+                reply, _actions, _sid = result
                 await writer.send_json({"type": "reply", "content": reply})
+                if isinstance(result, ProcessResult):
+                    acknowledged = await complete_turn(
+                        session_id, result.turn_id, result.generation
+                    )
+                    if not acknowledged:
+                        raise RuntimeError(
+                            "final reply acknowledgement lost a session race"
+                        )
                 await writer.send_json({"type": "done"})
-                await complete_turn(session_id, request.message)
                 await ws.close()
                 return
 

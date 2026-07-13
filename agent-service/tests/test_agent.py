@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Sequence
 from unittest.mock import AsyncMock, patch
 
@@ -79,6 +80,7 @@ def _reset_agent():
     app.agent._reset_graph()
     app.agent._conversations.clear()
     app.agent._session_locks.clear()
+    app.agent._session_slots.clear()
     app.agent._session_generations.clear()
     app.agent._active_tasks.clear()
     pending = getattr(app.agent, "_pending_confirmations", None)
@@ -492,8 +494,8 @@ async def test_delete_confirmation_is_bound_to_session_and_consumed_once():
 
 
 @pytest.mark.asyncio
-async def test_backend_timeout_emits_retryable_step_failed():
-    """Backend timeouts expose a retryable, structured tool failure."""
+async def test_backend_timeout_is_not_falsely_marked_safe_to_retry():
+    """The protocol has no idempotency key, so tool retries are user-controlled."""
     from app.agent import _tools_by_name, process_message
 
     events: list[dict[str, Any]] = []
@@ -513,7 +515,7 @@ async def test_backend_timeout_emits_retryable_step_failed():
 
     failure = next(event for event in events if event["type"] == "step_failed")
     assert failure["error_code"] == "TOOL_TIMEOUT"
-    assert failure["retryable"] is True
+    assert failure["retryable"] is False
 
 
 @pytest.mark.asyncio
@@ -925,8 +927,8 @@ async def test_tool_call_limit_stops_execution_with_stable_diagnostic():
 @pytest.mark.parametrize(
     "error,retryable",
     [
-        (ConnectionError("无法连接到后端服务"), True),
-        (TimeoutError("timeout"), True),
+        (ConnectionError("无法连接到后端服务"), False),
+        (TimeoutError("timeout"), False),
         (ValueError("待办不存在"), False),
         (ValueError("参数校验失败"), False),
         (RuntimeError("permanent failure"), False),
@@ -936,6 +938,51 @@ def test_tool_failure_retryability_is_classified(error, retryable):
     from app.agent import _failure_metadata
 
     assert _failure_metadata(error)[1] is retryable
+
+
+def test_capacity_evicts_only_safe_idle_completed_session():
+    from app.agent import (
+        _conversations,
+        _ensure_capacity,
+        _session_slots,
+        _SessionSlot,
+    )
+
+    _conversations.update(
+        {
+            "safe": {
+                "messages": [],
+                "incomplete": None,
+                "updated_at": time.monotonic(),
+            },
+            "unsafe": {
+                "messages": [],
+                "incomplete": {"phase": "executing_tools"},
+                "updated_at": time.monotonic(),
+            },
+        }
+    )
+    _session_slots["safe"] = _SessionSlot(lock=asyncio.Lock())
+    _session_slots["unsafe"] = _SessionSlot(lock=asyncio.Lock())
+
+    with patch("app.agent.MAX_SESSIONS", 2):
+        _ensure_capacity("new")
+
+    assert "safe" not in _conversations
+    assert "unsafe" in _conversations
+
+
+def test_capacity_rejects_when_every_session_is_unsafe():
+    from app.agent import AgentCapacityExceeded, _conversations, _ensure_capacity
+
+    _conversations["unsafe"] = {
+        "messages": [],
+        "incomplete": {"phase": "executing_tools"},
+        "updated_at": 0.0,
+    }
+    with patch("app.agent.MAX_SESSIONS", 1):
+        with pytest.raises(AgentCapacityExceeded):
+            _ensure_capacity("new")
 
 
 @pytest.mark.asyncio
@@ -1062,3 +1109,179 @@ def test_message_budget_keeps_system_and_recent_context():
     assert len(trimmed) == 4
     assert trimmed[0].content == "system"
     assert [message.content for message in trimmed[1:]] == ["7", "8", "9"]
+
+
+@pytest.mark.asyncio
+async def test_turn_identity_rejects_stale_ack_and_allows_same_text_new_turn():
+    from app.agent import complete_turn, process_message
+
+    llm = FakeToolCallingLLM(responses=[_aim("A"), _aim("B")])
+
+    async def sink(_event):
+        pass
+
+    with patch("app.agent._build_llm", return_value=llm):
+        first = await process_message("turn-session", "相同文本", sink)
+        replay = await process_message("turn-session", "相同文本", sink)
+        assert replay.turn_id == first.turn_id
+        assert (
+            await complete_turn("turn-session", "stale-turn", first.generation) is False
+        )
+        assert (
+            await complete_turn("turn-session", first.turn_id, first.generation) is True
+        )
+        assert (
+            await complete_turn("turn-session", first.turn_id, first.generation)
+            is False
+        )
+        second = await process_message("turn-session", "相同文本", sink)
+
+    assert second.turn_id != first.turn_id
+
+
+@pytest.mark.asyncio
+async def test_ack_loses_to_delete_tombstone():
+    from app.agent import complete_turn, delete_history, process_message
+
+    async def sink(_event):
+        pass
+
+    llm = FakeToolCallingLLM(responses=[_aim("ready")])
+    with patch("app.agent._build_llm", return_value=llm):
+        result = await process_message("ack-delete", "内容", sink)
+        await delete_history("ack-delete")
+        assert (
+            await complete_turn("ack-delete", result.turn_id, result.generation)
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_delete_invalidates_active_and_all_old_epoch_waiters_then_new_epoch_runs():
+    from app.agent import SessionDeletedError, delete_history, process_message
+
+    entered = asyncio.Event()
+
+    class BlockingThenReady:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, _tools):
+            return self
+
+        async def ainvoke(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                entered.set()
+                await asyncio.Future()
+            return _aim("new epoch")
+
+    model = BlockingThenReady()
+    with patch("app.agent._build_llm", return_value=model):
+        active = asyncio.create_task(process_message("epoch", "active"))
+        await entered.wait()
+        queued = [
+            asyncio.create_task(process_message("epoch", f"queued-{index}"))
+            for index in range(3)
+        ]
+        await asyncio.sleep(0)
+        assert await delete_history("epoch") is True
+        with pytest.raises(asyncio.CancelledError):
+            await active
+        for waiter in queued:
+            with pytest.raises(SessionDeletedError):
+                await waiter
+        fresh = await process_message("epoch", "fresh")
+
+    assert fresh.reply == "new epoch"
+    assert model.calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fault_type,tool_fails",
+    [
+        ("step_started", False),
+        ("step_completed", False),
+        ("action_completed", False),
+        ("step_failed", True),
+    ],
+)
+async def test_event_checkpoint_faults_replay_stably_without_repeating_tools(
+    fault_type, tool_fails
+):
+    """Table-driven fault injection at every non-confirmation event boundary."""
+    from app.agent import _tools_by_name, process_message
+
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "checkpoint"}, "cp")]),
+            _aim("done"),
+        ]
+    )
+    tool = StubTool(
+        result={"id": 1},
+        side_effect=ValueError("permanent") if tool_fails else None,
+    )
+    failed_event = None
+
+    async def fault_sink(event):
+        nonlocal failed_event
+        matches = event["type"] == fault_type
+        if fault_type == "step_started":
+            matches = matches and event["step_id"] == "understand"
+        if matches and failed_event is None:
+            failed_event = dict(event)
+            raise RuntimeError(f"fault at {fault_type}")
+
+    replayed: list[dict[str, Any]] = []
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        with pytest.raises(RuntimeError, match="fault at"):
+            await process_message("fault-session", "执行", fault_sink)
+        await process_message("fault-session", "执行", replayed.append)
+
+    assert failed_event in replayed
+    assert tool.ainvoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_confirmation_event_fault_replays_same_id_then_executes_once():
+    from app.agent import _tools_by_name, process_message, resolve_confirmation
+
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("delete_todo", {"todo_id": 41}, "delete-cp")]),
+            _aim("deleted"),
+        ]
+    )
+    delete = StubTool(result={"deleted": True, "id": 41})
+    first_confirmation = None
+
+    async def fail_confirmation(event):
+        nonlocal first_confirmation
+        if event["type"] == "confirmation_required":
+            first_confirmation = dict(event)
+            raise RuntimeError("confirmation send failed")
+
+    replayed: list[dict[str, Any]] = []
+
+    async def approve_replay(event):
+        replayed.append(event)
+        if event["type"] == "confirmation_required":
+            assert resolve_confirmation(
+                "confirmation-cp", event["confirmation_id"], True
+            )
+
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"delete_todo": delete}),
+    ):
+        with pytest.raises(RuntimeError, match="confirmation send failed"):
+            await process_message("confirmation-cp", "删除", fail_confirmation)
+        await process_message("confirmation-cp", "删除", approve_replay)
+
+    assert first_confirmation in replayed
+    delete.ainvoke.assert_awaited_once()

@@ -18,6 +18,7 @@ def _reset_agent():
     app.agent._reset_graph()
     app.agent._conversations.clear()
     app.agent._session_locks.clear()
+    app.agent._session_slots.clear()
     app.agent._session_generations.clear()
     app.agent._active_tasks.clear()
     app.agent._pending_confirmations.clear()
@@ -189,6 +190,58 @@ def test_delete_history_success(client):
 # ===================================================================
 # WebSocket /api/agent/stream
 # ===================================================================
+
+
+def test_websocket_initial_disconnect_starts_no_agent_task(client):
+    process = AsyncMock()
+    with patch("app.main.process_message", new=process):
+        with client.websocket_connect("/api/agent/stream"):
+            pass
+    process.assert_not_awaited()
+
+
+def test_websocket_invalid_initial_envelope_fails_and_closes(client):
+    process = AsyncMock()
+    with (
+        patch("app.main.process_message", new=process),
+        client.websocket_connect("/api/agent/stream") as ws,
+    ):
+        ws.send_json({"message": "", "unexpected": True})
+        failure = ws.receive_json()
+        done = ws.receive_json()
+
+    assert failure["error_code"] == "INVALID_CLIENT_EVENT"
+    assert done == {"type": "done"}
+    process.assert_not_awaited()
+
+
+def test_websocket_unknown_valid_confirmation_reports_and_cleans_up(client):
+    cancelled = asyncio.Event()
+
+    async def blocked(session_id, message, on_event=None):
+        await on_event({"type": "step_started", "step_id": "wait", "label": "等待"})
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    with (
+        patch("app.main.process_message", new=AsyncMock(side_effect=blocked)),
+        client.websocket_connect("/api/agent/stream") as ws,
+    ):
+        ws.send_json({"message": "等待", "session_id": "unknown-confirm"})
+        assert ws.receive_json()["step_id"] == "wait"
+        ws.send_json(
+            {
+                "type": "confirmation_response",
+                "confirmation_id": "not-registered",
+                "approved": True,
+            }
+        )
+        assert ws.receive_json()["error_code"] == "INVALID_CONFIRMATION"
+
+    assert cancelled.is_set()
 
 
 def test_websocket_stream_chat(client):

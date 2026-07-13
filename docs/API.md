@@ -295,8 +295,8 @@ WS /api/agent/stream
 // 工具执行结果
 { "type": "action_completed", "step_id": "create_todo", "action": "create_todo", "result": { "id": 1, "title": "买牛奶" }, "duration_ms": 1380 }
 
-// 步骤失败，可由前端展示原因和重试入口
-{ "type": "step_failed", "step_id": "create_todo", "error_code": "TOOL_TIMEOUT", "message": "Todo API 响应超时", "retryable": true, "duration_ms": 5000 }
+// 步骤失败；当前协议没有后端幂等键，因此不能承诺自动重试安全
+{ "type": "step_failed", "step_id": "create_todo", "error_code": "TOOL_TIMEOUT", "message": "Todo API 响应超时", "retryable": false, "duration_ms": 5000 }
 
 // 回复文本（可能分多次推送实现流式效果）
 { "type": "reply", "content": "好的，已为你创建" }
@@ -320,9 +320,11 @@ WS /api/agent/stream
 
 同一个 WebSocket 消息处理过程中可以顺序出现多次 `confirmation_required`；客户端应逐次使用各自的 ID 回复，因此一个会话可以安全完成多轮确认。客户端断开连接时，服务端会取消仍在运行的 Agent/后端请求并清理未决确认，不会继续尝试向已断开的连接写事件。
 
-前端应根据步骤事件展示等待、运行、完成和失败状态。后端接口超时对应 `step_failed(error_code="TOOL_TIMEOUT", retryable=true)`，可用于展示重试入口。
+前端应根据步骤事件展示等待、运行、完成和失败状态。后端接口超时对应 `step_failed(error_code="TOOL_TIMEOUT", retryable=false)`。前端可以提供由用户确认的“重新发送整轮”入口，但不得把单个工具步骤当作可安全自动重试；Todo API 当前没有接收 action/turn 幂等键，提交成功但响应丢失时仍可能重复产生副作用。
 
-Agent 会在每个工具完成后先记录该 turn 的 action journal，再继续调用模型或发送后续事件。如果工具已经成功但最终模型/连接失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重试；服务端从未完成阶段恢复并复用已记录的 tool-call ID，不会重复执行已经产生副作用的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
+Agent 会在每个工具完成后先记录该 turn 的 action journal，并在每次 WebSocket 事件写入前保存稳定的事件内容与 ID。如果写入失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重连；同一 Python worker、且该内存记录仍在 TTL/LRU 保留期内时，服务端会重放未确认事件并复用已记录的 tool-call ID，避免再次执行已经写入 journal 的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
+
+上述 action journal、turn ID、事件 checkpoint 和会话锁都只是**单进程内存状态**，不是数据库级 durable log，也不是 exactly-once 交付协议。进程重启、多 worker 路由到不同进程、缓存淘汰都会丢失恢复上下文；即使服务端成功调用 `send_json`，也不能证明客户端已经收到事件。最终 `reply` 发送后，服务端会用内部 `turn_id + generation` 提交该轮；如果提交与删除历史发生竞态，会返回流错误而不是错误提交另一轮。客户端仍应把未收到 `done` 视为结果不确定，并允许用户查看 Todo 实际状态后决定是否重试。
 
 服务端为每个 session 串行执行 turn，不同 session 仍可并行。会话采用 TTL/LRU 有界缓存，并限制每个会话保留的消息数、单 turn 的工具轮数和工具调用总数；超限返回 `step_failed(error_code="AGENT_LIMIT_EXCEEDED", retryable=false)`。删除历史会建立 tombstone 并取消同 session 的在途处理，晚到结果不能重新创建已删除的历史或确认状态。
 
