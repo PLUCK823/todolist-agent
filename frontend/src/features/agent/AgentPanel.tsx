@@ -18,7 +18,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
   const setDraft = onDraftChange ?? setInternalDraft
   const endRef = useRef<HTMLDivElement>(null)
   const busy = busyStatuses.has(session.status)
-  const status = getAgentStatusPresentation(session.status)
+  const status = getAgentStatusPresentation(session.status, session.steps)
 
   useEffect(() => { endRef.current?.scrollIntoView?.({ behavior: 'smooth' }) }, [session.messages, session.steps])
 

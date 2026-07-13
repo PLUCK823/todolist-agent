@@ -12,7 +12,7 @@ export default function AssistantPage() {
   const [draft, setDraft] = useState('')
   const [clearError, setClearError] = useState('')
   const busy = ['connecting', 'running', 'waiting_confirmation'].includes(session.status)
-  const agentStatus = getAgentStatusPresentation(session.status)
+  const agentStatus = getAgentStatusPresentation(session.status, session.steps)
 
   useEffect(() => {
     const shouldRestore = restoreExpanded.current

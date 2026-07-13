@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { renderWithProviders } from '../../test/render'
@@ -56,8 +56,12 @@ describe('AssistantPage', () => {
   })
 
   it('shows the real failed connection state instead of claiming the tools are online', () => {
-    renderPage({ status: 'failed', messages: [{ id: 'u', role: 'user', content: '保留请求', createdAt: '2026-07-14T00:00:00Z' }] })
-    expect(screen.getByRole('alert')).toHaveTextContent('连接异常')
+    renderPage({
+      status: 'failed',
+      messages: [{ id: 'u', role: 'user', content: '保留请求', createdAt: '2026-07-14T00:00:00Z' }],
+      steps: [{ id: 'client-connection', label: '连接智能助手', status: 'failed', errorCode: 'CONNECTION_CLOSED', errorMessage: '连接已断开' }],
+    })
+    expect(within(screen.getByLabelText('工具连接状态')).getByRole('alert')).toHaveTextContent('连接异常')
     expect(screen.getAllByText('保留请求')[0]).toBeVisible()
     expect(screen.queryByText('Agent Stream在线')).not.toBeInTheDocument()
   })

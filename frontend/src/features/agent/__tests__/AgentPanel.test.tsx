@@ -149,11 +149,31 @@ describe('AgentPanel integration', () => {
     const value = session({
       status: 'failed',
       messages: [{ id: 'm1', role: 'user', content: '不要丢失这条消息', createdAt: '2026-07-14T00:00:00Z' }],
+      steps: [{ id: 'client-connection', label: '连接智能助手', status: 'failed', errorCode: 'CONNECTION_TIMEOUT', errorMessage: '连接超时' }],
     })
     render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={value}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
-    expect(screen.getByRole('alert')).toHaveTextContent('连接异常')
+    expect(screen.getByText('连接异常 · 当前离线')).toHaveAttribute('role', 'alert')
     expect(screen.getByText('不要丢失这条消息')).toBeVisible()
     expect(screen.queryByText(/在线 · 随时处理任务/)).not.toBeInTheDocument()
+  })
+
+  it('describes a tool timeout as a partial task failure without claiming the user is offline', () => {
+    const value = session({
+      status: 'failed',
+      messages: [{ id: 'm1', role: 'user', content: '保留部分成功消息', createdAt: '2026-07-14T00:00:00Z' }],
+      steps: [{ id: 'create-1', label: '创建任务', tool: 'create_todo', status: 'failed', errorCode: 'TOOL_TIMEOUT', errorMessage: 'Todo API 响应超时' }],
+    })
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={value}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+    expect(screen.getByText('任务执行遇到问题 · 查看详情')).toHaveAttribute('role', 'alert')
+    expect(screen.getByText('Todo API 响应超时')).toBeVisible()
+    expect(screen.getByText('保留部分成功消息')).toBeVisible()
+    expect(screen.queryByText(/当前离线/)).not.toBeInTheDocument()
+  })
+
+  it('uses a generic failure label when no failed step details are available', () => {
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session({ status: 'failed', steps: [] })}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+    expect(screen.getByText('任务未完成 · 请查看详情')).toHaveAttribute('role', 'alert')
+    expect(screen.queryByText(/当前离线/)).not.toBeInTheDocument()
   })
 
   it.each([
