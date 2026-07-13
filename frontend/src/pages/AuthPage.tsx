@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
+import type { To } from 'react-router-dom'
 import { Button } from '../shared/ui/Button'
 import { TextField } from '../shared/ui/TextField'
 import { useAuth } from '../features/auth/auth-context'
@@ -8,12 +9,29 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 interface FieldErrors { name?: string; email?: string; password?: string }
 
+interface AuthLocationState {
+  registeredEmail?: string
+  from?: { pathname?: unknown; search?: unknown; hash?: unknown }
+}
+
+function safeInternalTarget(value: AuthLocationState['from']): To | null {
+  if (!value || typeof value.pathname !== 'string') return null
+  const pathname = value.pathname
+  if (!pathname.startsWith('/') || pathname.startsWith('//') || pathname.includes('\\')) return null
+  return {
+    pathname,
+    search: typeof value.search === 'string' && value.search.startsWith('?') ? value.search : '',
+    hash: typeof value.hash === 'string' && value.hash.startsWith('#') ? value.hash : '',
+  }
+}
+
 export default function AuthPage() {
   const location = useLocation()
   const navigate = useNavigate()
   const { login, register } = useAuth()
   const isRegister = location.pathname === '/register'
-  const state = location.state as { registeredEmail?: string; from?: { pathname?: string } } | null
+  const state = location.state as AuthLocationState | null
+  const returnTarget = safeInternalTarget(state?.from)
   const [email, setEmail] = useState(state?.registeredEmail ?? '')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -35,10 +53,10 @@ export default function AuthPage() {
     try {
       if (isRegister) {
         const account = await register({ name, email, password })
-        navigate('/login', { replace: true, state: { registeredEmail: account.email } })
+        navigate('/login', { replace: true, state: { registeredEmail: account.email, from: returnTarget } })
       } else {
         await login({ email, password })
-        navigate(state?.from?.pathname || '/tasks', { replace: true })
+        navigate(returnTarget ?? '/tasks', { replace: true })
       }
     } catch (error) {
       setFormError(error instanceof Error ? error.message : '暂时无法完成操作，请稍后再试')
@@ -71,7 +89,7 @@ export default function AuthPage() {
             <TextField label="密码" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} error={errors.password} placeholder="至少 8 位" />
             <Button type="submit" size="lg" disabled={pending} className="w-full" aria-label={isRegister ? '创建账号' : '登录'}>{pending ? '请稍候...' : isRegister ? '注册' : '登录'}</Button>
           </form>
-          <p className="auth-form-card__switch">{isRegister ? <>已有账号？ <Link to="/login">去登录</Link></> : <>没有账号？ <Link to="/register">注册</Link></>}</p>
+          <p className="auth-form-card__switch">{isRegister ? <>已有账号？ <Link to="/login" state={{ from: returnTarget }}>去登录</Link></> : <>没有账号？ <Link to="/register" state={{ from: returnTarget }}>注册</Link></>}</p>
           <small>继续即表示你同意以本地演示数据体验此原型。</small>
         </div>
       </section>

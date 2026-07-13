@@ -109,6 +109,7 @@ describe('AssistantPage', () => {
   })
 
   it('restores the exact collapsed state even if the standalone page opens Agent state internally', async () => {
+    localStorage.setItem('todolist.preferences', JSON.stringify({ language: 'zh-CN', theme: 'system', agentStartsOpen: false, reducedMotion: null }))
     localStorage.setItem('todolist:shell', JSON.stringify({ navExpanded: false, agentExpanded: false }))
     const user = userEvent.setup()
     const value = makeSession()

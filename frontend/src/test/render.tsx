@@ -1,4 +1,4 @@
-import { useRef, type ReactElement, type ReactNode } from 'react'
+import { useRef, type ComponentProps, type ReactElement, type ReactNode } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { render, type RenderOptions } from '@testing-library/react'
@@ -22,15 +22,18 @@ function createTestQueryClient() {
 }
 
 interface WrapperOptions {
-  initialEntries?: string[]
+  initialEntries?: ComponentProps<typeof MemoryRouter>['initialEntries']
 }
 
-export function TestProviders({ children, initialEntries }: { children: ReactNode; initialEntries?: string[] }) {
+export function TestProviders({ children, initialEntries }: { children: ReactNode; initialEntries?: ComponentProps<typeof MemoryRouter>['initialEntries'] }) {
   const queryClient = createTestQueryClient()
   const account: Account = { id: 'test-user', name: 'Plucky HZ', email: 'plucky@example.com', timezone: 'Asia/Shanghai (UTC+8)', avatar: { kind: 'preset', value: 'amber' }, taskCount: 37, agentSessionCount: 12 }
   const current = useRef(account)
   const storage: AuthStorageAdapter = {
-    register: async (input) => ({ ...current.current, name: input.name, email: input.email }),
+    register: async (input) => {
+      current.current = { ...current.current, name: input.name, email: input.email }
+      return current.current
+    },
     login: async (input) => {
       if (input.email !== current.current.email) throw new Error('邮箱或密码不正确')
       return current.current

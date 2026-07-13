@@ -3,6 +3,7 @@ import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ShellProvider } from '../ShellContext'
 import { useShell } from '../shell-context'
+import { PreferencesProvider } from '../../preferences/PreferencesContext'
 
 function ShellHarness() {
   const shell = useShell()
@@ -24,6 +25,10 @@ function renderShell() {
       <ShellHarness />
     </ShellProvider>,
   )
+}
+
+function renderShellWithPreferences() {
+  return render(<PreferencesProvider><ShellProvider><ShellHarness /></ShellProvider></PreferencesProvider>)
 }
 
 describe('ShellContext', () => {
@@ -64,6 +69,24 @@ describe('ShellContext', () => {
 
     expect(screen.getByLabelText('导航状态')).toHaveTextContent('expanded')
     expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('collapsed')
+  })
+
+  it('uses the Agent startup preference for every new application mount', () => {
+    localStorage.setItem('todolist.preferences', JSON.stringify({
+      language: 'zh-CN', theme: 'system', agentStartsOpen: false, reducedMotion: null,
+    }))
+    localStorage.setItem('todolist:shell', JSON.stringify({ navExpanded: true, agentExpanded: true }))
+
+    const firstMount = renderShellWithPreferences()
+    expect(screen.getByLabelText('导航状态')).toHaveTextContent('expanded')
+    expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('collapsed')
+    firstMount.unmount()
+
+    localStorage.setItem('todolist.preferences', JSON.stringify({
+      language: 'zh-CN', theme: 'system', agentStartsOpen: true, reducedMotion: null,
+    }))
+    renderShellWithPreferences()
+    expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('expanded')
   })
 
   it('uses safe defaults when persisted storage is malformed', () => {
