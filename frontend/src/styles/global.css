@@ -79,6 +79,13 @@ button:not(:disabled),
   min-width: 0;
   overflow: hidden;
   background: var(--agent-bg);
+  opacity: 1;
+  transition: opacity var(--motion-shell);
+}
+
+.app-shell__agent[data-state="exiting"] {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .app-shell__agent > aside {
@@ -133,6 +140,25 @@ button:not(:disabled),
 .nav-rail__brand strong {
   font-size: .88rem;
   letter-spacing: -.01em;
+}
+
+.nav-rail__label,
+.nav-rail__user {
+  max-width: 150px;
+  opacity: 1;
+  transform: translateX(0);
+  transition:
+    max-width var(--motion-shell),
+    opacity 180ms ease,
+    transform var(--motion-shell);
+}
+
+.nav-rail__label[data-state="collapsed"],
+.nav-rail__user[data-state="collapsed"] {
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-8px);
+  pointer-events: none;
 }
 
 .nav-rail__list {

@@ -1,6 +1,6 @@
-import { useCallback, useState, type CSSProperties } from 'react'
+import type { CSSProperties } from 'react'
 import { Outlet } from 'react-router-dom'
-import AgentPanel, { type AgentMessage } from '../../components/layout/AgentPanel'
+import AgentPanelCompatibility from './AgentPanelCompatibility'
 import NavigationRail from './NavigationRail'
 import { useShell } from './shell-context'
 
@@ -11,18 +11,12 @@ type ShellStyle = CSSProperties & {
 
 export default function AppShell() {
   const { navExpanded, agentExpanded } = useShell()
-  const [messages, setMessages] = useState<AgentMessage[]>([])
-
-  const handleAgentSend = useCallback((message: string) => {
-    setMessages((current) => [
-      ...current,
-      { role: 'user', content: message, timestamp: new Date().toISOString() },
-    ])
-  }, [])
 
   const style: ShellStyle = {
-    '--nav-width': navExpanded ? '210px' : '68px',
-    '--agent-width': agentExpanded ? '340px' : '0px',
+    '--nav-width': navExpanded
+      ? 'var(--nav-width-expanded)'
+      : 'var(--nav-width-collapsed)',
+    '--agent-width': agentExpanded ? 'var(--agent-width-expanded)' : '0px',
   }
 
   return (
@@ -31,11 +25,7 @@ export default function AppShell() {
       <main className="app-shell__main">
         <Outlet />
       </main>
-      {agentExpanded && (
-        <div className="app-shell__agent" data-testid="agent-column">
-          <AgentPanel messages={messages} onSend={handleAgentSend} isLoading={false} />
-        </div>
-      )}
+      <AgentPanelCompatibility expanded={agentExpanded} />
     </div>
   )
 }

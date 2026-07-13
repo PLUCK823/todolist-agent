@@ -4,46 +4,30 @@ import {
   type ShellContextValue,
   type ShellState,
 } from './shell-context'
-
-const SHELL_STORAGE_KEY = 'todolist:shell'
-
-const DEFAULT_SHELL_STATE: ShellState = {
-  navExpanded: false,
-  agentExpanded: true,
-}
-
-function loadShellState(): ShellState {
-  try {
-    const stored = window.localStorage.getItem(SHELL_STORAGE_KEY)
-    if (!stored) return DEFAULT_SHELL_STATE
-
-    const parsed: unknown = JSON.parse(stored)
-    if (
-      typeof parsed === 'object'
-      && parsed !== null
-      && 'navExpanded' in parsed
-      && 'agentExpanded' in parsed
-      && typeof parsed.navExpanded === 'boolean'
-      && typeof parsed.agentExpanded === 'boolean'
-    ) {
-      return {
-        navExpanded: parsed.navExpanded,
-        agentExpanded: parsed.agentExpanded,
-      }
-    }
-  } catch {
-    // Corrupt browser state should never prevent the application from loading.
-  }
-
-  return DEFAULT_SHELL_STATE
-}
+import {
+  parseShellState,
+  readShellState,
+  SHELL_STORAGE_KEY,
+  writeShellState,
+} from './shell-storage'
 
 export function ShellProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<ShellState>(loadShellState)
+  const [state, setState] = useState<ShellState>(readShellState)
 
   useEffect(() => {
-    window.localStorage.setItem(SHELL_STORAGE_KEY, JSON.stringify(state))
+    writeShellState(state)
   }, [state])
+
+  useEffect(() => {
+    const syncShellState = (event: StorageEvent) => {
+      if (event.key !== SHELL_STORAGE_KEY) return
+      const nextState = parseShellState(event.newValue)
+      if (nextState) setState(nextState)
+    }
+
+    window.addEventListener('storage', syncShellState)
+    return () => window.removeEventListener('storage', syncShellState)
+  }, [])
 
   const toggleNav = useCallback(() => {
     setState((current) => ({ ...current, navExpanded: !current.navExpanded }))

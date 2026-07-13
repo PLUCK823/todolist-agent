@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import NavigationRail from '../NavigationRail'
 import { ShellProvider } from '../ShellContext'
+import { SETTINGS_OPEN_EVENT } from '../shell-events'
 
 function renderNavigation(path = '/tasks') {
   return render(
@@ -48,12 +49,12 @@ describe('NavigationRail', () => {
     expect(screen.getByRole('link', { name: '用户资料' })).toHaveAttribute('href', '/profile')
   })
 
-  it('shows only icons and the avatar when collapsed', () => {
+  it('keeps labels mounted but hidden from accessibility when collapsed', () => {
     renderNavigation()
-    expect(screen.queryByText('我的任务')).not.toBeInTheDocument()
-    expect(screen.queryByText('近期安排')).not.toBeInTheDocument()
-    expect(screen.queryByText('智能助手')).not.toBeInTheDocument()
-    expect(screen.queryByText('Plucky HZ')).not.toBeInTheDocument()
+    expect(screen.getByText('我的任务')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByText('近期安排')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByText('智能助手')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByText('Plucky HZ')).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByText('HZ')).toBeInTheDocument()
   })
 
@@ -67,6 +68,21 @@ describe('NavigationRail', () => {
     expect(screen.getByText('智能助手')).toBeVisible()
     expect(screen.getByText('Plucky HZ')).toBeVisible()
     expect(screen.getByText('plucky@example.com')).toBeVisible()
+    expect(screen.getByText('我的任务')).toHaveAttribute('aria-hidden', 'false')
+  })
+
+  it('preserves label nodes across the expansion transition', async () => {
+    const user = userEvent.setup()
+    renderNavigation()
+    const taskLabel = screen.getByText('我的任务')
+    const userName = screen.getByText('Plucky HZ')
+
+    await user.click(screen.getByRole('button', { name: '展开导航' }))
+
+    expect(screen.getByText('我的任务')).toBe(taskLabel)
+    expect(screen.getByText('Plucky HZ')).toBe(userName)
+    expect(taskLabel).toHaveAttribute('data-state', 'expanded')
+    expect(userName).toHaveAttribute('data-state', 'expanded')
   })
 
   it('updates its accessible expansion state', async () => {
@@ -98,13 +114,13 @@ describe('NavigationRail', () => {
   it('dispatches the settings boundary event', async () => {
     const user = userEvent.setup()
     const listener = vi.fn()
-    window.addEventListener('todolist:open-settings', listener)
+    window.addEventListener(SETTINGS_OPEN_EVENT, listener)
     renderNavigation()
 
     await user.click(screen.getByRole('button', { name: '设置' }))
 
     expect(listener).toHaveBeenCalledOnce()
-    window.removeEventListener('todolist:open-settings', listener)
+    window.removeEventListener(SETTINGS_OPEN_EVENT, listener)
   })
 
   it('renders an icon for every primary route', () => {

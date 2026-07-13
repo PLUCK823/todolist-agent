@@ -1,6 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import type { ReactNode, SVGProps } from 'react'
 import { useShell } from './shell-context'
+import { requestSettingsOpen } from './shell-events'
 
 type IconProps = SVGProps<SVGSVGElement>
 
@@ -55,10 +56,7 @@ function navClassName(isActive: boolean) {
 
 export default function NavigationRail() {
   const { navExpanded, toggleNav } = useShell()
-
-  const openSettings = () => {
-    window.dispatchEvent(new CustomEvent('todolist:open-settings'))
-  }
+  const labelState = navExpanded ? 'expanded' : 'collapsed'
 
   return (
     <nav
@@ -68,7 +66,13 @@ export default function NavigationRail() {
     >
       <div className="nav-rail__brand" aria-label="Agent TodoList">
         <span aria-hidden="true">✓</span>
-        {navExpanded && <strong>Agent TodoList</strong>}
+        <strong
+          className="nav-rail__label"
+          data-state={labelState}
+          aria-hidden={!navExpanded}
+        >
+          Agent TodoList
+        </strong>
       </div>
 
       <ul className="nav-rail__list" role="list">
@@ -80,7 +84,13 @@ export default function NavigationRail() {
               aria-label={item.label}
             >
               <item.icon />
-              {navExpanded && <span>{item.label}</span>}
+              <span
+                className="nav-rail__label"
+                data-state={labelState}
+                aria-hidden={!navExpanded}
+              >
+                {item.label}
+              </span>
             </NavLink>
           </li>
         ))}
@@ -91,11 +101,17 @@ export default function NavigationRail() {
       <button
         type="button"
         className="nav-rail__control"
-        onClick={openSettings}
+        onClick={requestSettingsOpen}
         aria-label="设置"
       >
         <SettingsIcon />
-        {navExpanded && <span>设置</span>}
+        <span
+          className="nav-rail__label"
+          data-state={labelState}
+          aria-hidden={!navExpanded}
+        >
+          设置
+        </span>
       </button>
 
       <NavLink
@@ -104,12 +120,14 @@ export default function NavigationRail() {
         aria-label="用户资料"
       >
         <span className="nav-rail__avatar" aria-hidden="true">HZ</span>
-        {navExpanded && (
-          <span className="nav-rail__user">
-            <strong>Plucky HZ</strong>
-            <small>plucky@example.com</small>
-          </span>
-        )}
+        <span
+          className="nav-rail__user"
+          data-state={labelState}
+          aria-hidden={!navExpanded}
+        >
+          <strong data-state={labelState} aria-hidden={!navExpanded}>Plucky HZ</strong>
+          <small aria-hidden={!navExpanded}>plucky@example.com</small>
+        </span>
       </NavLink>
 
       <button
@@ -120,7 +138,13 @@ export default function NavigationRail() {
         aria-expanded={navExpanded}
       >
         <PanelIcon className={navExpanded ? 'nav-rail__toggle-icon--expanded' : ''} />
-        {navExpanded && <span>收起导航</span>}
+        <span
+          className="nav-rail__label"
+          data-state={labelState}
+          aria-hidden={!navExpanded}
+        >
+          收起导航
+        </span>
       </button>
     </nav>
   )

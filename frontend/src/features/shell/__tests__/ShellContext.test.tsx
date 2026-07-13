@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ShellProvider } from '../ShellContext'
 import { useShell } from '../shell-context'
@@ -29,6 +29,10 @@ function renderShell() {
 describe('ShellContext', () => {
   beforeEach(() => {
     localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('defaults to a collapsed navigation and expanded agent', () => {
@@ -81,5 +85,71 @@ describe('ShellContext', () => {
 
     expect(screen.getByLabelText('导航状态')).toHaveTextContent('collapsed')
     expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('expanded')
+  })
+
+  it.each(['SecurityError', 'QuotaExceededError'])(
+    'keeps shell state usable when storage writes throw %s',
+    async (errorName) => {
+      const user = userEvent.setup()
+      const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new DOMException('storage unavailable', errorName)
+      })
+
+      expect(() => renderShell()).not.toThrow()
+      await user.click(screen.getByRole('button', { name: '展开导航' }))
+      await user.click(screen.getByRole('button', { name: '收起智能助手' }))
+
+      expect(screen.getByLabelText('导航状态')).toHaveTextContent('expanded')
+      expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('collapsed')
+      expect(setItem).toHaveBeenCalled()
+      setItem.mockRestore()
+    },
+  )
+
+  it('synchronizes valid state from another browser tab', () => {
+    renderShell()
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'todolist:shell',
+        newValue: JSON.stringify({ navExpanded: true, agentExpanded: false }),
+        storageArea: localStorage,
+      }))
+    })
+
+    expect(screen.getByLabelText('导航状态')).toHaveTextContent('expanded')
+    expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('collapsed')
+  })
+
+  it('ignores malformed and unrelated storage events', () => {
+    renderShell()
+
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'unrelated:key',
+        newValue: JSON.stringify({ navExpanded: true, agentExpanded: false }),
+      }))
+      window.dispatchEvent(new StorageEvent('storage', {
+        key: 'todolist:shell',
+        newValue: '{bad-json',
+      }))
+    })
+
+    expect(screen.getByLabelText('导航状态')).toHaveTextContent('collapsed')
+    expect(screen.getByLabelText('智能助手状态')).toHaveTextContent('expanded')
+  })
+
+  it('removes its cross-tab storage listener when unmounted', () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener')
+    const removeEventListener = vi.spyOn(window, 'removeEventListener')
+    const view = renderShell()
+    const storageRegistration = addEventListener.mock.calls.find(([type]) => type === 'storage')
+
+    expect(storageRegistration).toBeDefined()
+    view.unmount()
+
+    expect(removeEventListener).toHaveBeenCalledWith('storage', storageRegistration?.[1])
+    addEventListener.mockRestore()
+    removeEventListener.mockRestore()
   })
 })

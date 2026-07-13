@@ -10,6 +10,8 @@ interface AgentPanelProps {
   messages: AgentMessage[]
   onSend: (message: string) => void
   isLoading: boolean
+  draft?: string
+  onDraftChange?: (draft: string) => void
 }
 
 function SendIcon() {
@@ -31,8 +33,16 @@ function LoadingDots() {
   )
 }
 
-export default function AgentPanel({ messages, onSend, isLoading }: AgentPanelProps) {
-  const [input, setInput] = useState('')
+export default function AgentPanel({
+  messages,
+  onSend,
+  isLoading,
+  draft,
+  onDraftChange,
+}: AgentPanelProps) {
+  const [internalInput, setInternalInput] = useState('')
+  const input = draft ?? internalInput
+  const setInput = onDraftChange ?? setInternalInput
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
@@ -49,7 +59,7 @@ export default function AgentPanel({ messages, onSend, isLoading }: AgentPanelPr
     if (!trimmed || isLoading) return
     onSend(trimmed)
     setInput('')
-  }, [input, isLoading, onSend])
+  }, [input, isLoading, onSend, setInput])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
