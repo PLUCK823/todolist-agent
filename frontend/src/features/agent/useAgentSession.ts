@@ -66,6 +66,12 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     controlRef.current = undefined
   }, [])
 
+  const invalidateRequest = useCallback((generation: number) => {
+    if (generationRef.current !== generation) return
+    generationRef.current++
+    closeStream()
+  }, [closeStream])
+
   const dispatchSynchronousFailure = useCallback((error: unknown) => {
     dispatch({
       type: 'client_failed',
@@ -109,13 +115,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
           onOpen: () => { if (isCurrent()) dispatch({ type: 'connected' }) },
           onEvent: (event) => {
             if (!isCurrent()) return
-            if (event.type === 'done') controlRef.current = undefined
             dispatch(event)
+            if (event.type === 'done') invalidateRequest(generation)
           },
           onFailure: (failure) => {
             if (!isCurrent()) return
-            controlRef.current = undefined
             dispatch({ type: 'client_failed', failure })
+            invalidateRequest(generation)
           },
           onControlReady: (sendControl) => {
             if (isCurrent()) controlRef.current = sendControl
@@ -125,9 +131,12 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       if (isCurrent()) cancelRef.current = cancelRequest
       else cancelRequest()
     } catch (error) {
-      if (isCurrent()) dispatchSynchronousFailure(error)
+      if (isCurrent()) {
+        dispatchSynchronousFailure(error)
+        invalidateRequest(generation)
+      }
     }
-  }, [client, closeStream, dispatch, dispatchSynchronousFailure, messageIdFactory, now, sessionIdFactory])
+  }, [client, closeStream, dispatch, dispatchSynchronousFailure, invalidateRequest, messageIdFactory, now, sessionIdFactory])
 
   const send = useCallback((message: string) => startRequest(message), [startRequest])
 
@@ -169,11 +178,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     const generation = ++generationRef.current
     clearingRef.current = true
     closeStream()
-    dispatch({ type: 'clear' })
 
     const operation = (async () => {
       try {
         if (currentSessionId) await historyApi.clear(currentSessionId)
+        if (mountedRef.current && generationRef.current === generation) {
+          dispatch({ type: 'clear' })
+        }
       } catch (error) {
         if (mountedRef.current && generationRef.current === generation) {
           dispatch({
@@ -195,11 +206,16 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     return operation
   }, [closeStream, dispatch, historyApi])
 
-  useEffect(() => () => {
+  const deactivateLifecycle = useCallback(() => {
     mountedRef.current = false
     generationRef.current++
     closeStream()
   }, [closeStream])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return deactivateLifecycle
+  }, [deactivateLifecycle])
 
   return {
     sessionId: state.sessionId,

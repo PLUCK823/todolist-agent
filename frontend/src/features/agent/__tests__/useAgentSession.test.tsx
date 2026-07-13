@@ -1,4 +1,5 @@
 import { act, renderHook } from '@testing-library/react'
+import { StrictMode, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AgentContractError, agentHistoryApi, createAgentStreamClient, parseAgentEvent } from '../agent.api'
 import type {
@@ -25,8 +26,12 @@ class FakeSocket {
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: ((event: Event) => void) | null = null
   onclose: ((event: CloseEvent) => void) | null = null
+  throwOnSend = false
 
-  send(data: string) { this.sent.push(data) }
+  send(data: string) {
+    if (this.throwOnSend) throw new Error('send failed')
+    this.sent.push(data)
+  }
   close(code?: number, reason?: string) {
     this.closeCalls.push([code, reason])
     this.readyState = FakeSocket.CLOSED
@@ -200,6 +205,37 @@ describe('createAgentStreamClient', () => {
     expect(failures).toHaveLength(1)
   })
 
+  it('turns a socket factory exception during backoff into one terminal failure', async () => {
+    vi.useFakeTimers()
+    const first = new FakeSocket()
+    const factory = vi.fn()
+      .mockReturnValueOnce(first as unknown as WebSocket)
+      .mockImplementationOnce(() => { throw new Error('factory failed') })
+    const failures: unknown[] = []
+    const client = createAgentStreamClient({ socketFactory: factory, maxRetries: 1, retryBaseDelayMs: 10 })
+    client.send({ message: '创建任务' }, { onEvent: vi.fn(), onFailure: (failure) => failures.push(failure) })
+    first.abnormalClose()
+
+    await vi.advanceTimersByTimeAsync(10)
+    expect(factory).toHaveBeenCalledTimes(2)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toMatchObject({ code: 'SOCKET_ERROR' })
+  })
+
+  it('closes and reports once when sending the initial input throws on open', async () => {
+    const { factory, sockets } = createSocketFactory()
+    const failures: unknown[] = []
+    const client = createAgentStreamClient({ socketFactory: factory })
+    client.send({ message: '创建任务' }, { onEvent: vi.fn(), onFailure: (failure) => failures.push(failure) })
+    sockets[0].throwOnSend = true
+
+    expect(() => sockets[0].open()).not.toThrow()
+    await Promise.resolve()
+    expect(sockets[0].closeCalls).toHaveLength(1)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toMatchObject({ code: 'SOCKET_ERROR', retryable: false })
+  })
+
   it('cancels idempotently and stale sockets cannot dispatch into a retried request', () => {
     vi.useFakeTimers()
     const { factory, sockets } = createSocketFactory()
@@ -251,6 +287,27 @@ describe('createAgentStreamClient', () => {
     })).toBe(false)
     expect(failures).toHaveLength(1)
   })
+
+  it('terminates the socket once when sending a confirmation throws', async () => {
+    const { factory, sockets } = createSocketFactory()
+    let sendControl: AgentControlSender | undefined
+    const failures: unknown[] = []
+    const client = createAgentStreamClient({ socketFactory: factory })
+    client.send({ message: '删除任务' }, {
+      onEvent: vi.fn(),
+      onFailure: (failure) => failures.push(failure),
+      onControlReady: (send) => { sendControl = send },
+    })
+    sockets[0].open()
+    sockets[0].throwOnSend = true
+
+    expect(sendControl?.({
+      type: 'confirmation_response', confirmation_id: 'confirm-1', approved: true,
+    })).toBe(false)
+    await Promise.resolve()
+    expect(sockets[0].closeCalls).toHaveLength(1)
+    expect(failures).toHaveLength(1)
+  })
 })
 
 class ControlledClient implements AgentStreamClient {
@@ -297,6 +354,22 @@ describe('useAgentSession', () => {
     expect(result.current.sessionId).toBe('session-local')
     expect(result.current.status).toBe('connecting')
     expect(result.current.messages[0]).toMatchObject({ role: 'user', content: '创建任务' })
+  })
+
+  it('remains live through the StrictMode setup-cleanup-setup cycle', () => {
+    const client = new ControlledClient()
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>
+    const { result } = renderHook(
+      () => useAgentSession({ client, sessionIdFactory: () => 'strict-session' }),
+      { wrapper },
+    )
+    act(() => result.current.send('创建任务'))
+
+    expect(client.cancels).toBe(0)
+    act(() => client.handlers[0].onOpen?.())
+    act(() => client.handlers[0].onEvent({ type: 'reply', content: '仍然在线' }))
+    expect(result.current.status).toBe('running')
+    expect(result.current.messages.at(-1)?.content).toBe('仍然在线')
   })
 
   it('turns synchronous id factory and client failures into failed state', () => {
@@ -415,14 +488,17 @@ describe('useAgentSession', () => {
     expect(client.cancels).toBeGreaterThanOrEqual(1)
   })
 
-  it('clears locally immediately, blocks sends, and ignores every stale callback until history settles', async () => {
+  it('keeps local history while clearing, blocks sends, then clears only after history succeeds', async () => {
     let resolveHistory!: () => void
     const historyPending = new Promise<void>((resolve) => { resolveHistory = resolve })
     const client = new ControlledClient()
+    const sessionIdFactory = vi.fn()
+      .mockReturnValueOnce('session-before-clear')
+      .mockReturnValueOnce('session-after-clear')
     const { result } = renderHook(() => useAgentSession({
       client,
       historyApi: { clear: vi.fn(() => historyPending) },
-      sessionIdFactory: () => 's',
+      sessionIdFactory,
     }))
     act(() => result.current.send('旧请求'))
     const oldHandlers = client.handlers[0]
@@ -436,12 +512,14 @@ describe('useAgentSession', () => {
       oldHandlers.onControlReady?.(() => true)
     })
 
-    expect(result.current.messages).toEqual([])
-    expect(result.current.status).toBe('idle')
+    expect(result.current.messages.map((message) => message.content)).toEqual(['旧请求'])
+    expect(result.current.sessionId).toBe('session-before-clear')
     expect(client.requests).toHaveLength(1)
 
     resolveHistory()
     await act(() => clearPromise)
+    expect(result.current.messages).toEqual([])
+    expect(result.current.status).toBe('idle')
     act(() => result.current.send('新请求'))
     const staleControl = vi.fn(() => true)
     act(() => {
@@ -452,6 +530,7 @@ describe('useAgentSession', () => {
     })
 
     expect(client.requests).toHaveLength(2)
+    expect(client.requests[1].session_id).toBe('session-after-clear')
     expect(result.current.status).toBe('connecting')
     expect(result.current.messages.map((message) => message.content)).toEqual(['新请求'])
     act(() => {
@@ -485,6 +564,9 @@ describe('useAgentSession', () => {
       sessionIdFactory: () => 's',
     }))
     act(() => result.current.send('创建任务'))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'old-step', label: '旧步骤' }))
+    const messagesBefore = result.current.messages
+    const sessionBefore = result.current.sessionId
     let thrown: unknown
     await act(async () => {
       try {
@@ -494,7 +576,54 @@ describe('useAgentSession', () => {
       }
     })
     expect(thrown).toEqual(new Error('offline'))
-    expect(result.current.messages).toHaveLength(0)
+    expect(result.current.messages).toEqual(messagesBefore)
+    expect(result.current.steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'old-step', label: '旧步骤' }),
+    ]))
+    expect(result.current.sessionId).toBe(sessionBefore)
     expect(result.current.status).toBe('failed')
+  })
+
+  it('shares one pending clear operation across duplicate calls', async () => {
+    let resolveHistory!: () => void
+    const pending = new Promise<void>((resolve) => { resolveHistory = resolve })
+    const clearHistory = vi.fn(() => pending)
+    const client = new ControlledClient()
+    const { result } = renderHook(() => useAgentSession({
+      client, historyApi: { clear: clearHistory }, sessionIdFactory: () => 's',
+    }))
+    act(() => result.current.send('创建任务'))
+    let first!: Promise<void>
+    let second!: Promise<void>
+    act(() => {
+      first = result.current.clear()
+      second = result.current.clear()
+    })
+    expect(first).toBe(second)
+    expect(clearHistory).toHaveBeenCalledTimes(1)
+    resolveHistory()
+    await act(() => first)
+  })
+
+  it('ignores all callbacks after done or failure terminal states', () => {
+    const client = new ControlledClient()
+    const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
+    act(() => result.current.send('第一轮'))
+    act(() => client.handlers[0].onEvent({ type: 'done' }))
+    act(() => {
+      client.handlers[0].onEvent({ type: 'reply', content: 'done 后污染' })
+      client.handlers[0].onFailure?.({ code: 'CONNECTION_CLOSED', message: 'done 后失败', retryable: false })
+    })
+    expect(result.current.status).toBe('done')
+    expect(result.current.messages.some((message) => message.content === 'done 后污染')).toBe(false)
+
+    act(() => result.current.send('第二轮'))
+    act(() => client.handlers[1].onFailure?.({ code: 'CONNECTION_CLOSED', message: '失败', retryable: false }))
+    act(() => {
+      client.handlers[1].onOpen?.()
+      client.handlers[1].onEvent({ type: 'reply', content: 'failure 后污染' })
+    })
+    expect(result.current.status).toBe('failed')
+    expect(result.current.messages.some((message) => message.content === 'failure 后污染')).toBe(false)
   })
 })

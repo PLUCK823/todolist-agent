@@ -69,23 +69,46 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
         retryTimer = undefined
       }
 
-      const report = (failure: AgentFailure) => {
-        if (cancelled || finished) return
-        finished = true
-        clearTimers()
-        handlers.onFailure?.(failure)
+      const closeSocket = (code: number, reason: string) => {
+        if (!socket || socket.readyState >= SOCKET_CLOSING) return
+        try {
+          socket.close(code, reason)
+        } catch {
+          // Closing is best-effort; terminal state still prevents callbacks.
+        }
       }
 
-      const retryOrReport = (failure: AgentFailure) => {
-        if (cancelled || finished) return
+      const terminate = (
+        failure: AgentFailure | undefined,
+        code: number,
+        reason: string,
+      ): boolean => {
+        if (cancelled || finished) return false
+        finished = true
         generation++
+        clearTimers()
+        closeSocket(code, reason)
+        if (failure) handlers.onFailure?.(failure)
+        return true
+      }
+
+      const retryOrTerminate = (
+        failure: AgentFailure,
+        code: number,
+        reason: string,
+      ) => {
+        if (cancelled || finished) return
         if (!requestSent && failure.retryable && retries < maxRetries) {
+          generation++
+          if (connectionTimer) clearTimeout(connectionTimer)
+          connectionTimer = undefined
+          closeSocket(code, reason)
           const delay = retryBaseDelayMs * 2 ** retries
           retries++
           retryTimer = setTimeout(connect, delay)
           return
         }
-        report(failure)
+        terminate(failure, code, reason)
       }
 
       const sendControl = (control: AgentClientControl): boolean => {
@@ -94,7 +117,11 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
             socket.send(JSON.stringify(control))
             return true
           } catch {
-            report({ code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: false })
+            terminate(
+              { code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: false },
+              1011,
+              'control_send_failed',
+            )
           }
         }
         return false
@@ -103,24 +130,46 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
       function connect() {
         if (cancelled || finished) return
         const currentGeneration = ++generation
-        const current = socketFactory(endpoint)
+        let current: WebSocket
+        try {
+          current = socketFactory(endpoint)
+        } catch {
+          retryOrTerminate(
+            { code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: true },
+            1011,
+            'socket_factory_failed',
+          )
+          return
+        }
         socket = current
 
         connectionTimer = setTimeout(() => {
           if (currentGeneration !== generation || current.readyState === SOCKET_OPEN) return
-          current.close(4000, 'connection_timeout')
-          retryOrReport({
-            code: 'CONNECTION_TIMEOUT',
-            message: failureMessage.CONNECTION_TIMEOUT,
-            retryable: true,
-          })
+          retryOrTerminate(
+            {
+              code: 'CONNECTION_TIMEOUT',
+              message: failureMessage.CONNECTION_TIMEOUT,
+              retryable: true,
+            },
+            4000,
+            'connection_timeout',
+          )
         }, connectionTimeoutMs)
 
         current.onopen = () => {
           if (currentGeneration !== generation || cancelled || finished) return
           if (connectionTimer) clearTimeout(connectionTimer)
           connectionTimer = undefined
-          current.send(JSON.stringify(input))
+          try {
+            current.send(JSON.stringify(input))
+          } catch {
+            terminate(
+              { code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: false },
+              1011,
+              'initial_send_failed',
+            )
+            return
+          }
           requestSent = true
           handlers.onControlReady?.(sendControl)
           handlers.onOpen?.()
@@ -128,53 +177,61 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
 
         current.onmessage = (message) => {
           if (currentGeneration !== generation || cancelled || finished) return
+          let event
           try {
             const raw: unknown = JSON.parse(String(message.data))
-            const event = parseAgentEvent(raw)
-            handlers.onEvent(event)
-            if (event.type === 'done') {
-              finished = true
-              clearTimers()
-              current.close(1000, 'agent_done')
-            }
+            event = parseAgentEvent(raw)
           } catch (error) {
-            current.close(1003, 'invalid_agent_event')
-            report({
-              code: 'INVALID_EVENT',
-              message: error instanceof Error ? error.message : failureMessage.INVALID_EVENT,
-              retryable: false,
-            })
+            terminate(
+              {
+                code: 'INVALID_EVENT',
+                message: error instanceof Error ? error.message : failureMessage.INVALID_EVENT,
+                retryable: false,
+              },
+              1003,
+              'invalid_agent_event',
+            )
+            return
           }
+          if (event.type === 'done') {
+            terminate(undefined, 1000, 'agent_done')
+          }
+          handlers.onEvent(event)
         }
 
         current.onerror = () => {
           if (currentGeneration !== generation || cancelled || finished) return
-          current.close(1011, 'socket_error')
-          retryOrReport({ code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: true })
+          retryOrTerminate(
+            { code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: true },
+            1011,
+            'socket_error',
+          )
         }
 
         current.onclose = (event) => {
           if (currentGeneration !== generation || cancelled || finished) return
-          retryOrReport({
-            code: 'CONNECTION_CLOSED',
-            message: failureMessage.CONNECTION_CLOSED,
-            retryable: event.code !== 1008,
-            closeCode: event.code,
-            reason: event.reason,
-          })
+          retryOrTerminate(
+            {
+              code: 'CONNECTION_CLOSED',
+              message: failureMessage.CONNECTION_CLOSED,
+              retryable: event.code !== 1008,
+              closeCode: event.code,
+              reason: event.reason,
+            },
+            event.code || 1006,
+            event.reason || 'connection_closed',
+          )
         }
       }
 
       connect()
 
       return () => {
-        if (cancelled) return
+        if (cancelled || finished) return
         cancelled = true
         generation++
         clearTimers()
-        if (socket && socket.readyState < SOCKET_CLOSING) {
-          socket.close(1000, 'client_cancelled')
-        }
+        closeSocket(1000, 'client_cancelled')
       }
     },
   }
