@@ -34,6 +34,9 @@
   --radius-control: 10px;
   --motion-shell: 480ms cubic-bezier(.22, 1, .36, 1);
   --motion-overlay: 300ms cubic-bezier(.16, 1, .3, 1);
+  --nav-width-collapsed: 68px;
+  --nav-width-expanded: 210px;
+  --agent-width-expanded: 340px;
 
   /* Transitional aliases for MVP components removed in later rebuild nodes. */
   --color-app-bg: var(--app-bg);
