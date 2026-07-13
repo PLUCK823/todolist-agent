@@ -1,0 +1,46 @@
+<style>
+  .prototype{background:#eef0f4;border:1px solid #dfe2e8;border-radius:22px;padding:12px;box-shadow:0 22px 60px rgba(21,27,45,.12);margin-top:22px}
+  .app{height:610px;display:grid;grid-template-columns:68px minmax(0,1fr) 360px;background:#f7f7f9;border-radius:15px;overflow:hidden;color:#24293a}
+  .nav{background:#202538;color:#fff;padding:18px 12px;display:flex;flex-direction:column;align-items:center;gap:15px}
+  .brand{width:36px;height:36px;border-radius:12px;background:linear-gradient(135deg,#8b80ff,#6558e8);display:grid;place-items:center;font-weight:800}.nav-item{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;color:#9399ac;font-size:17px}.nav-item.active{background:#343a50;color:#fff}.avatar{margin-top:auto;width:30px;height:30px;border-radius:50%;background:#f2c87a}
+  .main{padding:30px 30px 24px;overflow:hidden}.main-head{display:flex;align-items:flex-start;justify-content:space-between}.eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#84899a;font-weight:700}.main h2{font-size:28px;margin:6px 0 5px}.muted{font-size:13px;color:#838898}.new{border:0;border-radius:11px;background:#262b3d;color:#fff;padding:12px 15px;font-weight:700}.summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:22px 0}.summary div{background:#fff;border:1px solid #eaebef;border-radius:13px;padding:13px}.summary b{display:block;font-size:20px}.summary span{font-size:11px;color:#8b90a0}
+  .toolbar{display:flex;align-items:center;gap:8px;margin-bottom:14px}.search{flex:1;background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:10px 12px;color:#a0a4b1;font-size:12px}.filter{background:#fff;border:1px solid #e6e8ed;border-radius:10px;padding:10px 12px;font-size:12px}.section-label{display:flex;align-items:center;justify-content:space-between;margin:17px 0 8px}.section-label b{font-size:13px}.section-label span{font-size:11px;color:#979caa}
+  .task{background:#fff;border:1px solid #e8eaf0;border-radius:13px;padding:13px 14px;display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:11px;align-items:center;margin-bottom:8px}.check{width:18px;height:18px;border:2px solid #9ea4b2;border-radius:50%}.task-title{font-size:13px;font-weight:700}.task-meta{font-size:10px;color:#979ca9;margin-top:4px}.priority{font-size:10px;font-weight:700;border-radius:999px;padding:5px 8px}.high{color:#d6574b;background:#fff0ed}.medium{color:#ad781f;background:#fff6df}.low{color:#438d6b;background:#eaf8f1}
+  .agent{background:#262b3d;color:#fff;padding:24px 20px 18px;display:flex;flex-direction:column;min-width:0}.agent-head{display:flex;gap:11px;align-items:center;padding-bottom:18px;border-bottom:1px solid #3d4357}.spark{width:36px;height:36px;border-radius:11px;background:#766af2;display:grid;place-items:center}.agent-head strong{display:block;font-size:14px}.online{font-size:10px;color:#a9afbf;margin-top:3px}.collapse{margin-left:auto;color:#a9afbf}.starter{margin:25px 0 14px}.starter h3{font-size:20px;margin:0 0 7px}.starter p{font-size:12px;color:#abb0bf;line-height:1.55;margin:0}.suggestions{display:flex;flex-wrap:wrap;gap:7px}.suggestions span{border:1px solid #454b60;border-radius:9px;padding:8px 10px;font-size:10px;color:#d7d9e1}.chat{margin-top:20px;display:flex;flex-direction:column;gap:10px}.bubble{font-size:11px;line-height:1.5;padding:10px 11px;border-radius:11px;background:#373d51;max-width:88%}.bubble.user{background:#7165ea;margin-left:auto}.action{background:#f7f7fa;color:#303547;border-radius:12px;padding:11px;font-size:11px}.action b{display:block;margin-bottom:5px}.action span{color:#6d7281}.composer{margin-top:auto;background:#fff;border-radius:13px;padding:11px;color:#969baa;font-size:11px;display:flex;justify-content:space-between}.send{width:24px;height:24px;border-radius:8px;background:#7165ea;color:#fff;display:grid;place-items:center}
+  .callouts{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px}.callout{background:#fff;border:1px solid #e3e5ea;border-radius:12px;padding:12px}.callout b{font-size:12px}.callout p{font-size:11px;line-height:1.45;color:#747a8a;margin:6px 0 0}
+  @media(max-width:1000px){.app{grid-template-columns:56px 1fr 300px}.main{padding:22px 18px}.callouts{grid-template-columns:1fr 1fr}}
+</style>
+
+<h2>第一部分：页面结构与信息层级</h2>
+<p class="subtitle">核心原则：浏览与处理任务是默认行为；Agent 作为右侧协作层出现，不抢走主任务流。</p>
+
+<div class="prototype mockup">
+  <div class="app">
+    <aside class="nav"><div class="brand">✓</div><div class="nav-item active">☷</div><div class="nav-item">◷</div><div class="nav-item">⌁</div><div class="avatar"></div></aside>
+    <main class="main">
+      <div class="main-head"><div><div class="eyebrow">2026 年 7 月 13 日 · 星期一</div><h2>今天，保持专注</h2><div class="muted">还有 4 项任务等待完成</div></div><button class="new">＋ 新建任务</button></div>
+      <div class="summary"><div><b>7</b><span>全部任务</span></div><div><b>4</b><span>进行中</span></div><div><b>3</b><span>已完成</span></div></div>
+      <div class="toolbar"><div class="search">⌕ 搜索任务</div><div class="filter">全部状态⌄</div><div class="filter">优先级⌄</div></div>
+      <div class="section-label"><b>即将到期</b><span>2 项</span></div>
+      <div class="task"><div class="check"></div><div><div class="task-title">完成产品原型评审</div><div class="task-meta">今天 17:00 · 工作</div></div><span class="priority high">高</span></div>
+      <div class="task"><div class="check"></div><div><div class="task-title">整理本周项目计划</div><div class="task-meta">明天 10:00 · 工作</div></div><span class="priority medium">中</span></div>
+      <div class="section-label"><b>稍后处理</b><span>2 项</span></div>
+      <div class="task"><div class="check"></div><div><div class="task-title">购买咖啡豆和牛奶</div><div class="task-meta">7 月 16 日 · 生活</div></div><span class="priority low">低</span></div>
+      <div class="task"><div class="check"></div><div><div class="task-title">阅读 Agent 架构文档</div><div class="task-meta">7 月 18 日 · 学习</div></div><span class="priority medium">中</span></div>
+    </main>
+    <aside class="agent">
+      <div class="agent-head"><div class="spark">✦</div><div><strong>智能助手</strong><div class="online">在线 · 随时帮你处理任务</div></div><div class="collapse">›</div></div>
+      <div class="starter"><h3>今天要做什么？</h3><p>直接告诉我你的想法。我可以创建、查询和整理任务。</p></div>
+      <div class="suggestions"><span>查看未完成任务</span><span>创建明日计划</span><span>找出高优先级</span></div>
+      <div class="chat"><div class="bubble user">帮我创建一个高优先级任务：周五前完成原型</div><div class="bubble">好的，我已经整理了任务信息并完成创建。</div><div class="action"><b>✓ 已创建任务</b><span>周五前完成原型 · 高优先级</span></div></div>
+      <div class="composer"><span>输入消息或指令…</span><span class="send">↑</span></div>
+    </aside>
+  </div>
+</div>
+
+<div class="callouts">
+  <div class="callout"><b>1 · 极简导航轨</b><p>MVP 只保留任务入口、近期入口和 Agent 开关，避免过度导航。</p></div>
+  <div class="callout"><b>2 · 任务主画布</b><p>摘要、搜索筛选、分组列表按使用频率自上而下排列。</p></div>
+  <div class="callout"><b>3 · 可折叠 Agent</b><p>展开宽度约 360px；折叠后只保留 48px 智能助手入口。</p></div>
+  <div class="callout"><b>4 · 操作结果回显</b><p>Agent 创建或修改任务后显示结构化卡片，并同步刷新左侧列表。</p></div>
+</div>

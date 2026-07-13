@@ -1,0 +1,53 @@
+# === 依赖目录 ===
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+vendor/
+
+# === 构建产物 ===
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+frontend/dist/
+
+# === 环境变量 & 密钥 ===
+.env
+*.local
+*.pem
+*.key
+
+# === IDE ===
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === Go ===
+*.test
+*.out
+coverage.txt
+
+# === Python ===
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# === 日志 ===
+*.log
+logs/
+
+# === Docker ===
+docker-compose.override.yml
+
+# === uv ===
+uv.lock

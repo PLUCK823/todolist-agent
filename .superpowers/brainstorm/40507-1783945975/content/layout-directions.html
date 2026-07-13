@@ -1,0 +1,67 @@
+<style>
+  .layout-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:24px}
+  .layout-card{border:1px solid #e2e5ea;border-radius:18px;background:#fff;overflow:hidden;cursor:pointer;transition:.2s ease;box-shadow:0 8px 28px rgba(18,24,40,.06)}
+  .layout-card:hover{transform:translateY(-3px);box-shadow:0 14px 34px rgba(18,24,40,.12)}
+  .layout-card.selected{outline:3px solid #675cf5;outline-offset:2px}
+  .screen{height:310px;background:#f5f6f8;padding:10px;display:flex;gap:8px;color:#283044}
+  .rail{width:34px;border-radius:10px;background:#20263a;display:flex;flex-direction:column;align-items:center;padding:8px 0;gap:8px}
+  .rail i{width:15px;height:15px;border-radius:5px;background:#596078}.rail i:first-child{background:#9b91ff;margin-bottom:12px}
+  .workspace{flex:1;min-width:0;display:flex;flex-direction:column;gap:8px}
+  .top{height:31px;border-radius:9px;background:#fff;display:flex;align-items:center;padding:0 10px;justify-content:space-between;font-size:8px;font-weight:700}
+  .top span:last-child{background:#292e42;color:white;padding:5px 8px;border-radius:6px}
+  .body{flex:1;display:flex;gap:8px;min-height:0}
+  .tasks{flex:1;background:#fff;border-radius:11px;padding:11px;display:flex;flex-direction:column;gap:8px}
+  .headline{height:16px;width:48%;background:#292e42;border-radius:5px}.subline{height:7px;width:70%;background:#dfe2e8;border-radius:3px}
+  .chips{display:flex;gap:4px}.chips b{height:16px;width:37px;border-radius:6px;background:#ececf2}.chips b:first-child{background:#292e42}
+  .todo{height:44px;border:1px solid #eceef2;border-radius:9px;display:flex;align-items:center;padding:0 8px;gap:7px}
+  .todo em{width:13px;height:13px;border:2px solid #98a0af;border-radius:50%}.todo div{flex:1}.todo strong,.todo small{display:block;height:6px;border-radius:3px;background:#444b5e}.todo small{width:58%;background:#d9dde4;margin-top:5px}.todo mark{width:8px;height:8px;border-radius:50%;background:#ff7b68}
+  .agent{width:36%;background:#292e42;border-radius:11px;padding:10px;color:#fff;display:flex;flex-direction:column;gap:8px}.agent .agent-title{height:9px;width:70%;background:#fff;border-radius:4px}.bubble{height:35px;background:#3b4258;border-radius:9px}.bubble.user{width:78%;margin-left:auto;background:#766bf2}.composer{height:28px;margin-top:auto;background:#fff;border-radius:8px}
+  .floating .agent{display:none}.float-button{position:absolute;right:17px;bottom:17px;width:39px;height:39px;border-radius:13px;background:#6b61ef;box-shadow:0 7px 15px rgba(70,60,210,.3)}
+  .floating-screen{position:relative}.overlay{position:absolute;right:10px;top:46px;bottom:10px;width:42%;background:#292e42;border-radius:12px;box-shadow:-12px 5px 30px rgba(25,30,48,.22);padding:10px;display:flex;flex-direction:column;gap:8px}.overlay .composer{margin-top:auto}
+  .tabs-screen .body{display:block}.tabs{display:flex;gap:4px;background:#fff;border-radius:9px;padding:5px}.tabs span{font-size:7px;padding:5px 9px;border-radius:5px;background:#292e42;color:#fff}.tabs span:last-child{background:transparent;color:#777}.tabs-screen .tasks{height:219px;margin-top:8px}
+  .card-copy{padding:16px}.card-copy h3{margin:0 0 7px;font-size:17px}.card-copy p{margin:0;color:#697083;font-size:13px;line-height:1.55}.tag{display:inline-flex;margin-top:12px;padding:5px 8px;border-radius:999px;background:#eeecff;color:#564bd2;font-size:11px;font-weight:700}
+  @media(max-width:980px){.layout-grid{grid-template-columns:1fr}.screen{height:270px}}
+</style>
+
+<h2>主工作台采用哪种布局？</h2>
+<p class="subtitle">三种方案都以任务为主，只改变 Agent 的入口与出现方式。点击卡片选择。</p>
+
+<div class="layout-grid cards">
+  <div class="layout-card card" data-choice="a-command-center" onclick="toggleSelect(this)">
+    <div class="screen">
+      <div class="rail"><i></i><i></i><i></i><i></i></div>
+      <div class="workspace">
+        <div class="top"><span>今天，保持专注</span><span>＋ 新建任务</span></div>
+        <div class="body">
+          <div class="tasks"><div class="headline"></div><div class="subline"></div><div class="chips"><b></b><b></b><b></b></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark></mark></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark style="background:#f4bd50"></mark></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark style="background:#70c49b"></mark></div></div>
+          <div class="agent"><div class="agent-title"></div><div class="bubble"></div><div class="bubble user"></div><div class="bubble"></div><div class="composer"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-copy"><h3>A · 可折叠智能侧栏</h3><p>任务列表始终是主画布；Agent 从右侧展开，并能与任务结果并排核对。适合高频、人机协同的工作流。</p><span class="tag">推荐 · 上下文连续</span></div>
+  </div>
+
+  <div class="layout-card card" data-choice="b-floating-agent" onclick="toggleSelect(this)">
+    <div class="screen floating-screen">
+      <div class="rail"><i></i><i></i><i></i><i></i></div>
+      <div class="workspace">
+        <div class="top"><span>今天，保持专注</span><span>＋ 新建任务</span></div>
+        <div class="body"><div class="tasks"><div class="headline"></div><div class="subline"></div><div class="chips"><b></b><b></b><b></b></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark></mark></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark style="background:#f4bd50"></mark></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark style="background:#70c49b"></mark></div></div></div>
+      </div>
+      <div class="overlay"><div class="agent-title" style="height:9px;width:65%;background:#fff;border-radius:4px"></div><div class="bubble"></div><div class="bubble user"></div><div class="composer"></div></div>
+    </div>
+    <div class="card-copy"><h3>B · 浮动助手面板</h3><p>Agent 像快捷工具一样覆盖在任务画布之上，关闭后页面最纯净，但对照任务时会遮挡部分内容。</p><span class="tag">沉浸 · 更轻量</span></div>
+  </div>
+
+  <div class="layout-card card" data-choice="c-mode-tabs" onclick="toggleSelect(this)">
+    <div class="screen tabs-screen">
+      <div class="rail"><i></i><i></i><i></i><i></i></div>
+      <div class="workspace">
+        <div class="top"><span>Agent TodoList</span><span>＋ 新建任务</span></div>
+        <div class="tabs"><span>任务</span><span>智能助手</span></div>
+        <div class="body"><div class="tasks"><div class="headline"></div><div class="subline"></div><div class="chips"><b></b><b></b><b></b></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark></mark></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark style="background:#f4bd50"></mark></div><div class="todo"><em></em><div><strong></strong><small></small></div><mark style="background:#70c49b"></mark></div></div></div>
+      </div>
+    </div>
+    <div class="card-copy"><h3>C · 模式标签切换</h3><p>任务和 Agent 是两个清晰空间，最容易理解和实现；切换时看不到另一侧上下文，协同感较弱。</p><span class="tag">稳妥 · 边界清晰</span></div>
+  </div>
+</div>
