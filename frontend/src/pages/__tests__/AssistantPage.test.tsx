@@ -14,7 +14,7 @@ function makeSession(value?: Partial<AgentSessionValue>): AgentSessionValue {
     sessionId: 'today',
     messages: [{ id: 'welcome', role: 'assistant', content: '今天先做什么？', createdAt: '2026-07-14T00:00:00Z' }],
     steps: [{ id: 'search', label: '查询未完成任务', status: 'completed', durationMs: 520, tool: 'list_todos' }],
-    status: 'done', capabilities: { supportsStepRetry: false }, send: vi.fn(), retry: vi.fn(),
+    status: 'done', canSend: true, isClearing: false, capabilities: { supportsStepRetry: false }, send: vi.fn().mockReturnValue(true), retry: vi.fn(),
     confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(), cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
     ...value,
   }
@@ -38,6 +38,7 @@ describe('AssistantPage', () => {
     expect(screen.getAllByText('今天先做什么？')[0]).toBeVisible()
     expect(screen.getByText('Todo API')).toBeVisible()
     expect(screen.getAllByText('查询未完成任务')[0]).toBeVisible()
+    expect(screen.getAllByText('查询未完成任务')).toHaveLength(1)
   })
 
   it('renders the input field', () => {
@@ -81,5 +82,20 @@ describe('AssistantPage', () => {
     expect(await screen.findByText('侧栏收起')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '离开工作区' }))
     expect(await screen.findByText('侧栏展开')).toBeVisible()
+  })
+
+  it('restores the exact collapsed state even if the standalone page opens Agent state internally', async () => {
+    localStorage.setItem('todolist:shell', JSON.stringify({ navExpanded: false, agentExpanded: false }))
+    const user = userEvent.setup()
+    const value = makeSession()
+    function Harness() {
+      const [show, setShow] = useState(true)
+      const { agentExpanded, openAgent } = useShell()
+      return <><output>{agentExpanded ? '展开' : '收起'}</output><button onClick={openAgent}>内部展开</button><button onClick={() => setShow(false)}>离开</button>{show ? <AssistantPage /> : null}</>
+    }
+    renderWithProviders(<ShellProvider><AgentSessionProvider value={value}><Harness /></AgentSessionProvider></ShellProvider>)
+    await user.click(screen.getByRole('button', { name: '内部展开' }))
+    await user.click(screen.getByRole('button', { name: '离开' }))
+    expect(await screen.findByText('收起')).toBeVisible()
   })
 })

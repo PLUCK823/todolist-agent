@@ -11,6 +11,7 @@ import { useShell } from '../shell-context'
 
 const session: AgentSessionValue = {
   messages: [], steps: [], status: 'idle', capabilities: { supportsStepRetry: false },
+  canSend: true, isClearing: false,
   send: vi.fn(), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(),
   cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
 }
@@ -79,6 +80,7 @@ describe('AppShell', () => {
     renderShell('/assistant')
     expect(screen.queryByTestId('agent-column')).not.toBeInTheDocument()
     expect(screen.getByTestId('app-shell')).toHaveStyle({ '--agent-width': '0px' })
+    expect(document.querySelector('.shell-header-actions-fallback')).not.toBeInTheDocument()
   })
 
   it('marks navigation routes and keeps collapsed controls keyboard reachable', async () => {

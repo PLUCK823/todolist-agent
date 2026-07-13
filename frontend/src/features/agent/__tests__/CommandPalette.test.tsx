@@ -9,7 +9,9 @@ import type { AgentSessionValue } from '../agent.types'
 function renderPalette() {
   const send = vi.fn()
   const openAgent = vi.fn()
-  const session: AgentSessionValue = {
+const session: AgentSessionValue = {
+  canSend: true,
+  isClearing: false,
     messages: [], steps: [], status: 'idle', capabilities: { supportsStepRetry: false },
     send, retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(),
     cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),

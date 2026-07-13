@@ -26,7 +26,7 @@ function AppShellContent() {
     '--agent-width': showPanel ? 'var(--agent-width-expanded)' : '0px',
   }
 
-  const spark = !showPanel ? (
+  const spark = !agentExpanded && location.pathname !== '/assistant' ? (
     <IconButton label="展开智能助手" tone="primary" icon={<span className="agent-spark">✦</span>} onClick={openAgent} />
   ) : null
 
@@ -38,7 +38,7 @@ function AppShellContent() {
       </main>
       {showPanel ? <div className="app-shell__agent" data-testid="agent-column"><AgentPanel onCollapse={closeAgent} draft={agentDraft} onDraftChange={setAgentDraft} /></div> : null}
       {spark && headerActionsElement ? createPortal(spark, headerActionsElement) : spark ? <div className="shell-header-actions-fallback">{spark}</div> : null}
-      <CommandPalette onOpenAgent={openAgent} />
+      <CommandPalette onOpenAgent={location.pathname === '/assistant' ? () => undefined : openAgent} />
     </div>
   )
 }

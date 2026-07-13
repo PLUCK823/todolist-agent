@@ -42,9 +42,13 @@ export function ShellProvider({ children }: { children: ReactNode }) {
     setState((current) => ({ ...current, agentExpanded: false }))
   }, [])
 
+  const setAgentExpanded = useCallback((expanded: boolean) => {
+    setState((current) => ({ ...current, agentExpanded: expanded }))
+  }, [])
+
   const value = useMemo<ShellContextValue>(
-    () => ({ ...state, headerActionsElement, toggleNav, openAgent, closeAgent, setHeaderActionsElement }),
-    [closeAgent, headerActionsElement, openAgent, state, toggleNav],
+    () => ({ ...state, headerActionsElement, toggleNav, openAgent, closeAgent, setAgentExpanded, setHeaderActionsElement }),
+    [closeAgent, headerActionsElement, openAgent, setAgentExpanded, state, toggleNav],
   )
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>

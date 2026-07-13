@@ -124,7 +124,9 @@ export interface AgentSessionValue {
   steps: AgentStep[]
   status: AgentSessionStatus
   capabilities: AgentCapabilities
-  send(message: string): void
+  canSend: boolean
+  isClearing: boolean
+  send(message: string): boolean
   retry(stepId: string): void
   confirm(confirmationId: string): void
   reject(confirmationId: string): void

@@ -46,6 +46,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     [options.now],
   )
   const [state, setState] = useState<AgentSessionState>(initialAgentState)
+  const [isClearing, setIsClearing] = useState(false)
   const stateRef = useRef(state)
   const cancelRef = useRef<(() => void) | undefined>(undefined)
   const controlRef = useRef<AgentControlSender | undefined>(undefined)
@@ -83,9 +84,9 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     })
   }, [dispatch])
 
-  const startRequest = useCallback((message: string) => {
+  const startRequest = useCallback((message: string): boolean => {
     const trimmed = message.trim()
-    if (!trimmed || clearingRef.current || activeStatuses.has(stateRef.current.status)) return
+    if (!trimmed || clearingRef.current || activeStatuses.has(stateRef.current.status)) return false
     let sessionId: string
     let messageId: string
     let createdAt: string
@@ -95,7 +96,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       createdAt = now()
     } catch (error) {
       dispatchSynchronousFailure(error)
-      return
+      return false
     }
 
     const generation = ++generationRef.current
@@ -136,6 +137,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
         invalidateRequest(generation)
       }
     }
+    return true
   }, [client, closeStream, dispatch, dispatchSynchronousFailure, invalidateRequest, messageIdFactory, now, sessionIdFactory])
 
   const send = useCallback((message: string) => startRequest(message), [startRequest])
@@ -185,6 +187,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     }
     const generation = ++generationRef.current
     clearingRef.current = true
+    setIsClearing(true)
     closeStream()
 
     const operation = (async () => {
@@ -207,6 +210,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
         throw error
       } finally {
         clearingRef.current = false
+        if (mountedRef.current) setIsClearing(false)
         clearPromiseRef.current = undefined
       }
     })()
@@ -231,6 +235,8 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     steps: state.steps,
     status: state.status,
     capabilities: agentCapabilities,
+    canSend: !isClearing && !activeStatuses.has(state.status),
+    isClearing,
     send,
     retry,
     confirm,

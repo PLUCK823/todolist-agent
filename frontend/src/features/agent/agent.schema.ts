@@ -8,15 +8,30 @@ export class AgentContractError extends Error {
 }
 
 const dangerousKeys = new Set(['__proto__', 'constructor', 'prototype'])
+const MAX_DEPTH = 32
+const MAX_NODES = 5_000
+const MAX_STRING_LENGTH = 32_768
+const MAX_TOTAL_STRING_LENGTH = 131_072
 
-function sanitizeJson(value: unknown, path: string): unknown {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
+interface SanitizeBudget { nodes: number; stringLength: number }
+
+function sanitizeJson(value: unknown, path: string, budget: SanitizeBudget, depth = 0): unknown {
+  budget.nodes++
+  if (depth > MAX_DEPTH || budget.nodes > MAX_NODES) throw new AgentContractError(`Agent event exceeds limits at ${path}`)
+  if (typeof value === 'string') {
+    budget.stringLength += value.length
+    if (value.length > MAX_STRING_LENGTH || budget.stringLength > MAX_TOTAL_STRING_LENGTH) {
+      throw new AgentContractError(`Agent event string exceeds limits at ${path}`)
+    }
+    return value
+  }
+  if (value === null || typeof value === 'boolean') return value
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new AgentContractError(`Invalid number at ${path}`)
     return value
   }
   if (Array.isArray(value)) {
-    return value.map((item, index) => sanitizeJson(item, `${path}[${index}]`))
+    return value.map((item, index) => sanitizeJson(item, `${path}[${index}]`, budget, depth + 1))
   }
   if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
     throw new AgentContractError(`Expected plain JSON object at ${path}`)
@@ -31,13 +46,13 @@ function sanitizeJson(value: unknown, path: string): unknown {
     if (!descriptor?.enumerable || !('value' in descriptor)) {
       throw new AgentContractError(`Invalid property at ${path}.${key}`)
     }
-    clone[key] = sanitizeJson(descriptor.value, `${path}.${key}`)
+    clone[key] = sanitizeJson(descriptor.value, `${path}.${key}`, budget, depth + 1)
   }
   return clone
 }
 
 function eventRecord(value: unknown): Record<string, unknown> {
-  const sanitized = sanitizeJson(value, 'event')
+  const sanitized = sanitizeJson(value, 'event', { nodes: 0, stringLength: 0 })
   if (!sanitized || typeof sanitized !== 'object' || Array.isArray(sanitized)) {
     throw new AgentContractError('Agent event must be an object')
   }

@@ -103,6 +103,18 @@ describe('agent event contract', () => {
 
     expect(parsed).toMatchObject({ result: { todo: { id: 1 } } })
   })
+
+  it('rejects deeply nested and oversized event payloads with a contract error', () => {
+    let nested: Record<string, unknown> = { value: 'end' }
+    for (let index = 0; index < 80; index++) nested = { nested }
+
+    expect(() => parseAgentEvent({
+      type: 'action_completed', step_id: 's', action: 'x', result: nested, duration_ms: 1,
+    })).toThrow(AgentContractError)
+    expect(() => parseAgentEvent({
+      type: 'reply', content: 'x'.repeat(200_000),
+    })).toThrow(AgentContractError)
+  })
 })
 
 describe('createUuid', () => {
@@ -345,11 +357,16 @@ describe('useAgentSession', () => {
       now: () => '2026-07-14T00:00:00Z',
     }))
 
+    let blankAccepted = true
+    let firstAccepted = false
+    let secondAccepted = true
     act(() => {
-      result.current.send('   ')
-      result.current.send('  创建任务  ')
-      result.current.send('第二条')
+      blankAccepted = result.current.send('   ')
+      firstAccepted = result.current.send('  创建任务  ')
+      secondAccepted = result.current.send('第二条')
     })
+    expect([blankAccepted, firstAccepted, secondAccepted]).toEqual([false, true, false])
+    expect(result.current.canSend).toBe(false)
     expect(client.requests).toEqual([{ message: '创建任务', session_id: 'session-local' }])
     expect(result.current.sessionId).toBe('session-local')
     expect(result.current.status).toBe('connecting')
@@ -504,6 +521,8 @@ describe('useAgentSession', () => {
     const oldHandlers = client.handlers[0]
     let clearPromise!: Promise<void>
     act(() => { clearPromise = result.current.clear() })
+    expect(result.current.isClearing).toBe(true)
+    expect(result.current.canSend).toBe(false)
     act(() => result.current.send('清理期间请求'))
     act(() => {
       oldHandlers.onOpen?.()
@@ -518,6 +537,8 @@ describe('useAgentSession', () => {
 
     resolveHistory()
     await act(() => clearPromise)
+    expect(result.current.isClearing).toBe(false)
+    expect(result.current.canSend).toBe(true)
     expect(result.current.messages).toEqual([])
     expect(result.current.status).toBe('idle')
     act(() => result.current.send('新请求'))

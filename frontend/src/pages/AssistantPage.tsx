@@ -7,25 +7,23 @@ import { Button } from '../shared/ui/Button'
 
 export default function AssistantPage() {
   const session = useAgentSessionContext()
-  const { agentExpanded, closeAgent, openAgent } = useShell()
+  const { agentExpanded, setAgentExpanded } = useShell()
   const restoreExpanded = useRef(agentExpanded)
   const [draft, setDraft] = useState('')
   const [clearError, setClearError] = useState('')
-  const busy = ['connecting', 'running', 'waiting_confirmation'].includes(session.status)
   const agentStatus = getAgentStatusPresentation(session.status, session.steps)
 
   useEffect(() => {
     const shouldRestore = restoreExpanded.current
-    closeAgent()
-    return () => { if (shouldRestore) openAgent() }
-  }, [closeAgent, openAgent])
+    setAgentExpanded(false)
+    return () => setAgentExpanded(shouldRestore)
+  }, [setAgentExpanded])
 
   function submit(event: FormEvent) {
     event.preventDefault()
     const message = draft.trim()
-    if (!message || busy) return
-    session.send(message)
-    setDraft('')
+    if (!message || !session.canSend) return
+    if (session.send(message)) setDraft('')
   }
 
   async function clear() {
@@ -57,11 +55,10 @@ export default function AssistantPage() {
         <div className="assistant-conversation__scroll" role="log" aria-live="polite">
           {!session.messages.length ? <div className="assistant-empty"><span aria-hidden="true">✦</span><h2>从一句话开始</h2><p>创建任务、调整安排，或让我梳理今天的优先级。</p></div> : null}
           {session.messages.map((message) => <article key={message.id} className="assistant-message" data-role={message.role}><span>{message.role === 'assistant' ? '✦' : '你'}</span><div><p>{message.content}</p><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div></article>)}
-          <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
         </div>
         <form className="assistant-composer" onSubmit={submit}>
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={busy} />
-          <footer><span>Agent 会展示调用工具与等待结果的全过程</span><Button type="submit" disabled={!draft.trim() || busy} aria-label="发送消息">发送 <span aria-hidden="true">↗</span></Button></footer>
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={!session.canSend} />
+          <footer><span>Agent 会展示调用工具与等待结果的全过程</span><Button type="submit" disabled={!draft.trim() || !session.canSend} aria-label="发送消息">发送 <span aria-hidden="true">↗</span></Button></footer>
         </form>
       </section>
 

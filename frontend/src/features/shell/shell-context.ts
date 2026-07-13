@@ -10,6 +10,7 @@ export interface ShellContextValue extends ShellState {
   toggleNav(): void
   openAgent(): void
   closeAgent(): void
+  setAgentExpanded(expanded: boolean): void
   setHeaderActionsElement(element: HTMLDivElement | null): void
 }
 

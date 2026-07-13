@@ -7,15 +7,20 @@ import { AgentSessionContext } from './agent-session-context'
 
 function SessionEffects({ value, children }: { value: AgentSessionValue; children: ReactNode }) {
   const queryClient = useQueryClient()
-  const seenActions = useRef(new Set<string>())
+  const latestUserMessage = [...value.messages].reverse().find((message) => message.role === 'user')
+  const turnKey = `${value.sessionId ?? 'local'}:${latestUserMessage?.id ?? 'initial'}`
+  const seenActions = useRef<{ turnKey: string; ids: Set<string> }>({ turnKey, ids: new Set() })
 
   useEffect(() => {
+    if (seenActions.current.turnKey !== turnKey) {
+      seenActions.current = { turnKey, ids: new Set() }
+    }
     for (const step of value.steps) {
-      if (!step.action || step.status !== 'completed' || seenActions.current.has(step.id)) continue
-      seenActions.current.add(step.id)
+      if (!step.action || step.status !== 'completed' || seenActions.current.ids.has(step.id)) continue
+      seenActions.current.ids.add(step.id)
       void queryClient.invalidateQueries({ queryKey: todoKeys.all })
     }
-  }, [queryClient, value.steps])
+  }, [queryClient, turnKey, value.steps])
 
   return <AgentSessionContext.Provider value={value}>{children}</AgentSessionContext.Provider>
 }

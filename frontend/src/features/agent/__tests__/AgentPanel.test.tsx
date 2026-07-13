@@ -16,6 +16,8 @@ function session(overrides: Partial<AgentSessionValue> = {}): AgentSessionValue 
     messages: [],
     steps: [],
     status: 'idle',
+    canSend: true,
+    isClearing: false,
     capabilities: { supportsStepRetry: false },
     send: vi.fn(), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(),
     resolveConfirmation: vi.fn(), cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
@@ -215,6 +217,23 @@ describe('AgentPanel integration', () => {
 
     view.rerender(<QueryClientProvider client={client}><AgentSessionProvider value={{ ...value }}><span>surface</span></AgentSessionProvider></QueryClientProvider>)
     expect(invalidate).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates a reused step id once per user turn, not once per component lifetime', async () => {
+    const client = new QueryClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries').mockResolvedValue(undefined)
+    const first = session({
+      sessionId: 's',
+      messages: [{ id: 'turn-1', role: 'user', content: '第一次', createdAt: '2026-07-14T00:00:00Z' }],
+      steps: [{ id: 'create', label: '创建', status: 'completed', action: 'create_todo' }],
+    })
+    const view = render(<QueryClientProvider client={client}><AgentSessionProvider value={first}><span /></AgentSessionProvider></QueryClientProvider>)
+    view.rerender(<QueryClientProvider client={client}><AgentSessionProvider value={{ ...first }}><span /></AgentSessionProvider></QueryClientProvider>)
+    expect(invalidate).toHaveBeenCalledTimes(1)
+
+    const second = { ...first, messages: [...first.messages, { id: 'turn-2', role: 'user' as const, content: '第二次', createdAt: '2026-07-14T00:01:00Z' }] }
+    view.rerender(<QueryClientProvider client={client}><AgentSessionProvider value={second}><span /></AgentSessionProvider></QueryClientProvider>)
+    expect(invalidate).toHaveBeenCalledTimes(2)
   })
 })
 
