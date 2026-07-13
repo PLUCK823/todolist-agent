@@ -73,16 +73,6 @@ export const FilterPopover: FC<FilterPopoverProps> = ({
 
   const popoverRef = useRef<HTMLDivElement>(null)
 
-  // Sync local state when filters change externally
-  useEffect(() => {
-    setCompletion(filterToCompletion(filters.completed))
-    setPriority(filters.priority || 'all')
-    const idx = SORT_OPTIONS.findIndex(
-      (o) => o.sort_by === (filters.sort_by || 'created_at') && o.order === (filters.order || 'desc'),
-    )
-    setSelectedSortIndex(idx === -1 ? 0 : idx)
-  }, [filters])
-
   // Close on Escape
   useEffect(() => {
     if (!isOpen) return

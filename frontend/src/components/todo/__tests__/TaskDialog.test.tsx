@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { renderWithProviders } from '../../../testUtils'
+import { renderWithProviders } from '../../../test/render'
 import { TaskDialog } from '../TaskDialog'
 import type { Todo, CreateTodoDTO } from '../../../types/todo'
 

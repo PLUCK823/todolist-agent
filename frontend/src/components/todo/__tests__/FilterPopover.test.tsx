@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, fireEvent, waitFor } from '@testing-library/react'
-import { renderWithProviders } from '../../../testUtils'
+import { renderWithProviders } from '../../../test/render'
 import { FilterPopover } from '../FilterPopover'
 import type { TodoFilters } from '../../../types/todo'
 

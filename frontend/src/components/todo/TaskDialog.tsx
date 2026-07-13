@@ -18,10 +18,10 @@ export const TaskDialog: FC<TaskDialogProps> = ({
   initialData,
   isSubmitting,
 }) => {
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [priority, setPriority] = useState<CreateTodoDTO['priority']>('medium')
-  const [dueDate, setDueDate] = useState('')
+  const [title, setTitle] = useState(() => initialData?.title || '')
+  const [description, setDescription] = useState(() => initialData?.description || '')
+  const [priority, setPriority] = useState<CreateTodoDTO['priority']>(() => initialData?.priority || 'medium')
+  const [dueDate, setDueDate] = useState(() => initialData?.due_date ? initialData.due_date.slice(0, 10) : '')
   const [errors, setErrors] = useState<Record<string, string>>({})
 
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -29,21 +29,14 @@ export const TaskDialog: FC<TaskDialogProps> = ({
 
   const isEditMode = !!initialData
 
-  // Reset form when dialog opens or initialData changes
+  // Focus title input when a newly keyed dialog opens.
   useEffect(() => {
     if (isOpen) {
-      setTitle(initialData?.title || '')
-      setDescription(initialData?.description || '')
-      setPriority(initialData?.priority || 'medium')
-      // Only set due_date from existing data, don't prefill for new tasks
-      setDueDate(initialData?.due_date ? initialData.due_date.slice(0, 10) : '')
-      setErrors({})
-      // Focus title input after animation
       requestAnimationFrame(() => {
         titleInputRef.current?.focus()
       })
     }
-  }, [isOpen, initialData])
+  }, [isOpen])
 
   // Close on Escape
   useEffect(() => {

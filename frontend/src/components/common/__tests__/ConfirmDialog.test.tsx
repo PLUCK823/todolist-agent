@@ -155,6 +155,17 @@ describe("ConfirmDialog", () => {
       });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
+
+    it("animates in after a newly keyed dialog mounts", () => {
+      renderDialog();
+
+      expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "0" });
+
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "1" });
+    });
   });
 
   describe("variant styling", () => {

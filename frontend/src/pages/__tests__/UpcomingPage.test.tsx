@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { screen, waitFor } from '@testing-library/react'
-import { renderWithProviders } from '../../testUtils'
+import { renderWithProviders } from '../../test/render'
 import UpcomingPage from '../UpcomingPage'
 
 describe('UpcomingPage', () => {

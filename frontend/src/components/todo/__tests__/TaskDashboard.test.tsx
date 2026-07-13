@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { screen, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { renderWithProviders } from '../../../testUtils'
+import { renderWithProviders } from '../../../test/render'
 import { TaskDashboard } from '../TaskDashboard'
 
 describe('TaskDashboard', () => {

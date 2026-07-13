@@ -22,7 +22,7 @@ if (typeof Element.prototype.scrollIntoView === 'undefined') {
 if (typeof window !== 'undefined' && typeof window.scrollTo !== 'undefined') {
   // already defined
 } else if (typeof window !== 'undefined') {
-  ;(window as any).scrollTo = vi.fn()
+  ;(window as Window & typeof globalThis).scrollTo = vi.fn()
 }
 
 // Polyfill crypto.randomUUID for jsdom

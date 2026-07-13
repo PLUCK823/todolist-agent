@@ -174,7 +174,7 @@ func (h *TodoHandler) DeleteTodo(c *gin.Context) {
 		return
 	}
 
-	success(c, http.StatusOK, nil)
+	c.Status(http.StatusNoContent)
 }
 
 // CompleteTodo handles PATCH /api/todos/:id/complete

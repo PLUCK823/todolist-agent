@@ -381,8 +381,11 @@ func TestHandler_DeleteTodo(t *testing.T) {
 
 	w := makeRequest(router, "DELETE", "/api/todos/1", nil)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected status 204, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("expected empty response body, got %q", w.Body.String())
 	}
 }
 

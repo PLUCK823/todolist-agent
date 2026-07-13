@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { renderHook, waitFor } from '@testing-library/react'
 import { useTodos, useTodo, useCreateTodo, useUpdateTodo, useDeleteTodo, useCompleteTodo, useUncompleteTodo } from '../useTodos'
-import { TestProviders } from '../../testUtils'
+import { TestProviders } from '../../test/render'
 
 describe('useTodos', () => {
   it('fetches todos on mount', async () => {

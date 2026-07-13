@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ToastProvider, useToast } from "../ToastRegion";
+import { ToastProvider } from "../ToastRegion";
+import { useToast } from "../../../shared/ui/toast-context";
 
 // ---------------------------------------------------------------------------
 // Helper component that exposes toast actions for testing

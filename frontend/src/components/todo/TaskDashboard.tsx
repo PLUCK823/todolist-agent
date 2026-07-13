@@ -203,6 +203,7 @@ export const TaskDashboard: FC = () => {
             )}
           </button>
           <FilterPopover
+            key={`${filterOpen ? 'open' : 'closed'}-${JSON.stringify(filters)}`}
             filters={filters}
             onFilterChange={handleFilterChange}
             isOpen={filterOpen}
@@ -369,6 +370,7 @@ export const TaskDashboard: FC = () => {
 
       {/* Dialog */}
       <TaskDialog
+        key={`${dialogOpen ? 'open' : 'closed'}-${editingTodo?.id ?? 'new'}`}
         isOpen={dialogOpen}
         onClose={closeDialog}
         onSubmit={handleSubmitDialog}

@@ -42,9 +42,9 @@ export function renderWithProviders(
   ui: ReactElement,
   options?: Omit<RenderOptions, 'wrapper'> & WrapperOptions,
 ): ReturnType<typeof render> {
-  const { initialEntries, ...renderOpts } = options || {}
+  const { initialEntries, ...renderOptions } = options || {}
   return render(ui, {
     wrapper: createWrapper({ initialEntries }),
-    ...renderOpts,
+    ...renderOptions,
   })
 }

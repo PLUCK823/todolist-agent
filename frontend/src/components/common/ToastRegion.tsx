@@ -1,6 +1,4 @@
 import {
-  createContext,
-  useContext,
   useState,
   useCallback,
   useEffect,
@@ -8,35 +6,12 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-
-// --- Types ---
-
-type ToastType = "success" | "error" | "info" | "warning";
-
-interface Toast {
-  id: string;
-  type: ToastType;
-  message: string;
-  leaving?: boolean;
-}
-
-interface ToastContextValue {
-  addToast: (type: ToastType, message: string) => void;
-  removeToast: (id: string) => void;
-  toasts: readonly Toast[];
-}
-
-// --- Context ---
-
-const ToastContext = createContext<ToastContextValue | null>(null);
-
-export function useToast(): ToastContextValue {
-  const ctx = useContext(ToastContext);
-  if (!ctx) {
-    throw new Error("useToast must be used within a <ToastProvider>");
-  }
-  return ctx;
-}
+import {
+  ToastContext,
+  type Toast,
+  type ToastContextValue,
+  type ToastType,
+} from "../../shared/ui/toast-context";
 
 // --- Provider ---
 

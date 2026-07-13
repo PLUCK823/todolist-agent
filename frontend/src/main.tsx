@@ -4,15 +4,9 @@ import './index.css'
 import App from './App.tsx'
 
 async function initApp() {
-  // MSW integration for development
-  if (import.meta.env.DEV) {
-    try {
-      const { worker } = await import('./mocks/browser')
-      await worker.start({ onUnhandledRequest: 'bypass' })
-      console.log('[MSW] Mock Service Worker started')
-    } catch {
-      // MSW not available - using real backend
-    }
+  if (import.meta.env.VITE_ENABLE_MSW === 'true') {
+    const { worker } = await import('./mocks/browser')
+    await worker.start({ onUnhandledRequest: 'error' })
   }
 
   createRoot(document.getElementById('root')!).render(

@@ -26,8 +26,6 @@ const variantButtonClasses: Record<ConfirmVariant, string> = {
   info: "bg-[#7165ea] hover:bg-[#5f54d9] focus:ring-[#7165ea]",
 };
 
-const ANIMATION_DURATION = 200; // ms, must match CSS transition duration
-
 export default function ConfirmDialog({
   isOpen,
   title,
@@ -38,38 +36,12 @@ export default function ConfirmDialog({
   onCancel,
   variant = "danger",
 }: ConfirmDialogProps) {
-  // managed: whether the portal is in the DOM at all
-  const [mounted, setMounted] = useState(() => isOpen);
-  // animated: controls the inline style values for the CSS transition
-  const [animatedIn, setAnimatedIn] = useState(() => isOpen);
-
-  // Keep a ref of the last seen isOpen so we can detect edge transitions
-  const prevOpen = useRef(isOpen);
+  const [animatedIn, setAnimatedIn] = useState(false);
 
   useEffect(() => {
-    // No change -- nothing to do
-    if (isOpen === prevOpen.current) return;
-    prevOpen.current = isOpen;
-
-    if (isOpen) {
-      // Mount immediately so the element is in the DOM …
-      setMounted(true);
-      // … then flip the animation flag on the next tick so the CSS
-      // transition has an initial value to transition *from*.
-      // setTimeout(10) works reliably in both jsdom and real browsers;
-      // requestAnimationFrame is avoided on purpose for test compat.
-      const enterTimer = setTimeout(() => setAnimatedIn(true), 10);
-      return () => clearTimeout(enterTimer);
-    }
-
-    // Closing: flip animation flag first (triggers exit transition) …
-    setAnimatedIn(false);
-    // … then unmount after the transition completes.
-    const exitTimer = setTimeout(
-      () => setMounted(false),
-      ANIMATION_DURATION,
-    );
-    return () => clearTimeout(exitTimer);
+    if (!isOpen) return;
+    const enterTimer = setTimeout(() => setAnimatedIn(true), 10);
+    return () => clearTimeout(enterTimer);
   }, [isOpen]);
 
   // Focus trap: focus the confirm button when the dialog opens
@@ -109,11 +81,11 @@ export default function ConfirmDialog({
     e.stopPropagation();
   }, []);
 
-  if (!mounted) return null;
+  if (!isOpen) return null;
 
   const overlayStyle: React.CSSProperties = {
     opacity: animatedIn ? 1 : 0,
-    transition: `opacity ${ANIMATION_DURATION}ms ease-out`,
+    transition: "opacity 200ms ease-out",
   };
 
   const dialogStyle: React.CSSProperties = {
@@ -121,7 +93,7 @@ export default function ConfirmDialog({
     transform: animatedIn
       ? "translateY(0) scale(1)"
       : "translateY(8px) scale(0.97)",
-    transition: `opacity ${ANIMATION_DURATION}ms ease-out, transform ${ANIMATION_DURATION}ms ease-out`,
+    transition: "opacity 200ms ease-out, transform 200ms ease-out",
   };
 
   const buttonClass = variantButtonClasses[variant];
