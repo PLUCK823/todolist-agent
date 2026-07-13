@@ -1,5 +1,7 @@
 import type { Todo, CreateTodoDTO, UpdateTodoDTO, ApiResponse, PaginatedData } from '../features/todos/todo.types'
 
+export { agentEventScenarios, agentMockDelays } from './agentFixtures'
+
 // In-memory seed data
 let nextId = 5
 let todos: Todo[] = [
@@ -255,5 +257,17 @@ export const handlers = [
       updated_at: new Date().toISOString(),
     }
     return HttpResponse.json(ok(todos[idx]))
+  }),
+
+  // Agent WebSocket events use agentFixtures.ts; MSW only owns the HTTP history endpoint.
+  http.delete('/api/agent/history', ({ request }) => {
+    const sessionId = new URL(request.url).searchParams.get('session_id')
+    if (!sessionId) {
+      return HttpResponse.json(
+        { code: 40001, message: 'session_id 不能为空', data: null },
+        { status: 400 },
+      )
+    }
+    return HttpResponse.json(ok({ deleted: true, session_id: sessionId }))
   }),
 ]
