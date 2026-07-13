@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import userEvent from '@testing-library/user-event'
@@ -38,6 +38,7 @@ function renderShell(path = '/tasks') {
 
 describe('AppShell', () => {
   beforeEach(() => localStorage.clear())
+  afterEach(() => vi.unstubAllGlobals())
 
   it('renders the V6 three-column shell and nested route', () => {
     renderShell()
@@ -89,5 +90,16 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: '近期安排' })).toHaveAttribute('aria-current', 'page')
     await user.tab()
     expect(screen.getByRole('link', { name: '我的任务' })).toHaveFocus()
+  })
+
+  it('provides a mobile drawer backdrop and closes the drawer by mask or Escape', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+    const user = userEvent.setup()
+    renderShell()
+    await user.click(screen.getByRole('button', { name: '关闭智能助手遮罩' }))
+    expect(screen.queryByTestId('agent-column')).not.toBeInTheDocument()
+    await user.click(screen.getAllByRole('button', { name: '展开智能助手' }).at(-1)!)
+    await user.keyboard('{Escape}')
+    expect(screen.queryByTestId('agent-column')).not.toBeInTheDocument()
   })
 })

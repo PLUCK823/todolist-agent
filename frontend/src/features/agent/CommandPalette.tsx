@@ -15,7 +15,7 @@ export default function CommandPalette({ onOpenAgent }: { onOpenAgent(): void })
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
-      if (event.repeat || event.key.toLowerCase() !== 'k' || event.ctrlKey) return
+      if (event.repeat || event.shiftKey || event.key.toLowerCase() !== 'k' || event.ctrlKey) return
       const metaShortcut = event.metaKey && !event.altKey
       const altShortcut = event.altKey && !event.metaKey
       if (!metaShortcut && !altShortcut) return

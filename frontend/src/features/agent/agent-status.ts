@@ -40,5 +40,8 @@ export function getTodoToolPresentation(steps: AgentStep[]): AgentStatusPresenta
   if (toolSteps.some((step) => step.status === 'completed')) {
     return { label: '最近调用成功', tone: 'complete', isError: false }
   }
+  if (toolSteps.some((step) => step.status === 'running' || step.status === 'waiting')) {
+    return { label: '正在调用', tone: 'busy', isError: false }
+  }
   return { label: '尚未验证 · 随任务验证', tone: 'busy', isError: false }
 }

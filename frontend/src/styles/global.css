@@ -92,6 +92,10 @@ button:not(:disabled),
   height: 100%;
 }
 
+.agent-drawer-backdrop {
+  display: none;
+}
+
 .app-page-loader {
   display: grid;
   min-height: 12rem;
@@ -254,7 +258,7 @@ button:not(:disabled),
 .nav-rail__user small {
   overflow: hidden;
   color: rgb(248 248 251 / 68%);
-  font-size: .69rem;
+  font-size: .75rem;
   text-overflow: ellipsis;
 }
 
@@ -295,7 +299,7 @@ figcaption {
 
 .agent-panel {
   display: flex;
-  width: 340px;
+  width: 100%;
   min-height: 100%;
   flex-direction: column;
   background:
@@ -458,7 +462,7 @@ figcaption {
   display: block;
   margin-top: 5px;
   color: rgb(248 248 251 / 68%);
-  font-size: .69rem;
+  font-size: .75rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -866,6 +870,8 @@ figcaption {
 .assistant-message p { margin: 0; white-space: pre-wrap; font-size: .78rem; line-height: 1.65; }
 .assistant-message time { color: var(--text-muted); }
 .assistant-message[data-role="user"] time { color: rgb(255 255 255 / 55%); }
+.agent-message[data-role="user"] time,
+.assistant-message[data-role="user"] time { color: #f3f1ff; font-size: .75rem; }
 
 .assistant-conversation .agent-timeline { max-width: 680px; margin: 14px auto; }
 .assistant-conversation .agent-step,
@@ -880,6 +886,18 @@ figcaption {
 .assistant-inspector .agent-step__result > span { color: var(--success-action); }
 .assistant-conversation .agent-step__result pre,
 .assistant-inspector .agent-step__result pre { color: var(--text); }
+
+.assistant-timeline {
+  width: min(720px, 100%);
+  margin: 8px auto 0;
+}
+
+.assistant-timeline > p {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: .75rem;
+  font-weight: 700;
+}
 
 .assistant-composer {
   width: min(720px, 100%);
@@ -941,15 +959,32 @@ figcaption {
     position: absolute;
     z-index: 30;
     inset: 0 0 0 auto;
-    width: min(var(--agent-width-expanded), calc(100vw - 28px));
+    width: min(var(--agent-width-expanded), 100%);
     box-shadow: -20px 0 56px rgb(20 23 35 / 22%);
+  }
+
+  .agent-drawer-backdrop {
+    position: absolute;
+    z-index: 29;
+    inset: 0;
+    display: block;
+    border: 0;
+    padding: 0;
+    background: rgb(20 23 35 / 42%);
+    backdrop-filter: blur(2px);
   }
 }
 
 @media (max-width: 760px) {
   .app-shell { height: 100dvh; margin: 0; border-radius: 0; }
+  .app-shell__agent { width: 100%; }
   .assistant-workspace { grid-template-columns: 1fr; }
   .assistant-sessions { display: none; }
   .assistant-conversation { padding: 20px 16px 16px; }
   .command-palette footer > span { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-drawer-backdrop,
+  .app-shell__agent { transition: none; animation: none; }
 }

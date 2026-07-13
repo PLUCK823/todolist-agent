@@ -3,7 +3,7 @@ import AgentStepTimeline from '../features/agent/AgentStepTimeline'
 import { useAgentSessionContext } from '../features/agent/agent-session-context'
 import { getAgentStatusPresentation, getTodoToolPresentation } from '../features/agent/agent-status'
 import { formatAgentMessageTime } from '../features/agent/agent-display'
-import { useAgentAutoScroll } from '../features/agent/useAgentAutoScroll'
+import { getAgentScrollRevision, useAgentAutoScroll } from '../features/agent/useAgentAutoScroll'
 import { useShell } from '../features/shell/shell-context'
 import { Button } from '../shared/ui/Button'
 
@@ -17,7 +17,7 @@ export default function AssistantPage() {
   const todoStatus = getTodoToolPresentation(session.steps)
   const scrollRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLDivElement>(null)
-  const revision = `${session.status}:${session.messages.at(-1)?.id ?? ''}:${session.steps.at(-1)?.id ?? ''}:${session.steps.at(-1)?.status ?? ''}`
+  const revision = getAgentScrollRevision(session)
   const onScroll = useAgentAutoScroll(scrollRef, endRef, revision)
 
   useEffect(() => {
@@ -65,10 +65,14 @@ export default function AssistantPage() {
             const time = formatAgentMessageTime(message.createdAt)
             return <article key={message.id} className="assistant-message" data-role={message.role}><span>{message.role === 'assistant' ? '✦' : '你'}</span><div><p>{message.content}</p>{time ? <time dateTime={message.createdAt}>{time}</time> : null}</div></article>
           })}
+          <section className="assistant-timeline" aria-label="执行详情">
+            <p>执行详情</p>
+            <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+          </section>
           <div ref={endRef} />
         </div>
         <form className="assistant-composer" onSubmit={submit}>
-          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={!session.canSend} />
+          <textarea aria-label="智能助手消息" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={!session.canSend} />
           <footer><span>Agent 会展示调用工具与等待结果的全过程</span><Button type="submit" disabled={!draft.trim() || !session.canSend} aria-label="发送消息">发送 <span aria-hidden="true">↗</span></Button></footer>
         </form>
       </section>
@@ -76,7 +80,7 @@ export default function AssistantPage() {
       <aside className="assistant-inspector" aria-label="执行详情">
         <p>执行详情</p>
         <h2>{session.steps.length ? '当前任务轨迹' : '等待新指令'}</h2>
-        <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+        <p>{session.steps.length ? `${session.steps.length} 个步骤 · 交互控件位于对话时间线` : '发送指令后将在对话区显示执行过程'}</p>
       </aside>
     </main>
   )

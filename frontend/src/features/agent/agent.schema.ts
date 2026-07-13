@@ -12,39 +12,44 @@ const MAX_DEPTH = 32
 const MAX_NODES = 5_000
 const MAX_STRING_LENGTH = 32_768
 const MAX_TOTAL_STRING_LENGTH = 131_072
+const MAX_KEY_LENGTH = 256
 
 interface SanitizeBudget { nodes: number; stringLength: number }
 
 function sanitizeJson(value: unknown, path: string, budget: SanitizeBudget, depth = 0): unknown {
   budget.nodes++
-  if (depth > MAX_DEPTH || budget.nodes > MAX_NODES) throw new AgentContractError(`Agent event exceeds limits at ${path}`)
+  if (depth > MAX_DEPTH || budget.nodes > MAX_NODES) throw new AgentContractError('Agent event exceeds structural limits')
   if (typeof value === 'string') {
     budget.stringLength += value.length
     if (value.length > MAX_STRING_LENGTH || budget.stringLength > MAX_TOTAL_STRING_LENGTH) {
-      throw new AgentContractError(`Agent event string exceeds limits at ${path}`)
+      throw new AgentContractError('Agent event string exceeds limits')
     }
     return value
   }
   if (value === null || typeof value === 'boolean') return value
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new AgentContractError(`Invalid number at ${path}`)
+    if (!Number.isFinite(value)) throw new AgentContractError('Agent event contains an invalid number')
     return value
   }
   if (Array.isArray(value)) {
     return value.map((item, index) => sanitizeJson(item, `${path}[${index}]`, budget, depth + 1))
   }
   if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) {
-    throw new AgentContractError(`Expected plain JSON object at ${path}`)
+    throw new AgentContractError('Agent event must contain plain JSON objects')
   }
 
   const clone: Record<string, unknown> = {}
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string' || dangerousKeys.has(key)) {
-      throw new AgentContractError(`Unsafe key at ${path}`)
+      throw new AgentContractError('Agent event contains an unsafe object key')
+    }
+    budget.stringLength += key.length
+    if (key.length > MAX_KEY_LENGTH || budget.stringLength > MAX_TOTAL_STRING_LENGTH) {
+      throw new AgentContractError('Agent event object key exceeds limits')
     }
     const descriptor = Object.getOwnPropertyDescriptor(value, key)
     if (!descriptor?.enumerable || !('value' in descriptor)) {
-      throw new AgentContractError(`Invalid property at ${path}.${key}`)
+      throw new AgentContractError('Agent event contains an invalid property')
     }
     clone[key] = sanitizeJson(descriptor.value, `${path}.${key}`, budget, depth + 1)
   }

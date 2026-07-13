@@ -7,11 +7,34 @@ interface OverlayEntry {
 
 const overlays: OverlayEntry[] = []
 let previousBodyOverflow: string | null = null
+let backgroundInertState: Map<HTMLElement, boolean> | null = null
+
+function shouldKeepInteractive(element: HTMLElement) {
+  return element.hasAttribute('aria-live') || element.hasAttribute('data-overlay-allow-interaction')
+}
+
+function inertBackground(root: HTMLElement) {
+  backgroundInertState = new Map()
+  for (const child of Array.from(document.body.children)) {
+    if (!(child instanceof HTMLElement) || child === root || shouldKeepInteractive(child)) continue
+    backgroundInertState.set(child, child.hasAttribute('inert'))
+    child.setAttribute('inert', '')
+  }
+}
+
+function restoreBackground() {
+  for (const [element, wasInert] of backgroundInertState ?? []) {
+    if (!element.isConnected || wasInert) continue
+    element.removeAttribute('inert')
+  }
+  backgroundInertState = null
+}
 
 export function registerOverlay(entry: OverlayEntry) {
   if (overlays.length === 0 && typeof document !== 'undefined') {
     previousBodyOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
+    inertBackground(entry.root)
   }
   overlays.push(entry)
   syncOverlayInteractivity()
@@ -48,6 +71,7 @@ function unregisterOverlay(id: symbol) {
       document.body.style.overflow = previousBodyOverflow ?? ''
     }
     previousBodyOverflow = null
+    restoreBackground()
     if (wasTop && removed.restoreFocusTo?.isConnected) {
       removed.restoreFocusTo.focus()
     }

@@ -78,6 +78,19 @@ describe('AssistantPage', () => {
     expect(screen.queryByText(/Invalid Date|NaN/)).not.toBeInTheDocument()
   })
 
+  it('keeps the single interactive timeline inside the conversation at every viewport', () => {
+    renderPage({ steps: [{ id: 'confirm', label: '删除任务', status: 'waiting_confirmation', confirmationId: 'c', confirmationMessage: '确认删除？' }] })
+    const conversation = screen.getByRole('log')
+    expect(within(conversation).getByRole('button', { name: '确认删除任务' })).toBeVisible()
+    expect(screen.getAllByRole('button', { name: '确认删除任务' })).toHaveLength(1)
+    expect(screen.getAllByLabelText('Agent 执行步骤')).toHaveLength(1)
+  })
+
+  it('reports an in-flight Todo tool call instead of an unverified connection', () => {
+    renderPage({ status: 'running', steps: [{ id: 'tool', label: '查询', status: 'running', tool: 'list_todos' }] })
+    expect(within(screen.getByLabelText('工具连接状态')).getByText('正在调用')).toBeVisible()
+  })
+
   it('collapses the side Agent on entry and restores the previous state on leave', async () => {
     const user = userEvent.setup()
     const value = makeSession()

@@ -32,13 +32,13 @@ function AgentStepItem({ step, capabilities, onRetry, onConfirm, onReject }: {
   onReject(confirmationId: string): void
 }) {
   const [now, setNow] = useState(() => Date.now())
+  const startedAt = step.startedAt ? Date.parse(step.startedAt) : Number.NaN
   useEffect(() => {
-    if (step.status !== 'running' || !step.startedAt) return
+    if (step.status !== 'running' || !Number.isFinite(startedAt)) return
     const timer = window.setInterval(() => setNow(Date.now()), 100)
     return () => window.clearInterval(timer)
-  }, [step.startedAt, step.status])
+  }, [startedAt, step.status])
 
-  const startedAt = step.startedAt ? Date.parse(step.startedAt) : Number.NaN
   const elapsed = step.durationMs ?? (Number.isFinite(startedAt) ? Math.max(0, now - startedAt) : undefined)
   return (
     <li className="agent-step" data-status={step.status}>

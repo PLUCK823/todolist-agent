@@ -46,6 +46,12 @@ describe('CommandPalette', () => {
     editable.remove()
   })
 
+  it('ignores shifted shortcut variants', () => {
+    renderPalette()
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, shiftKey: true, bubbles: true })))
+    expect(screen.queryByRole('dialog', { name: '快速询问' })).not.toBeInTheDocument()
+  })
+
   it('closes with Escape and restores focus', async () => {
     const user = userEvent.setup()
     renderPalette()

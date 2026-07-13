@@ -115,6 +115,23 @@ describe('agent event contract', () => {
       type: 'reply', content: 'x'.repeat(200_000),
     })).toThrow(AgentContractError)
   })
+
+  it('counts keys toward the string budget and never echoes an oversized key', () => {
+    const key = `secret-${'x'.repeat(500)}`
+    let thrown: unknown
+    try {
+      parseAgentEvent({ type: 'action_completed', step_id: 's', action: 'x', result: { [key]: true }, duration_ms: 1 })
+    } catch (error) { thrown = error }
+    expect(thrown).toBeInstanceOf(AgentContractError)
+    expect(String(thrown)).not.toContain(key)
+    expect(String(thrown)).not.toContain('secret-')
+  })
+
+  it('rejects payloads that exceed the total JSON node budget', () => {
+    expect(() => parseAgentEvent({
+      type: 'action_completed', step_id: 's', action: 'x', result: { items: Array.from({ length: 5_100 }, (_, id) => id) }, duration_ms: 1,
+    })).toThrow(AgentContractError)
+  })
 })
 
 describe('createUuid', () => {

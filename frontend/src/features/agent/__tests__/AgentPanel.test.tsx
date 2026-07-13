@@ -105,6 +105,7 @@ describe('AgentStepTimeline', () => {
   })
 
   it('safely renders cyclic results and hides invalid elapsed timers', () => {
+    const interval = vi.spyOn(window, 'setInterval')
     const cyclic: Record<string, unknown> = { title: '结果' }
     cyclic.self = cyclic
     render(<AgentStepTimeline
@@ -116,6 +117,7 @@ describe('AgentStepTimeline', () => {
     />)
     expect(screen.getByLabelText('inspect 执行结果')).toHaveTextContent('循环引用')
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument()
+    expect(interval).not.toHaveBeenCalled()
   })
 })
 

@@ -4,7 +4,7 @@ import AgentStepTimeline from './AgentStepTimeline'
 import { useAgentSessionContext } from './agent-session-context'
 import { getAgentStatusPresentation } from './agent-status'
 import { formatAgentMessageTime } from './agent-display'
-import { useAgentAutoScroll } from './useAgentAutoScroll'
+import { getAgentScrollRevision, useAgentAutoScroll } from './useAgentAutoScroll'
 
 const suggestions = ['查看未完成任务', '创建明日计划']
 
@@ -21,7 +21,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
   const bodyRef = useRef<HTMLDivElement>(null)
   const status = getAgentStatusPresentation(session.status, session.steps)
 
-  const revision = `${session.status}:${session.messages.at(-1)?.id ?? ''}:${session.steps.at(-1)?.id ?? ''}:${session.steps.at(-1)?.status ?? ''}`
+  const revision = getAgentScrollRevision(session)
   const onScroll = useAgentAutoScroll(bodyRef, endRef, revision)
 
   function send() {
