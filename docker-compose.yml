@@ -50,11 +50,7 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-todolist}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: ${POSTGRES_DB:-todolist}
+      DB_DSN: "host=postgres port=5432 user=${POSTGRES_USER:-todolist} password=${POSTGRES_PASSWORD:-changeme} dbname=${POSTGRES_DB:-todolist} sslmode=disable TimeZone=Asia/Shanghai"
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -84,7 +80,7 @@ services:
     container_name: todolist-frontend
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       - backend
       - agent
