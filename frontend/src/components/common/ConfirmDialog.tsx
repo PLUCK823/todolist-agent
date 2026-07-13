@@ -26,8 +26,12 @@ const variantButtonClasses: Record<ConfirmVariant, string> = {
   info: "bg-[#7165ea] hover:bg-[#5f54d9] focus:ring-[#7165ea]",
 };
 
-export default function ConfirmDialog({
-  isOpen,
+export default function ConfirmDialog(props: ConfirmDialogProps) {
+  if (!props.isOpen) return null;
+  return <ConfirmDialogContent {...props} />;
+}
+
+function ConfirmDialogContent({
   title,
   message,
   confirmLabel = "确认",
@@ -39,18 +43,17 @@ export default function ConfirmDialog({
   const [animatedIn, setAnimatedIn] = useState(false);
 
   useEffect(() => {
-    if (!isOpen) return;
     const enterTimer = setTimeout(() => setAnimatedIn(true), 10);
     return () => clearTimeout(enterTimer);
-  }, [isOpen]);
+  }, []);
 
   // Focus trap: focus the confirm button when the dialog opens
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (isOpen && confirmRef.current) {
+    if (confirmRef.current) {
       confirmRef.current.focus();
     }
-  }, [isOpen]);
+  }, []);
 
   // Close on Escape
   const handleKeyDown = useCallback(
@@ -63,15 +66,13 @@ export default function ConfirmDialog({
   );
 
   useEffect(() => {
-    if (isOpen) {
-      document.addEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = "hidden";
-    }
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = "";
     };
-  }, [isOpen, handleKeyDown]);
+  }, [handleKeyDown]);
 
   const handleBackdropClick = useCallback(() => {
     onCancel();
@@ -80,8 +81,6 @@ export default function ConfirmDialog({
   const handleDialogClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
   }, []);
-
-  if (!isOpen) return null;
 
   const overlayStyle: React.CSSProperties = {
     opacity: animatedIn ? 1 : 0,

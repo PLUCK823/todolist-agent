@@ -166,6 +166,30 @@ describe("ConfirmDialog", () => {
       });
       expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "1" });
     });
+
+    it("restarts the enter animation when reopened", () => {
+      const props = {
+        title: "测试",
+        message: "...",
+        onConfirm: vi.fn(),
+        onCancel: vi.fn(),
+      };
+      const { rerender } = render(<ConfirmDialog isOpen {...props} />);
+
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "1" });
+
+      rerender(<ConfirmDialog isOpen={false} {...props} />);
+      rerender(<ConfirmDialog isOpen {...props} />);
+
+      expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "0" });
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "1" });
+    });
   });
 
   describe("variant styling", () => {
