@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"strings"
 
 	"backend/internal/model"
 
@@ -57,7 +58,11 @@ func (r *TodoRepository) List(filter TodoFilter) ([]model.Todo, int64, error) {
 		query = query.Where("priority = ?", *filter.Priority)
 	}
 	if filter.Keyword != nil && *filter.Keyword != "" {
-		query = query.Where("title LIKE ?", "%"+*filter.Keyword+"%")
+		keyword := strings.ToLower(strings.TrimSpace(*filter.Keyword))
+		if keyword != "" {
+			escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+			query = query.Where(`LOWER(title) LIKE ? ESCAPE '\'`, "%"+escaped+"%")
+		}
 	}
 
 	// Count total

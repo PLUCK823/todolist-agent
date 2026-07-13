@@ -94,14 +94,15 @@ function filtersFromKey(key: readonly unknown[]): TodoFilters | null {
 }
 
 function hasNonCompletionFilters(filters: TodoFilters) {
-  return filters.priority !== undefined || (filters.keyword !== undefined && filters.keyword !== '')
+  return filters.priority !== undefined || Boolean(filters.keyword?.trim())
 }
 
 export function matchesNonCompletionFilters(todo: Todo, filters: TodoFilters) {
   if (filters.priority !== undefined && todo.priority !== filters.priority) return false
-  if (filters.keyword !== undefined && filters.keyword !== '') {
-    // Mirrors the repository's SQLite `title LIKE %keyword%` contract.
-    return todo.title.toLowerCase().includes(filters.keyword.toLowerCase())
+  const keyword = filters.keyword?.trim().toLowerCase()
+  if (keyword) {
+    // Mirrors the repository's normalized `LOWER(title) LIKE %keyword%` contract.
+    return todo.title.toLowerCase().includes(keyword)
   }
   return true
 }

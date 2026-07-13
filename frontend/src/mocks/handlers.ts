@@ -113,7 +113,7 @@ export const handlers = [
     const page_size = parseInt(url.searchParams.get('page_size') || '20')
     const completedParam = url.searchParams.get('completed')
     const priority = url.searchParams.get('priority') as Todo['priority'] | null
-    const keyword = url.searchParams.get('keyword') || ''
+    const keyword = (url.searchParams.get('keyword') || '').trim().toLowerCase()
     const sort_by = url.searchParams.get('sort_by') || 'created_at'
     const order = url.searchParams.get('order') || 'desc'
 
@@ -129,7 +129,7 @@ export const handlers = [
     }
 
     if (keyword) {
-      filtered = filtered.filter((t) => t.title.includes(keyword))
+      filtered = filtered.filter((t) => t.title.toLowerCase().includes(keyword))
     }
 
     filtered.sort((a, b) => {

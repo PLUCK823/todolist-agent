@@ -69,7 +69,8 @@ function toParams(filters: TodoFilters): Record<string, string> {
   if (filters.page_size) params.page_size = String(filters.page_size)
   if (filters.completed !== undefined) params.completed = String(filters.completed)
   if (filters.priority) params.priority = filters.priority
-  if (filters.keyword) params.keyword = filters.keyword
+  const keyword = filters.keyword?.trim()
+  if (keyword) params.keyword = keyword
   if (filters.sort_by) params.sort_by = filters.sort_by
   if (filters.order) params.order = filters.order
   return params

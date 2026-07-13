@@ -147,6 +147,14 @@ describe('todo API contract', () => {
     expect(result.items).toHaveLength(4)
   })
 
+  it('searches titles case-insensitively after trimming and ignores descriptions', async () => {
+    await createTodo({ title: 'Plan Launch', description: 'secret phrase' })
+    const matched = await fetchTodos({ keyword: '  LAUNCH  ' })
+    expect(matched.items).toHaveLength(1)
+    expect(matched.items[0].title).toBe('Plan Launch')
+    await expect(fetchTodos({ keyword: 'secret' })).resolves.toMatchObject({ total: 0, items: [] })
+  })
+
   it.each([
     [{ completed: true }, (items: Awaited<ReturnType<typeof fetchTodos>>['items']) => items.every((item) => item.completed)],
     [{ priority: 'high' as const }, (items: Awaited<ReturnType<typeof fetchTodos>>['items']) => items.every((item) => item.priority === 'high')],

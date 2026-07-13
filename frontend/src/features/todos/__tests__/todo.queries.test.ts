@@ -21,11 +21,12 @@ function seededClient() {
 }
 
 describe('optimistic todo completion cache', () => {
-  it('mirrors repository keyword matching for title, case, and untrimmed input', () => {
+  it('mirrors repository keyword matching for title, case, and trimmed input', () => {
     const described = { ...active, title: 'Plan Launch', description: 'secret phrase' }
     expect(matchesNonCompletionFilters(described, { keyword: 'LAUNCH' })).toBe(true)
     expect(matchesNonCompletionFilters(described, { keyword: 'secret' })).toBe(false)
-    expect(matchesNonCompletionFilters(described, { keyword: ' Launch ' })).toBe(false)
+    expect(matchesNonCompletionFilters(described, { keyword: ' Launch ' })).toBe(true)
+    expect(matchesNonCompletionFilters(described, { keyword: '   ' })).toBe(true)
   })
 
   it('removes a completed task from active filters and updates matching caches', () => {

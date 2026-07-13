@@ -268,20 +268,54 @@ func TestList_KeywordSearch(t *testing.T) {
 	db := setupTestDB(t)
 	repo := NewTodoRepository(db)
 
-	createTestTodo(t, repo, "Buy milk", "medium")
-	createTestTodo(t, repo, "Buy bread", "medium")
+	createTestTodo(t, repo, "Plan Launch", "medium")
 	createTestTodo(t, repo, "Read book", "low")
 
-	keyword := "Buy"
+	keyword := "  LAUNCH  "
 	todos, total, err := repo.List(TodoFilter{Keyword: &keyword})
 	if err != nil {
 		t.Fatalf("List() keyword search failed: %v", err)
 	}
-	if total != 2 {
-		t.Errorf("expected 2 matches for 'Buy', got %d", total)
+	if total != 1 || len(todos) != 1 || todos[0].Title != "Plan Launch" {
+		t.Fatalf("expected case-insensitive trimmed title match, got total=%d todos=%#v", total, todos)
 	}
-	if len(todos) != 2 {
-		t.Errorf("expected 2 matches, got %d", len(todos))
+
+	nonMatching := "missing"
+	todos, total, err = repo.List(TodoFilter{Keyword: &nonMatching})
+	if err != nil {
+		t.Fatalf("List() non-matching keyword failed: %v", err)
+	}
+	if total != 0 || len(todos) != 0 {
+		t.Fatalf("expected no keyword matches, got total=%d todos=%#v", total, todos)
+	}
+
+	blank := "   "
+	_, total, err = repo.List(TodoFilter{Keyword: &blank})
+	if err != nil {
+		t.Fatalf("List() blank keyword failed: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected blank keyword to disable filtering, got total=%d", total)
+	}
+
+	createTestTodo(t, repo, "100% Ready", "medium")
+	createTestTodo(t, repo, "100X Ready", "medium")
+	literalPercent := "%"
+	todos, total, err = repo.List(TodoFilter{Keyword: &literalPercent})
+	if err != nil {
+		t.Fatalf("List() literal wildcard keyword failed: %v", err)
+	}
+	if total != 1 || len(todos) != 1 || todos[0].Title != "100% Ready" {
+		t.Fatalf("expected LIKE metacharacters to be literal, got total=%d todos=%#v", total, todos)
+	}
+
+	injection := "' OR 1=1 --"
+	_, total, err = repo.List(TodoFilter{Keyword: &injection})
+	if err != nil {
+		t.Fatalf("List() parameterized keyword failed: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("expected parameterized keyword not to alter SQL, got total=%d", total)
 	}
 }
 

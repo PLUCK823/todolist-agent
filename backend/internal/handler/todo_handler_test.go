@@ -17,8 +17,9 @@ import (
 
 // mockService implements TodoServiceInterface for testing
 type mockService struct {
-	todos  map[uint]*model.Todo
-	nextID uint
+	todos       map[uint]*model.Todo
+	nextID      uint
+	lastListReq service.ListTodosRequest
 }
 
 func newMockService() *mockService {
@@ -64,6 +65,7 @@ func (m *mockService) GetByID(id uint) (*model.Todo, error) {
 }
 
 func (m *mockService) List(req service.ListTodosRequest) (*service.ListTodosResponse, error) {
+	m.lastListReq = req
 	var items []model.Todo
 	for _, t := range m.todos {
 		items = append(items, *t)
@@ -621,6 +623,27 @@ func TestHandler_ListTodos_WithQueryParams(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d", w.Code)
+	}
+}
+
+func TestHandler_ListTodos_NormalizesKeyword(t *testing.T) {
+	svc := newMockService()
+	router := setupTestRouter(svc)
+
+	w := makeRequest(router, "GET", "/api/todos?keyword=%20%20LAUNCH%20%20", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if svc.lastListReq.Keyword == nil || *svc.lastListReq.Keyword != "LAUNCH" {
+		t.Fatalf("expected trimmed keyword LAUNCH, got %#v", svc.lastListReq.Keyword)
+	}
+
+	w = makeRequest(router, "GET", "/api/todos?keyword=%20%20%20", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	if svc.lastListReq.Keyword != nil {
+		t.Fatalf("expected blank keyword to be omitted, got %q", *svc.lastListReq.Keyword)
 	}
 }
 

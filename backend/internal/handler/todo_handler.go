@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"backend/internal/model"
 	"backend/internal/service"
@@ -110,6 +111,14 @@ func (h *TodoHandler) ListTodos(c *gin.Context) {
 	if err := c.ShouldBindQuery(&req); err != nil {
 		errorResponse(c, http.StatusBadRequest, 40001, "查询参数格式错误")
 		return
+	}
+	if req.Keyword != nil {
+		keyword := strings.TrimSpace(*req.Keyword)
+		if keyword == "" {
+			req.Keyword = nil
+		} else {
+			req.Keyword = &keyword
+		}
 	}
 
 	result, err := h.svc.List(req)
