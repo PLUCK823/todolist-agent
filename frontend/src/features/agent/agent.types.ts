@@ -22,6 +22,8 @@ export type AgentClientControl = {
 
 export type AgentClientMessage = AgentMessageRequest | AgentClientControl
 
+export type AgentControlSender = (control: AgentClientControl) => boolean
+
 export interface AgentFailure {
   code: 'CONNECTION_TIMEOUT' | 'CONNECTION_CLOSED' | 'SOCKET_ERROR' | 'INVALID_EVENT'
   message: string
@@ -34,7 +36,7 @@ export interface AgentHandlers {
   onOpen?: () => void
   onEvent: (event: AgentEvent) => void
   onFailure?: (failure: AgentFailure) => void
-  onControlReady?: (send: (control: AgentClientControl) => void) => void
+  onControlReady?: (send: AgentControlSender) => void
 }
 
 export interface AgentStreamClient {
@@ -96,10 +98,6 @@ export type AgentReducerAction = AgentEvent | {
   messageId: string
   createdAt: string
 } | {
-  type: 'retry_started'
-  message: string
-  sessionId: string
-} | {
   type: 'connected'
 } | {
   type: 'confirmation_submitted'
@@ -116,14 +114,21 @@ export interface AgentHistoryApi {
   clear(sessionId: string): Promise<void>
 }
 
+export interface AgentCapabilities {
+  supportsStepRetry: boolean
+}
+
 export interface AgentSessionValue {
   sessionId?: string
   messages: AgentMessage[]
   steps: AgentStep[]
   status: AgentSessionStatus
+  capabilities: AgentCapabilities
   send(message: string): void
   retry(stepId: string): void
   confirm(confirmationId: string): void
+  reject(confirmationId: string): void
+  resolveConfirmation(confirmationId: string, approved: boolean): void
   cancel(): void
   clear(): Promise<void>
 }

@@ -1,89 +1,14 @@
 import type {
   AgentClientControl,
-  AgentEvent,
   AgentFailure,
   AgentHandlers,
   AgentHistoryApi,
   AgentMessageRequest,
   AgentStreamClient,
 } from './agent.types'
+import { parseAgentEvent } from './agent.schema'
 
-export class AgentContractError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'AgentContractError'
-  }
-}
-
-function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new AgentContractError('Agent event must be an object')
-  }
-  return value as Record<string, unknown>
-}
-
-function stringField(value: Record<string, unknown>, field: string): string {
-  if (typeof value[field] !== 'string') throw new AgentContractError(`Invalid ${field}`)
-  return value[field]
-}
-
-function durationField(value: Record<string, unknown>): number {
-  const duration = value.duration_ms
-  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) {
-    throw new AgentContractError('Invalid duration_ms')
-  }
-  return duration
-}
-
-export function parseAgentEvent(value: unknown): AgentEvent {
-  const event = record(value)
-  switch (event.type) {
-    case 'step_started': {
-      const parsed: Extract<AgentEvent, { type: 'step_started' }> = {
-        type: 'step_started',
-        step_id: stringField(event, 'step_id'),
-        label: stringField(event, 'label'),
-      }
-      if (event.tool !== undefined) parsed.tool = stringField(event, 'tool')
-      if (event.started_at !== undefined) parsed.started_at = stringField(event, 'started_at')
-      if (event.args !== undefined) parsed.args = record(event.args)
-      return parsed
-    }
-    case 'step_completed':
-      return { type: 'step_completed', step_id: stringField(event, 'step_id'), duration_ms: durationField(event) }
-    case 'step_failed':
-      if (typeof event.retryable !== 'boolean') throw new AgentContractError('Invalid retryable')
-      return {
-        type: 'step_failed',
-        step_id: stringField(event, 'step_id'),
-        error_code: stringField(event, 'error_code'),
-        message: stringField(event, 'message'),
-        retryable: event.retryable,
-        duration_ms: durationField(event),
-      }
-    case 'confirmation_required':
-      return {
-        type: 'confirmation_required',
-        step_id: stringField(event, 'step_id'),
-        message: stringField(event, 'message'),
-        confirmation_id: stringField(event, 'confirmation_id'),
-      }
-    case 'action_completed':
-      return {
-        type: 'action_completed',
-        step_id: stringField(event, 'step_id'),
-        action: stringField(event, 'action'),
-        result: record(event.result),
-        duration_ms: durationField(event),
-      }
-    case 'reply':
-      return { type: 'reply', content: stringField(event, 'content') }
-    case 'done':
-      return { type: 'done' }
-    default:
-      throw new AgentContractError('Unknown Agent event type')
-  }
-}
+export { AgentContractError, parseAgentEvent } from './agent.schema'
 
 export type WebSocketFactory = (url: string) => WebSocket
 
@@ -135,6 +60,7 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
       let retries = 0
       let cancelled = false
       let finished = false
+      let requestSent = false
 
       const clearTimers = () => {
         if (connectionTimer) clearTimeout(connectionTimer)
@@ -153,7 +79,7 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
       const retryOrReport = (failure: AgentFailure) => {
         if (cancelled || finished) return
         generation++
-        if (failure.retryable && retries < maxRetries) {
+        if (!requestSent && failure.retryable && retries < maxRetries) {
           const delay = retryBaseDelayMs * 2 ** retries
           retries++
           retryTimer = setTimeout(connect, delay)
@@ -162,10 +88,16 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
         report(failure)
       }
 
-      const sendControl = (control: AgentClientControl) => {
+      const sendControl = (control: AgentClientControl): boolean => {
         if (!cancelled && !finished && socket?.readyState === SOCKET_OPEN) {
-          socket.send(JSON.stringify(control))
+          try {
+            socket.send(JSON.stringify(control))
+            return true
+          } catch {
+            report({ code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: false })
+          }
         }
+        return false
       }
 
       function connect() {
@@ -189,6 +121,7 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
           if (connectionTimer) clearTimeout(connectionTimer)
           connectionTimer = undefined
           current.send(JSON.stringify(input))
+          requestSent = true
           handlers.onControlReady?.(sendControl)
           handlers.onOpen?.()
         }

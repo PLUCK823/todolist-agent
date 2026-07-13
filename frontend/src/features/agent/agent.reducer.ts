@@ -66,16 +66,6 @@ export function reduceAgent(
         activeAssistantMessageId: undefined,
         lastRequest: action.message,
       }
-    case 'retry_started':
-      return {
-        ...state,
-        sessionId: action.sessionId,
-        steps: [],
-        status: 'connecting',
-        pendingConfirmation: undefined,
-        activeAssistantMessageId: undefined,
-        lastRequest: action.message,
-      }
     case 'connected':
       return { ...state, status: 'running' }
     case 'step_started': {
@@ -165,7 +155,13 @@ export function reduceAgent(
         retryable: action.failure.retryable,
       }
       const withoutOldConnection = state.steps.filter((step) => step.id !== connectionStep.id)
-      return { ...state, status: 'failed', steps: [...withoutOldConnection, connectionStep] }
+      return {
+        ...state,
+        status: 'failed',
+        steps: [...withoutOldConnection, connectionStep],
+        pendingConfirmation: undefined,
+        activeAssistantMessageId: undefined,
+      }
     }
     case 'cancelled':
       return {
