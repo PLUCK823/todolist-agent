@@ -22,6 +22,34 @@ export function useTodos(filters: TodoFilters = {}) {
   return useQuery({ queryKey: todoKeys.list(filters), queryFn: () => fetchTodos(filters) })
 }
 
+export function useUpcomingTodos(dueFrom: string, dueTo: string) {
+  const filters: TodoFilters = {
+    page_size: 100,
+    sort_by: 'due_date',
+    order: 'asc',
+    due_from: dueFrom,
+    due_to: dueTo,
+  }
+  return useQuery({
+    queryKey: todoKeys.list(filters),
+    queryFn: async () => {
+      const first = await fetchTodos({ ...filters, page: 1 })
+      const pageCount = Math.ceil(first.total / first.page_size)
+      const pages = [first]
+      for (let page = 2; page <= pageCount; page += 1) {
+        pages.push(await fetchTodos({ ...filters, page }))
+      }
+      const unique = new Map<number, Todo>()
+      pages.forEach((result) => result.items.forEach((todo) => unique.set(todo.id, todo)))
+      const items = [...unique.values()].sort((left, right) => {
+        const dueDifference = Date.parse(left.due_date!) - Date.parse(right.due_date!)
+        return dueDifference || left.id - right.id
+      })
+      return { items, total: items.length, page: 1, page_size: first.page_size }
+    },
+  })
+}
+
 export function useTodo(id: number | null) {
   return useQuery({
     queryKey: todoKeys.detail(id ?? -1),

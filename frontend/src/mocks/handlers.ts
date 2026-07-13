@@ -116,6 +116,8 @@ export const handlers = [
     const keyword = (url.searchParams.get('keyword') || '').trim().toLowerCase()
     const sort_by = url.searchParams.get('sort_by') || 'created_at'
     const order = url.searchParams.get('order') || 'desc'
+    const dueFrom = url.searchParams.get('due_from')
+    const dueTo = url.searchParams.get('due_to')
 
     let filtered = [...todos]
 
@@ -132,6 +134,13 @@ export const handlers = [
       filtered = filtered.filter((t) => t.title.toLowerCase().includes(keyword))
     }
 
+    if (dueFrom) {
+      filtered = filtered.filter((todo) => todo.due_date && Date.parse(todo.due_date) >= Date.parse(dueFrom))
+    }
+    if (dueTo) {
+      filtered = filtered.filter((todo) => todo.due_date && Date.parse(todo.due_date) < Date.parse(dueTo))
+    }
+
     filtered.sort((a, b) => {
       let cmp = 0
       if (sort_by === 'created_at') {
@@ -141,6 +150,7 @@ export const handlers = [
         cmp = (priOrder[a.priority] || 2) - (priOrder[b.priority] || 2)
       } else if (sort_by === 'due_date') {
         cmp = (a.due_date || '').localeCompare(b.due_date || '')
+        if (cmp === 0) cmp = a.id - b.id
       }
       return order === 'asc' ? cmp : -cmp
     })

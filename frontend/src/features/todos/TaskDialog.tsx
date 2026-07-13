@@ -4,22 +4,25 @@ import { Dialog } from '../../shared/ui/Dialog'
 import { TextField } from '../../shared/ui/TextField'
 import { getApiErrorMessage } from './todo.api'
 import type { Todo, TodoFormDTO, TodoPriority } from './todo.types'
+import {
+  APP_TIME_ZONE,
+  dateTimeLocalToUtcRfc3339,
+  utcRfc3339ToDateTimeLocal,
+} from './upcoming-calendar'
 
 interface TaskDialogProps {
   open: boolean
   mode: 'create' | 'edit'
   todo?: Todo | null
   initialDueDate?: string
-  dueDateUtcOffset?: string
+  timeZone?: string
   onOpenChange(open: boolean): void
   onSubmit(data: TodoFormDTO): Promise<void>
 }
 
-function toLocalInput(date: string | null | undefined) {
+function toLocalInput(date: string | null | undefined, timeZone: string) {
   if (!date) return ''
-  const parsed = new Date(date)
-  const offset = parsed.getTimezoneOffset() * 60_000
-  return new Date(parsed.getTime() - offset).toISOString().slice(0, 16)
+  return utcRfc3339ToDateTimeLocal(date, timeZone)
 }
 
 export function TaskDialog({
@@ -27,14 +30,14 @@ export function TaskDialog({
   mode,
   todo,
   initialDueDate,
-  dueDateUtcOffset,
+  timeZone = APP_TIME_ZONE,
   onOpenChange,
   onSubmit,
 }: TaskDialogProps) {
   const [title, setTitle] = useState(todo?.title ?? '')
   const [description, setDescription] = useState(todo?.description ?? '')
   const [priority, setPriority] = useState<TodoPriority>(todo?.priority ?? 'medium')
-  const [dueDate, setDueDate] = useState(initialDueDate ?? toLocalInput(todo?.due_date))
+  const [dueDate, setDueDate] = useState(initialDueDate ?? toLocalInput(todo?.due_date, timeZone))
   const [validationError, setValidationError] = useState('')
   const [requestError, setRequestError] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -54,7 +57,7 @@ export function TaskDialog({
         description: description.trim(),
         priority,
         ...(dueDate
-          ? { due_date: new Date(`${dueDate}${dueDateUtcOffset ? `:00${dueDateUtcOffset}` : ''}`).toISOString() }
+          ? { due_date: dateTimeLocalToUtcRfc3339(dueDate, timeZone) }
           : mode === 'edit' ? { due_date: null } : {}),
       })
     } catch (error) {

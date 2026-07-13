@@ -31,13 +31,15 @@ type UpdateTodoRequest struct {
 
 // ListTodosRequest represents the input for listing todos
 type ListTodosRequest struct {
-	Page      int     `form:"page"`
-	PageSize  int     `form:"page_size"`
-	Completed *bool   `form:"completed"`
-	Priority  *string `form:"priority"`
-	Keyword   *string `form:"keyword"`
-	SortBy    *string `form:"sort_by"`
-	Order     *string `form:"order"`
+	Page      int        `form:"page"`
+	PageSize  int        `form:"page_size"`
+	Completed *bool      `form:"completed"`
+	Priority  *string    `form:"priority"`
+	Keyword   *string    `form:"keyword"`
+	SortBy    *string    `form:"sort_by"`
+	Order     *string    `form:"order"`
+	DueFrom   *time.Time `form:"-"`
+	DueTo     *time.Time `form:"-"`
 }
 
 // ListTodosResponse represents the list result
@@ -127,6 +129,8 @@ func (s *TodoService) List(req ListTodosRequest) (*ListTodosResponse, error) {
 		Keyword:   req.Keyword,
 		SortBy:    req.SortBy,
 		Order:     req.Order,
+		DueFrom:   req.DueFrom,
+		DueTo:     req.DueTo,
 	}
 
 	todos, total, err := s.repo.List(filter)

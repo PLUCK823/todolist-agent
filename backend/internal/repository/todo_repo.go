@@ -3,6 +3,7 @@ package repository
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"backend/internal/model"
 
@@ -17,6 +18,8 @@ type TodoFilter struct {
 	Keyword   *string `form:"keyword"`
 	SortBy    *string `form:"sort_by"`
 	Order     *string `form:"order"`
+	DueFrom   *time.Time
+	DueTo     *time.Time
 }
 
 type TodoRepository struct {
@@ -64,6 +67,12 @@ func (r *TodoRepository) List(filter TodoFilter) ([]model.Todo, int64, error) {
 			query = query.Where(`LOWER(title) LIKE ? ESCAPE '\'`, "%"+escaped+"%")
 		}
 	}
+	if filter.DueFrom != nil {
+		query = query.Where("due_date IS NOT NULL AND due_date >= ?", *filter.DueFrom)
+	}
+	if filter.DueTo != nil {
+		query = query.Where("due_date IS NOT NULL AND due_date < ?", *filter.DueTo)
+	}
 
 	// Count total
 	if err := query.Count(&total).Error; err != nil {
@@ -92,7 +101,11 @@ func (r *TodoRepository) List(filter TodoFilter) ([]model.Todo, int64, error) {
 		order = "asc"
 	}
 
-	query = query.Order(fmt.Sprintf("%s %s", sortBy, order))
+	if sortBy == "due_date" {
+		query = query.Order(fmt.Sprintf("due_date %s, id %s", order, order))
+	} else {
+		query = query.Order(fmt.Sprintf("%s %s", sortBy, order))
+	}
 
 	// Apply pagination
 	page := filter.Page

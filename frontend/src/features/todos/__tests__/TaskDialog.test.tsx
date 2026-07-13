@@ -109,12 +109,18 @@ describe('TaskDialog', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ due_date: expect.stringMatching(/^2026-07-18T/) }))
   })
 
-  it('loads every editable value from the selected task', () => {
-    render(<TaskDialog open mode="edit" todo={{ id: 7, title: '完整任务', description: '完整描述', priority: 'high', completed: false, due_date: '2026-07-18T09:30:00Z', created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' }} onOpenChange={vi.fn()} onSubmit={vi.fn()} />)
+  it('loads and saves an editable deadline in the app IANA timezone', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn().mockResolvedValue(undefined)
+    render(<TaskDialog open mode="edit" todo={{ id: 7, title: '完整任务', description: '完整描述', priority: 'high', completed: false, due_date: '2026-07-18T09:30:00Z', created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' }} onOpenChange={vi.fn()} onSubmit={onSubmit} />)
     expect(screen.getByLabelText('任务标题')).toHaveValue('完整任务')
     expect(screen.getByLabelText('任务描述')).toHaveValue('完整描述')
     expect(screen.getByLabelText('优先级')).toHaveValue('high')
-    expect(screen.getByLabelText('截止时间')).not.toHaveValue('')
+    expect(screen.getByLabelText('截止时间')).toHaveValue('2026-07-18T17:30')
+    await user.clear(screen.getByLabelText('截止时间'))
+    await user.type(screen.getByLabelText('截止时间'), '2026-07-18T10:00')
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ due_date: '2026-07-18T02:00:00.000Z' }))
   })
 
   it('closes from cancel without submitting', async () => {
@@ -229,6 +235,20 @@ describe('todo API contract', () => {
   it('uses a stable response fallback for non-standard backend errors', async () => {
     server.use(http.get('/api/todos/:id', () => HttpResponse.json({ detail: 'broken' }, { status: 502 })))
     await expect(fetchTodo(1)).rejects.toMatchObject({ message: '服务响应异常，请稍后重试', status: 502 })
+  })
+
+  it('rejects todo timestamps that omit an RFC3339 offset', async () => {
+    server.use(http.get('/api/todos', () => HttpResponse.json({
+      code: 0,
+      message: 'ok',
+      data: {
+        items: [{ id: 1, title: '坏时间', description: '', priority: 'medium', completed: false, due_date: '2026-07-14T09:00:00', created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' }],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
+    })))
+    await expect(fetchTodos()).rejects.toMatchObject({ name: 'ApiError', message: '服务响应异常，请稍后重试' })
   })
 
   it('uses a stable network fallback when no response exists', async () => {

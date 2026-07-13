@@ -86,6 +86,10 @@ GET /api/todos
 | keyword | string | 否 | 标题关键词模糊搜索 |
 | sort_by | string | 否 | 排序字段：created_at / priority / due_date |
 | order | string | 否 | 排序方向：asc / desc，默认 desc |
+| due_from | RFC3339 | 否 | 截止时间下界（含）；必须携带 `Z` 或 UTC 偏移，设置后排除 `due_date=null` |
+| due_to | RFC3339 | 否 | 截止时间上界（不含）；必须携带 `Z` 或 UTC 偏移，设置后排除 `due_date=null` |
+
+`due_from` 与 `due_to` 同时存在时必须满足 `due_from < due_to`，否则返回统一的 `40001` 查询参数错误。按 `due_date` 排序时使用任务 ID 作为次级排序键，以保证跨页顺序稳定。
 
 **响应示例：**
 

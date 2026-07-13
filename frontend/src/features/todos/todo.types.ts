@@ -59,4 +59,6 @@ export interface TodoFilters {
   keyword?: string
   sort_by?: 'created_at' | 'priority' | 'due_date'
   order?: 'asc' | 'desc'
+  due_from?: string
+  due_to?: string
 }

@@ -5,14 +5,14 @@ import { getApiErrorMessage } from '../features/todos/todo.api'
 import {
   useCompleteTodo,
   useCreateTodo,
-  useTodos,
+  useUpcomingTodos,
   useUncompleteTodo,
   useUpdateTodo,
 } from '../features/todos/todo.queries'
 import { TaskDetailDialog } from '../features/todos/TaskDetailDialog'
 import { TaskDialog } from '../features/todos/TaskDialog'
 import { UpcomingTimeline } from '../features/todos/UpcomingTimeline'
-import { localDateKey } from '../features/todos/upcoming-calendar'
+import { localDateKey, upcomingUtcRange } from '../features/todos/upcoming-calendar'
 import type { CreateTodoDTO, Todo, TodoFormDTO } from '../features/todos/todo.types'
 
 interface UpcomingPageProps {
@@ -28,9 +28,8 @@ export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
   const [pendingToggleIds, setPendingToggleIds] = useState<ReadonlySet<number>>(new Set())
   const toggleGuardsRef = useRef(new Set<number>())
   const toast = useToast()
-  // The backend has no due-date range filter. Fetch its documented maximum page size so
-  // the seven-day view is stable instead of accidentally depending on the first default page.
-  const query = useTodos({ page: 1, page_size: 100, sort_by: 'due_date', order: 'asc' })
+  const range = upcomingUtcRange(now)
+  const query = useUpcomingTodos(range.dueFrom, range.dueTo)
   const createMutation = useCreateTodo()
   const updateMutation = useUpdateTodo()
   const completeMutation = useCompleteTodo()
@@ -131,7 +130,6 @@ export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
           open
           mode="create"
           initialDueDate={`${selectedDateKey}T09:00`}
-          dueDateUtcOffset="+08:00"
           onOpenChange={setCreateOpen}
           onSubmit={create}
         />

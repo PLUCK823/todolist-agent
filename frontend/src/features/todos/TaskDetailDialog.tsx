@@ -1,6 +1,7 @@
 import { Button } from '../../shared/ui/Button'
 import { Dialog } from '../../shared/ui/Dialog'
 import type { Todo } from './todo.types'
+import { formatAppDateTime } from './upcoming-calendar'
 
 interface TaskDetailDialogProps {
   open: boolean
@@ -13,9 +14,7 @@ const priorityLabels = { high: '高优先级', medium: '中优先级', low: '低
 
 function formatDate(value: string | null) {
   if (!value) return '未设置'
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit',
-  }).format(new Date(value))
+  return formatAppDateTime(value)
 }
 
 export function TaskDetailDialog({ open, todo, onOpenChange, onEdit }: TaskDetailDialogProps) {

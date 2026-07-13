@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react'
 import type { Todo } from './todo.types'
 import { APP_TIME_ZONE, buildSevenDayWindow, localDateKey } from './upcoming-calendar'
 
-function formatHeading(key: string, todayKey: string) {
-  const [, month, day] = key.split('-').map(Number)
-  return `${month} 月 ${day} 日${key === todayKey ? ' · 今天' : ''}`
+function formatHeading(key: string, todayKey: string, showYear: boolean) {
+  const [year, month, day] = key.split('-').map(Number)
+  return `${showYear ? `${year} 年 ` : ''}${month} 月 ${day} 日${key === todayKey ? ' · 今天' : ''}`
 }
 
 function formatTime(value: string) {
@@ -44,12 +44,16 @@ export function UpcomingTimeline({
 }: UpcomingTimelineProps) {
   const days = useMemo(() => buildSevenDayWindow(now), [now])
   const todayKey = localDateKey(now)
+  const crossesYear = days.some((day) => day.year !== days[0]?.year)
   const [internalSelectedKey, setInternalSelectedKey] = useState(todayKey)
   const selectedKey = selectedDateKey ?? internalSelectedKey
   const selectedTodos = useMemo(
     () => todos
       .filter((todo) => todo.due_date && localDateKey(new Date(todo.due_date)) === selectedKey)
-      .sort((left, right) => new Date(left.due_date!).getTime() - new Date(right.due_date!).getTime()),
+      .sort((left, right) => {
+        const dueDifference = new Date(left.due_date!).getTime() - new Date(right.due_date!).getTime()
+        return dueDifference || left.id - right.id
+      }),
     [selectedKey, todos],
   )
 
@@ -73,6 +77,7 @@ export function UpcomingTimeline({
             >
               <span className={`block text-xs font-semibold ${selected ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>{day.weekday}</span>
               <strong className="mt-1 block text-xl tracking-[-.03em]">{day.day}</strong>
+              {crossesYear ? <span className={`mt-0.5 block text-[10px] ${selected ? 'text-white/70' : 'text-[var(--text-secondary)]'}`}>{day.year}</span> : null}
             </button>
           )
         })}
@@ -80,7 +85,7 @@ export function UpcomingTimeline({
 
       <header className="mt-6 flex items-center justify-between border-b border-[var(--border)] pb-3">
         <h2 className="m-0 text-sm font-bold tracking-[-.01em] text-[var(--text)]">
-          {formatHeading(selectedKey, todayKey)}
+          {formatHeading(selectedKey, todayKey, crossesYear)}
         </h2>
         <span className="text-xs text-[var(--text-secondary)]">{selectedTodos.length} 项安排</span>
       </header>
@@ -99,7 +104,7 @@ export function UpcomingTimeline({
                 <time dateTime={todo.due_date!} className="pt-4 text-xs font-semibold tabular-nums text-[var(--text-secondary)]">
                   {formatTime(todo.due_date!)}
                 </time>
-                <article className={`group flex min-w-0 items-center gap-3 rounded-[var(--radius-control)] border border-l-[3px] border-[var(--border)] bg-white px-3.5 py-3 shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--border-strong)] hover:shadow-[0_10px_26px_rgb(32_37_56_/_8%)] ${priorityBorder[todo.priority]} ${todo.completed ? 'opacity-65' : ''}`}>
+                <article className={`group flex min-w-0 items-center gap-3 rounded-[var(--radius-control)] border border-l-[3px] px-3.5 py-3 shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--border-strong)] hover:shadow-[0_10px_26px_rgb(32_37_56_/_8%)] ${priorityBorder[todo.priority]} ${todo.completed ? 'border-[var(--border)] bg-[var(--surface-subtle)]' : 'border-[var(--border)] bg-white'}`}>
                   <button
                     type="button"
                     aria-label={`${todo.completed ? '取消完成' : '完成安排'}：${todo.title}`}

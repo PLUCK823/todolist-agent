@@ -8,6 +8,7 @@ import type {
   TodoFilters,
   UpdateTodoDTO,
 } from './todo.types'
+import { isRfc3339WithOffset } from './upcoming-calendar'
 
 export class ApiError extends Error {
   readonly code: number
@@ -73,29 +74,60 @@ function toParams(filters: TodoFilters): Record<string, string> {
   if (keyword) params.keyword = keyword
   if (filters.sort_by) params.sort_by = filters.sort_by
   if (filters.order) params.order = filters.order
+  if (filters.due_from) params.due_from = filters.due_from
+  if (filters.due_to) params.due_to = filters.due_to
   return params
+}
+
+function contractError(status: number) {
+  return new ApiError(-2, '服务响应异常，请稍后重试', status)
+}
+
+function validateTodo(value: unknown, status: number): Todo {
+  if (!value || typeof value !== 'object') throw contractError(status)
+  const todo = value as Partial<Todo>
+  if (
+    typeof todo.id !== 'number' || typeof todo.title !== 'string' ||
+    typeof todo.description !== 'string' || typeof todo.completed !== 'boolean' ||
+    !['high', 'medium', 'low'].includes(todo.priority ?? '') ||
+    (todo.due_date !== null && (typeof todo.due_date !== 'string' || !isRfc3339WithOffset(todo.due_date))) ||
+    typeof todo.created_at !== 'string' || !isRfc3339WithOffset(todo.created_at) ||
+    typeof todo.updated_at !== 'string' || !isRfc3339WithOffset(todo.updated_at)
+  ) throw contractError(status)
+  return todo as Todo
+}
+
+function validatePage(value: unknown, status: number): PaginatedData<Todo> {
+  if (!value || typeof value !== 'object') throw contractError(status)
+  const page = value as Partial<PaginatedData<unknown>>
+  if (
+    !Array.isArray(page.items) || !Number.isInteger(page.total) || page.total! < 0 ||
+    !Number.isInteger(page.page) || page.page! < 1 ||
+    !Number.isInteger(page.page_size) || page.page_size! < 1
+  ) throw contractError(status)
+  return { ...page, items: page.items.map((todo) => validateTodo(todo, status)) } as PaginatedData<Todo>
 }
 
 export async function fetchTodos(filters: TodoFilters = {}): Promise<PaginatedData<Todo>> {
   const response = await client.get<ApiResponse<PaginatedData<Todo>>>('/todos', {
     params: toParams(filters),
   })
-  return response.data.data
+  return validatePage(response.data.data, response.status)
 }
 
 export async function fetchTodo(id: number): Promise<Todo> {
   const response = await client.get<ApiResponse<Todo>>(`/todos/${id}`)
-  return response.data.data
+  return validateTodo(response.data.data, response.status)
 }
 
 export async function createTodo(dto: CreateTodoDTO): Promise<Todo> {
   const response = await client.post<ApiResponse<Todo>>('/todos', dto)
-  return response.data.data
+  return validateTodo(response.data.data, response.status)
 }
 
 export async function updateTodo(id: number, dto: UpdateTodoDTO): Promise<Todo> {
   const response = await client.put<ApiResponse<Todo>>(`/todos/${id}`, dto)
-  return response.data.data
+  return validateTodo(response.data.data, response.status)
 }
 
 export async function deleteTodo(id: number): Promise<void> {
@@ -104,10 +136,10 @@ export async function deleteTodo(id: number): Promise<void> {
 
 export async function completeTodo(id: number): Promise<Todo> {
   const response = await client.patch<ApiResponse<Todo>>(`/todos/${id}/complete`)
-  return response.data.data
+  return validateTodo(response.data.data, response.status)
 }
 
 export async function uncompleteTodo(id: number): Promise<Todo> {
   const response = await client.patch<ApiResponse<Todo>>(`/todos/${id}/uncomplete`)
-  return response.data.data
+  return validateTodo(response.data.data, response.status)
 }

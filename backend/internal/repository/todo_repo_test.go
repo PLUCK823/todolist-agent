@@ -319,6 +319,60 @@ func TestList_KeywordSearch(t *testing.T) {
 	}
 }
 
+func TestList_FiltersExclusiveDueRangeAndExcludesNull(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewTodoRepository(db)
+	from := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	to := from.Add(7 * 24 * time.Hour)
+	dates := []*time.Time{
+		ptrTime(from.Add(-time.Second)),
+		ptrTime(from),
+		ptrTime(from.Add(2 * time.Hour)),
+		ptrTime(to),
+		nil,
+	}
+	for _, due := range dates {
+		todo := &model.Todo{Title: "Range", Priority: "medium", DueDate: due}
+		if err := repo.Create(todo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sortBy, order := "due_date", "asc"
+	todos, total, err := repo.List(TodoFilter{
+		Page: 1, PageSize: 100, DueFrom: &from, DueTo: &to, SortBy: &sortBy, Order: &order,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(todos) != 2 {
+		t.Fatalf("expected [from,to) to return 2 rows, got total=%d items=%d", total, len(todos))
+	}
+	if !todos[0].DueDate.Equal(from) || !todos[1].DueDate.Equal(from.Add(2*time.Hour)) {
+		t.Fatalf("unexpected due range order: %#v", todos)
+	}
+}
+
+func TestList_DueDateSortUsesIDAsStableTieBreaker(t *testing.T) {
+	db := setupTestDB(t)
+	repo := NewTodoRepository(db)
+	due := time.Date(2026, 7, 14, 2, 0, 0, 0, time.UTC)
+	for _, title := range []string{"first", "second", "third"} {
+		if err := repo.Create(&model.Todo{Title: title, Priority: "medium", DueDate: &due}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sortBy, order := "due_date", "asc"
+	todos, _, err := repo.List(TodoFilter{Page: 1, PageSize: 2, SortBy: &sortBy, Order: &order})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(todos) != 2 || todos[0].Title != "first" || todos[1].Title != "second" {
+		t.Fatalf("expected stable ID ordering, got %#v", todos)
+	}
+}
+
+func ptrTime(value time.Time) *time.Time { return &value }
+
 func TestUpdate(t *testing.T) {
 	db := setupTestDB(t)
 	repo := NewTodoRepository(db)

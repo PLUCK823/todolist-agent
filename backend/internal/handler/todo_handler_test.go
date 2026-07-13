@@ -626,6 +626,46 @@ func TestHandler_ListTodos_WithQueryParams(t *testing.T) {
 	}
 }
 
+func TestHandler_ListTodos_ParsesExclusiveDueRange(t *testing.T) {
+	svc := newMockService()
+	router := setupTestRouter(svc)
+
+	w := makeRequest(router, "GET", "/api/todos?due_from=2026-07-13T16%3A00%3A00Z&due_to=2026-07-20T16%3A00%3A00Z", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if svc.lastListReq.DueFrom == nil || svc.lastListReq.DueTo == nil {
+		t.Fatal("expected parsed due range")
+	}
+	if got := svc.lastListReq.DueFrom.Format(time.RFC3339); got != "2026-07-13T16:00:00Z" {
+		t.Fatalf("unexpected due_from %s", got)
+	}
+	if got := svc.lastListReq.DueTo.Format(time.RFC3339); got != "2026-07-20T16:00:00Z" {
+		t.Fatalf("unexpected due_to %s", got)
+	}
+}
+
+func TestHandler_ListTodos_RejectsInvalidDueRange(t *testing.T) {
+	tests := []string{
+		"?due_from=not-a-date",
+		"?due_from=2026-07-14T00%3A00%3A00&due_to=2026-07-15T00%3A00%3A00Z",
+		"?due_from=2026-07-20T00%3A00%3A00Z&due_to=2026-07-14T00%3A00%3A00Z",
+	}
+	for _, query := range tests {
+		t.Run(query, func(t *testing.T) {
+			router := setupTestRouter(newMockService())
+			w := makeRequest(router, "GET", "/api/todos"+query, nil)
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+			}
+			resp := parseResponse(t, w)
+			if resp["code"] != float64(40001) || resp["data"] != nil {
+				t.Fatalf("unexpected error envelope %#v", resp)
+			}
+		})
+	}
+}
+
 func TestHandler_ListTodos_NormalizesKeyword(t *testing.T) {
 	svc := newMockService()
 	router := setupTestRouter(svc)

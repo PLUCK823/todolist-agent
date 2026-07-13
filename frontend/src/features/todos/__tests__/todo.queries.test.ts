@@ -7,7 +7,7 @@ import { server } from '../../../mocks/server'
 import { applyTodoCompletion, matchesNonCompletionFilters, restoreTodoCompletion, todoKeys, useCompleteTodo } from '../todo.queries'
 import type { PaginatedData, Todo } from '../todo.types'
 
-const active: Todo = { id: 1, title: 'active', description: '', priority: 'medium', completed: false, due_date: null, created_at: '', updated_at: '' }
+const active: Todo = { id: 1, title: 'active', description: '', priority: 'medium', completed: false, due_date: null, created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' }
 const done: Todo = { ...active, id: 2, title: 'done', completed: true }
 const page = (items: Todo[], total = items.length): PaginatedData<Todo> => ({ items, total, page: 1, page_size: 10 })
 

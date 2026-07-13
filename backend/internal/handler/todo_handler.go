@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"backend/internal/model"
 	"backend/internal/service"
@@ -119,6 +120,28 @@ func (h *TodoHandler) ListTodos(c *gin.Context) {
 		} else {
 			req.Keyword = &keyword
 		}
+	}
+	dueFrom, fromOK := c.GetQuery("due_from")
+	dueTo, toOK := c.GetQuery("due_to")
+	if fromOK {
+		parsed, parseErr := time.Parse(time.RFC3339, dueFrom)
+		if parseErr != nil {
+			errorResponse(c, http.StatusBadRequest, 40001, "查询参数格式错误")
+			return
+		}
+		req.DueFrom = &parsed
+	}
+	if toOK {
+		parsed, parseErr := time.Parse(time.RFC3339, dueTo)
+		if parseErr != nil {
+			errorResponse(c, http.StatusBadRequest, 40001, "查询参数格式错误")
+			return
+		}
+		req.DueTo = &parsed
+	}
+	if req.DueFrom != nil && req.DueTo != nil && !req.DueFrom.Before(*req.DueTo) {
+		errorResponse(c, http.StatusBadRequest, 40001, "查询参数格式错误")
+		return
 	}
 
 	result, err := h.svc.List(req)

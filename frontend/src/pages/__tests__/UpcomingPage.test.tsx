@@ -38,6 +38,39 @@ describe('UpcomingPage', () => {
     await waitFor(() => expect(requestUrl).toContain('page_size=100'))
     expect(requestUrl).toContain('sort_by=due_date')
     expect(requestUrl).toContain('order=asc')
+    expect(requestUrl).toContain('due_from=2026-07-13T16:00:00.000Z')
+    expect(requestUrl).toContain('due_to=2026-07-20T16:00:00.000Z')
+  })
+
+  it('loads every page in the seven-day range without admitting old or undated rows', async () => {
+    const inWindow = Array.from({ length: 101 }, (_, index) => fixture({
+      id: index + 1,
+      title: `窗口任务 ${index + 1}`,
+      due_date: `2026-07-14T${String(index % 10).padStart(2, '0')}:00:00Z`,
+    }))
+    const source = [
+      ...inWindow,
+      fixture({ id: 1001, title: '旧任务', due_date: '2026-07-01T00:00:00Z' }),
+      fixture({ id: 1002, title: '无日期任务', due_date: null }),
+    ]
+    const requestedPages: number[] = []
+    server.use(http.get('/api/todos', ({ request }) => {
+      const url = new URL(request.url)
+      const page = Number(url.searchParams.get('page') ?? 1)
+      const size = Number(url.searchParams.get('page_size') ?? 20)
+      requestedPages.push(page)
+      const from = Date.parse(url.searchParams.get('due_from') ?? '')
+      const to = Date.parse(url.searchParams.get('due_to') ?? '')
+      const filtered = source.filter((todo) => todo.due_date && Date.parse(todo.due_date) >= from && Date.parse(todo.due_date) < to)
+      return HttpResponse.json({ code: 0, message: 'ok', data: { items: filtered.slice((page - 1) * size, page * size), total: filtered.length, page, page_size: size } })
+    }))
+
+    renderWithProviders(<UpcomingPage now={new Date('2026-07-14T08:00:00+08:00')} />)
+
+    expect(await screen.findByText('窗口任务 101')).toBeVisible()
+    expect(requestedPages).toEqual([1, 2])
+    expect(screen.queryByText('旧任务')).not.toBeInTheDocument()
+    expect(screen.queryByText('无日期任务')).not.toBeInTheDocument()
   })
 
   it('hides completed items by default and reveals them with the labelled switch', async () => {
@@ -129,6 +162,36 @@ describe('UpcomingPage', () => {
 
     expect(await screen.findByDisplayValue('请保留这项安排')).toBeVisible()
     expect(within(screen.getByRole('dialog', { name: '新建任务' })).getByRole('alert')).toHaveTextContent('安排创建失败')
+  })
+
+  it('rolls an optimistic completion back in the upcoming view', async () => {
+    server.use(
+      http.get('/api/todos', () => HttpResponse.json(list([fixture({})]))),
+      http.patch('/api/todos/:id/complete', () => HttpResponse.json({ code: 50041, message: '完成失败', data: null }, { status: 500 })),
+    )
+    const user = userEvent.setup()
+    renderWithProviders(<UpcomingPage now={new Date('2026-07-14T08:00:00+08:00')} />)
+
+    await user.click(await screen.findByRole('button', { name: '完成安排：上午产品评审' }))
+    expect(await screen.findByRole('button', { name: '完成安排：上午产品评审' })).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('完成失败')
+  })
+
+  it('enters edit mode from details and saves Shanghai local time', async () => {
+    const user = userEvent.setup()
+    renderWithProviders(<UpcomingPage now={new Date('2026-07-14T08:00:00+08:00')} />)
+
+    await user.click(await screen.findByRole('button', { name: /2026 年 7 月 15 日/ }))
+    await user.click(await screen.findByRole('button', { name: '查看安排：完成项目文档' }))
+    await user.click(within(screen.getByRole('dialog', { name: '任务详情' })).getByRole('button', { name: '编辑任务' }))
+    expect(screen.getByRole('dialog', { name: '编辑任务' })).toBeVisible()
+    expect(screen.getByLabelText('截止时间')).toHaveValue('2026-07-15T08:00')
+    const title = screen.getByLabelText('任务标题')
+    await user.clear(title)
+    await user.type(title, '更新后的安排')
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+    expect(await screen.findByText('更新后的安排')).toBeVisible()
+    expect(screen.getByRole('alert')).toHaveTextContent('安排已更新')
   })
 
   it('renders a recoverable request error', async () => {
