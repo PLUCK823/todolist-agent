@@ -343,6 +343,33 @@ figcaption {
   box-shadow: 0 0 0 3px rgb(103 212 158 / 12%);
 }
 
+.agent-panel__header p[data-tone="busy"] span,
+.assistant-sessions section div[data-tone="busy"] > span {
+  background: #8d83f6;
+  box-shadow: 0 0 0 3px rgb(141 131 246 / 14%);
+}
+
+.agent-panel__header p[data-tone="attention"] span,
+.assistant-sessions section div[data-tone="attention"] > span {
+  background: #efbd65;
+  box-shadow: 0 0 0 3px rgb(239 189 101 / 14%);
+}
+
+.agent-panel__header p[data-tone="offline"] {
+  color: #ffaaa3;
+}
+
+.assistant-sessions section div[data-tone="offline"] small {
+  color: var(--danger-action);
+  font-weight: 700;
+}
+
+.agent-panel__header p[data-tone="offline"] span,
+.assistant-sessions section div[data-tone="offline"] > span {
+  background: #f27a70;
+  box-shadow: 0 0 0 3px rgb(242 122 112 / 14%);
+}
+
 .agent-panel__body {
   flex: 1;
   min-height: 0;
@@ -559,15 +586,21 @@ figcaption {
   background: rgb(103 212 158 / 9%);
 }
 
-.agent-step__result div {
-  display: grid;
-  grid-template-columns: minmax(60px, .7fr) 1.3fr;
-  gap: 8px;
+.agent-step__result > span {
+  color: #8eddb7;
   font-size: .62rem;
+  font-weight: 800;
 }
 
-.agent-step__result dt { color: rgb(248 248 251 / 43%); }
-.agent-step__result dd { margin: 0; overflow-wrap: anywhere; color: rgb(248 248 251 / 82%); }
+.agent-step__result pre {
+  max-width: 100%;
+  margin: 7px 0 0;
+  overflow: auto;
+  color: rgb(248 248 251 / 82%);
+  font: 500 .62rem/1.55 ui-monospace, "SFMono-Regular", Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .command-palette-mask {
   position: fixed;
@@ -841,10 +874,10 @@ figcaption {
 .assistant-inspector .agent-step__timer { color: var(--text-muted); }
 .assistant-conversation .agent-step__result,
 .assistant-inspector .agent-step__result { background: #eff9f4; }
-.assistant-conversation .agent-step__result dt,
-.assistant-inspector .agent-step__result dt { color: var(--text-muted); }
-.assistant-conversation .agent-step__result dd,
-.assistant-inspector .agent-step__result dd { color: var(--text); }
+.assistant-conversation .agent-step__result > span,
+.assistant-inspector .agent-step__result > span { color: var(--success-action); }
+.assistant-conversation .agent-step__result pre,
+.assistant-inspector .agent-step__result pre { color: var(--text); }
 
 .assistant-composer {
   width: min(720px, 100%);

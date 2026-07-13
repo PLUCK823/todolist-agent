@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { IconButton } from '../../shared/ui/IconButton'
 import AgentStepTimeline from './AgentStepTimeline'
 import { useAgentSessionContext } from './agent-session-context'
+import { getAgentStatusPresentation } from './agent-status'
 
 const suggestions = ['查看未完成任务', '创建明日计划']
 const busyStatuses = new Set(['connecting', 'running', 'waiting_confirmation'])
@@ -17,6 +18,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
   const setDraft = onDraftChange ?? setInternalDraft
   const endRef = useRef<HTMLDivElement>(null)
   const busy = busyStatuses.has(session.status)
+  const status = getAgentStatusPresentation(session.status)
 
   useEffect(() => { endRef.current?.scrollIntoView?.({ behavior: 'smooth' }) }, [session.messages, session.steps])
 
@@ -38,7 +40,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
     <aside className="agent-panel" aria-label="智能助手面板">
       <header className="agent-panel__header">
         <IconButton label="收起智能助手" tone="primary" icon={<span className="agent-spark">✦</span>} onClick={onCollapse} />
-        <div><h2>智能助手</h2><p><span aria-hidden="true" />{busy ? '正在处理任务' : '在线 · 随时处理任务'}</p></div>
+        <div><h2>智能助手</h2><p role={status.isError ? 'alert' : 'status'} data-tone={status.tone}><span aria-hidden="true" />{status.label}</p></div>
       </header>
 
       <div className="agent-panel__body" role="log" aria-live="polite" aria-label="对话消息">

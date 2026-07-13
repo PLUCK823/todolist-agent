@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import AgentStepTimeline from '../features/agent/AgentStepTimeline'
 import { useAgentSessionContext } from '../features/agent/agent-session-context'
+import { getAgentStatusPresentation } from '../features/agent/agent-status'
 import { useShell } from '../features/shell/shell-context'
 import { Button } from '../shared/ui/Button'
 
@@ -11,6 +12,7 @@ export default function AssistantPage() {
   const [draft, setDraft] = useState('')
   const [clearError, setClearError] = useState('')
   const busy = ['connecting', 'running', 'waiting_confirmation'].includes(session.status)
+  const agentStatus = getAgentStatusPresentation(session.status)
 
   useEffect(() => {
     const shouldRestore = restoreExpanded.current
@@ -42,13 +44,13 @@ export default function AssistantPage() {
         <section aria-label="工具连接状态">
           <p>工具连接</p>
           <div><span aria-hidden="true" /> <strong>Todo API</strong><small>已连接</small></div>
-          <div><span aria-hidden="true" /> <strong>Agent Stream</strong><small>{busy ? '执行中' : '在线'}</small></div>
+          <div data-tone={agentStatus.tone} role={agentStatus.isError ? 'alert' : undefined}><span aria-hidden="true" /> <strong>Agent Stream</strong><small>{agentStatus.label}</small></div>
         </section>
       </aside>
 
       <section className="assistant-conversation" id="current">
         <header>
-          <div><p>WORKSPACE / TODAY</p><h1>智能助手</h1><span>{busy ? '正在执行你的请求' : '把想法变成清晰、可追踪的行动'}</span></div>
+          <div><p>WORKSPACE / TODAY</p><h1>智能助手</h1><span>{agentStatus.label}</span></div>
           <Button variant="ghost" size="sm" onClick={() => void clear()}>清空对话</Button>
         </header>
         {clearError ? <p className="assistant-clear-error" role="alert">{clearError}</p> : null}

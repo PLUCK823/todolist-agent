@@ -14,15 +14,12 @@ function formatDuration(durationMs: number) {
   return durationMs < 1000 ? `${durationMs} 毫秒` : `${(durationMs / 1000).toFixed(1)} 秒`
 }
 
-function ActionResult({ result }: { result: Record<string, unknown> }) {
-  const entries = Object.entries(result).filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
-  if (!entries.length) return null
+function ActionResult({ action, result }: { action: string; result: Record<string, unknown> }) {
   return (
-    <dl className="agent-step__result">
-      {entries.map(([key, value]) => (
-        <div key={key}><dt>{key}</dt><dd>{String(value)}</dd></div>
-      ))}
-    </dl>
+    <section className="agent-step__result" aria-label={`${action} 执行结果`}>
+      <span>{action}</span>
+      <pre>{JSON.stringify(result, null, 2)}</pre>
+    </section>
   )
 }
 
@@ -52,7 +49,7 @@ function AgentStepItem({ step, capabilities, onRetry, onConfirm, onReject }: {
         {elapsed !== undefined ? <time className="agent-step__timer tabular-nums">{formatDuration(elapsed)}</time> : null}
         {step.tool ? <code className="agent-step__tool">{step.tool}</code> : null}
         {step.errorMessage ? <p className="agent-step__error" role="alert">{step.errorMessage}</p> : null}
-        {step.action && step.result ? <ActionResult result={step.result} /> : null}
+        {step.action && step.result ? <ActionResult action={step.action} result={step.result} /> : null}
         {step.status === 'failed' && step.retryable && capabilities.supportsStepRetry ? (
           <Button variant="secondary" size="sm" onClick={() => onRetry(step.id)} aria-label={`重试${step.label}`}>重试</Button>
         ) : null}

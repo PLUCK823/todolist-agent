@@ -55,6 +55,13 @@ describe('AssistantPage', () => {
     expect(session.clear).toHaveBeenCalledTimes(1)
   })
 
+  it('shows the real failed connection state instead of claiming the tools are online', () => {
+    renderPage({ status: 'failed', messages: [{ id: 'u', role: 'user', content: '保留请求', createdAt: '2026-07-14T00:00:00Z' }] })
+    expect(screen.getByRole('alert')).toHaveTextContent('连接异常')
+    expect(screen.getAllByText('保留请求')[0]).toBeVisible()
+    expect(screen.queryByText('Agent Stream在线')).not.toBeInTheDocument()
+  })
+
   it('collapses the side Agent on entry and restores the previous state on leave', async () => {
     const user = userEvent.setup()
     const value = makeSession()

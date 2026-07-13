@@ -2,9 +2,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ToastProvider } from '../../../components/common/ToastRegion'
 import AppShell from '../../shell/AppShell'
 import { ShellProvider } from '../../shell/ShellContext'
+import { TaskDashboard } from '../../todos/TaskDashboard'
 import { AgentSessionProvider } from '../AgentSessionContext'
 import AgentStepTimeline from '../AgentStepTimeline'
 import type { AgentSessionValue, AgentStep } from '../agent.types'
@@ -21,6 +23,8 @@ function session(overrides: Partial<AgentSessionValue> = {}): AgentSessionValue 
   }
 }
 
+afterEach(() => vi.useRealTimers())
+
 describe('AgentStepTimeline', () => {
   it('renders running elapsed time with tabular numerals and completed action details', () => {
     vi.useFakeTimers()
@@ -34,8 +38,7 @@ describe('AgentStepTimeline', () => {
     expect(screen.getByText('运行中')).toBeVisible()
     expect(screen.getByText('2.0 秒')).toHaveClass('tabular-nums')
     expect(screen.getByText('已完成')).toBeVisible()
-    expect(screen.getByText('完成原型')).toBeVisible()
-    vi.useRealTimers()
+    expect(screen.getByLabelText('create_todo 执行结果')).toHaveTextContent('完成原型')
   })
 
   it('renders confirmation actions and never offers unsafe retry when unsupported', async () => {
@@ -58,6 +61,45 @@ describe('AgentStepTimeline', () => {
     expect(onConfirm).toHaveBeenCalledWith('confirmation-1')
     await user.click(screen.getByRole('button', { name: '取消删除任务' }))
     expect(onReject).toHaveBeenCalledWith('confirmation-1')
+  })
+
+  it('renders waiting and invokes retry only when the capability explicitly allows it', async () => {
+    const user = userEvent.setup()
+    const onRetry = vi.fn()
+    render(<AgentStepTimeline
+      steps={[
+        { id: 'wait', label: '等待 Todo API', status: 'waiting' },
+        { id: 'failed', label: '同步任务', status: 'failed', retryable: true, errorMessage: '接口超时' },
+      ]}
+      capabilities={{ supportsStepRetry: true }}
+      onRetry={onRetry}
+      onConfirm={vi.fn()}
+      onReject={vi.fn()}
+    />)
+    expect(screen.getByText('等待中')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '重试同步任务' }))
+    expect(onRetry).toHaveBeenCalledWith('failed')
+  })
+
+  it('preserves nested objects, arrays, booleans and null in an action card', () => {
+    render(<AgentStepTimeline
+      steps={[{
+        id: 'action', label: '创建任务', status: 'completed', action: 'create_todo', durationMs: 120,
+        result: { todo: { title: '完成原型', meta: { priority: 'high' } }, tags: ['设计', { name: '前端' }], completed: false, due: null },
+      }]}
+      capabilities={{ supportsStepRetry: false }}
+      onRetry={vi.fn()}
+      onConfirm={vi.fn()}
+      onReject={vi.fn()}
+    />)
+    const card = screen.getByLabelText('create_todo 执行结果')
+    expect(card).toHaveTextContent('完成原型')
+    expect(card).toHaveTextContent('priority')
+    expect(card).toHaveTextContent('设计')
+    expect(card).toHaveTextContent('前端')
+    expect(card).toHaveTextContent('false')
+    expect(card).toHaveTextContent('null')
+    expect(card).not.toHaveTextContent('[object Object]')
   })
 })
 
@@ -101,6 +143,47 @@ describe('AgentPanel integration', () => {
     await user.type(screen.getByPlaceholderText('输入消息或指令…'), '安排明日计划')
     await user.keyboard('{Enter}')
     expect(send).toHaveBeenCalledWith('安排明日计划')
+  })
+
+  it('announces a failed connection as offline while preserving the conversation', () => {
+    const value = session({
+      status: 'failed',
+      messages: [{ id: 'm1', role: 'user', content: '不要丢失这条消息', createdAt: '2026-07-14T00:00:00Z' }],
+    })
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={value}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+    expect(screen.getByRole('alert')).toHaveTextContent('连接异常')
+    expect(screen.getByText('不要丢失这条消息')).toBeVisible()
+    expect(screen.queryByText(/在线 · 随时处理任务/)).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['idle', '在线 · 随时处理任务'],
+    ['connecting', '正在连接智能助手'],
+    ['running', '正在执行任务'],
+    ['waiting_confirmation', '等待你的确认'],
+    ['done', '任务已完成'],
+  ] as const)('renders the %s session status as %s', (status, label) => {
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session({ status })}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+    expect(screen.getByText(label)).toBeVisible()
+  })
+
+  it('renders the real task header slot with the collapsed spark after New Task', async () => {
+    const user = userEvent.setup()
+    localStorage.clear()
+    const value = session()
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ToastProvider><MemoryRouter initialEntries={['/tasks']}><ShellProvider><AgentSessionProvider value={value}>
+          <Routes><Route element={<AppShell />}><Route path="/tasks" element={<TaskDashboard />} /></Route></Routes>
+        </AgentSessionProvider></ShellProvider></MemoryRouter></ToastProvider>
+      </QueryClientProvider>,
+    )
+    await user.click(screen.getByRole('button', { name: '收起智能助手' }))
+    const newTask = screen.getByRole('button', { name: '新建任务' })
+    const spark = screen.getByRole('button', { name: '展开智能助手' })
+    expect(screen.queryByTestId('agent-column')).not.toBeInTheDocument()
+    expect(newTask.compareDocumentPosition(spark) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(spark.closest('.shell-header-actions-slot')).not.toBeNull()
   })
 
   it('invalidates Todo data once when an action completes', async () => {
