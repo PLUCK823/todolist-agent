@@ -39,4 +39,11 @@ describe('V6 color tokens', () => {
       expect(contrastRatio(token(name), '#ffffff')).toBeGreaterThanOrEqual(4.5)
     },
   )
+
+  it.each([
+    ['warning-text', '#fefce8'],
+    ['low-priority-text', '#f3f4f6'],
+  ])('provides AA contrast for --%s on its priority badge surface', (name, surface) => {
+    expect(contrastRatio(token(name), surface)).toBeGreaterThanOrEqual(4.5)
+  })
 })

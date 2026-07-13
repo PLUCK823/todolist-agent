@@ -24,6 +24,33 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
   const anchorId = `${popoverId}-anchor`
 
   useClientLayoutEffect(() => {
+    const anchor = anchorRef.current
+    if (!anchor) return
+
+    const previous = {
+      hasPopup: anchor.getAttribute('aria-haspopup'),
+      expanded: anchor.getAttribute('aria-expanded'),
+      controls: anchor.getAttribute('aria-controls'),
+    }
+    const ownsId = anchor.id.length === 0
+    if (ownsId) anchor.id = anchorId
+    anchor.setAttribute('aria-haspopup', 'dialog')
+    anchor.setAttribute('aria-expanded', String(open))
+    anchor.setAttribute('aria-controls', popoverId)
+    popoverRef.current?.setAttribute(
+      'aria-labelledby',
+      `${anchor.id} ${popoverId}-label`,
+    )
+
+    return () => {
+      restoreAttribute(anchor, 'aria-haspopup', previous.hasPopup)
+      restoreAttribute(anchor, 'aria-expanded', previous.expanded)
+      restoreAttribute(anchor, 'aria-controls', previous.controls)
+      if (ownsId && anchor.id === anchorId) anchor.removeAttribute('id')
+    }
+  }, [anchorId, anchorRef, open, popoverId])
+
+  useClientLayoutEffect(() => {
     if (!open) return
 
     const updatePosition = () => {
@@ -52,29 +79,6 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
       window.removeEventListener('scroll', updatePosition, true)
     }
   }, [anchorRef, open])
-
-  useEffect(() => {
-    const anchor = anchorRef.current
-    if (!anchor) return
-
-    const previous = {
-      hasPopup: anchor.getAttribute('aria-haspopup'),
-      expanded: anchor.getAttribute('aria-expanded'),
-      controls: anchor.getAttribute('aria-controls'),
-      id: anchor.getAttribute('id'),
-    }
-    anchor.id = anchorId
-    anchor.setAttribute('aria-haspopup', 'dialog')
-    anchor.setAttribute('aria-expanded', String(open))
-    anchor.setAttribute('aria-controls', popoverId)
-
-    return () => {
-      restoreAttribute(anchor, 'aria-haspopup', previous.hasPopup)
-      restoreAttribute(anchor, 'aria-expanded', previous.expanded)
-      restoreAttribute(anchor, 'aria-controls', previous.controls)
-      restoreAttribute(anchor, 'id', previous.id)
-    }
-  }, [anchorId, anchorRef, open, popoverId])
 
   useEffect(() => {
     if (!open) return
@@ -117,7 +121,7 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
       ref={popoverRef}
       id={popoverId}
       role="dialog"
-      aria-labelledby={`${anchorId} ${popoverId}-label`}
+      aria-label="浮层"
       tabIndex={-1}
       className="fixed z-50 min-w-52 rounded-[var(--radius-panel)] border border-[var(--border)] bg-white p-2 text-[var(--text)] shadow-[var(--shadow-panel)] focus:outline-none motion-safe:animate-[popover-enter_var(--motion-overlay)_both]"
     >

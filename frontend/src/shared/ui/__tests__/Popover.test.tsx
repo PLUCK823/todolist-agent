@@ -25,6 +25,36 @@ function PopoverHarness() {
   )
 }
 
+function IdentifiedPopoverHarness() {
+  const [open, setOpen] = useState(false)
+  const [mounted, setMounted] = useState(true)
+  const anchorRef = useRef<HTMLButtonElement>(null)
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        id="caller-filter"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded="false"
+        aria-controls="caller-menu"
+        onClick={() => setOpen(true)}
+      >
+        自定义筛选
+      </button>
+      {mounted ? (
+        <Popover open={open} anchorRef={anchorRef} onOpenChange={setOpen}>
+          <button type="button">选项</button>
+        </Popover>
+      ) : null}
+      <button type="button" onClick={() => setMounted(false)}>
+        卸载浮层
+      </button>
+    </>
+  )
+}
+
 describe('Popover', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -99,6 +129,25 @@ describe('Popover', () => {
     anchorRect = rect({ left: 500, right: 540, top: -100, bottom: -60 })
     fireEvent.scroll(document)
     expect(popover).toHaveStyle({ left: '500px', top: '12px' })
+  })
+
+  it('preserves a caller-owned anchor id and restores only managed aria attributes', async () => {
+    const user = userEvent.setup()
+    render(<IdentifiedPopoverHarness />)
+
+    const anchor = screen.getByRole('button', { name: '自定义筛选' })
+    expect(anchor).toHaveAttribute('id', 'caller-filter')
+    await user.click(anchor)
+
+    const popover = screen.getByRole('dialog', { name: /自定义筛选.*浮层/ })
+    expect(anchor).toHaveAttribute('id', 'caller-filter')
+    expect(anchor).toHaveAttribute('aria-controls', popover.id)
+
+    await user.click(screen.getByRole('button', { name: '卸载浮层' }))
+    expect(anchor).toHaveAttribute('id', 'caller-filter')
+    expect(anchor).toHaveAttribute('aria-haspopup', 'menu')
+    expect(anchor).toHaveAttribute('aria-expanded', 'false')
+    expect(anchor).toHaveAttribute('aria-controls', 'caller-menu')
   })
 })
 

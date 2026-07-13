@@ -159,4 +159,41 @@ describe('Dialog', () => {
     view.unmount()
     document.body.style.overflow = previousOverflow
   })
+
+  it('transfers a detached top-dialog focus target back to the root trigger', async () => {
+    const user = userEvent.setup()
+    render(<StackedDialogHarness />)
+
+    const rootTrigger = screen.getByRole('button', { name: '打开底层' })
+    await user.click(rootTrigger)
+    await user.click(screen.getByRole('button', { name: '打开顶层' }))
+
+    fireEvent.click(screen.getByRole('button', { name: '程序关闭底层' }))
+    expect(screen.getByRole('dialog', { name: '顶层' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '关闭顶层' }))
+    expect(rootTrigger).toHaveFocus()
+  })
+
+  it('makes lower dialog roots inert until they become topmost again', async () => {
+    const user = userEvent.setup()
+    render(<StackedDialogHarness />)
+
+    await user.click(screen.getByRole('button', { name: '打开底层' }))
+    const bottomDialog = screen.getByRole('dialog', { name: '底层' })
+    const bottomRoot = bottomDialog.parentElement
+    expect(bottomRoot).not.toBeNull()
+    expect(bottomRoot).not.toHaveAttribute('inert')
+
+    const topTrigger = screen.getByRole('button', { name: '打开顶层' })
+    await user.click(topTrigger)
+    const topDialog = screen.getByRole('dialog', { name: '顶层' })
+    expect(bottomRoot).toHaveAttribute('inert')
+    expect(topDialog.parentElement).not.toHaveAttribute('inert')
+    expect(topTrigger.closest('[inert]')).toBe(bottomRoot)
+
+    await user.click(screen.getByRole('button', { name: '关闭顶层' }))
+    expect(bottomRoot).not.toHaveAttribute('inert')
+    expect(topTrigger).toHaveFocus()
+  })
 })

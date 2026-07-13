@@ -20,8 +20,10 @@
   --success: #54ad82;
   --success-action: #287a54;
   --warning: #d99b3f;
+  --warning-text: #744800;
   --danger: #d9574c;
   --danger-action: #b7423a;
+  --low-priority-text: #5e6473;
 
   --shadow-panel: 0 18px 50px rgb(32 37 56 / 12%);
   --shadow-overlay: 0 24px 80px rgb(21 25 38 / 24%);
@@ -48,6 +50,6 @@
   --color-warning: var(--warning);
   --color-danger: var(--danger-action);
   --color-high-priority: var(--danger-action);
-  --color-medium-priority: var(--warning);
-  --color-low-priority: var(--text-muted);
+  --color-medium-priority: var(--warning-text);
+  --color-low-priority: var(--low-priority-text);
 }

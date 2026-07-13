@@ -1,6 +1,7 @@
 interface OverlayEntry {
   id: symbol
-  element: () => HTMLElement | null
+  root: HTMLElement
+  focusElement: HTMLElement
   restoreFocusTo: HTMLElement | null
 }
 
@@ -13,6 +14,7 @@ export function registerOverlay(entry: OverlayEntry) {
     document.body.style.overflow = 'hidden'
   }
   overlays.push(entry)
+  syncOverlayInteractivity()
 
   return () => unregisterOverlay(entry.id)
 }
@@ -27,6 +29,18 @@ function unregisterOverlay(id: symbol) {
 
   const wasTop = index === overlays.length - 1
   const [removed] = overlays.splice(index, 1)
+  removed.root.removeAttribute('inert')
+
+  for (const entry of overlays.slice(index)) {
+    if (
+      entry.restoreFocusTo &&
+      (removed.root.contains(entry.restoreFocusTo) || !entry.restoreFocusTo.isConnected)
+    ) {
+      entry.restoreFocusTo = removed.restoreFocusTo
+    }
+  }
+
+  syncOverlayInteractivity()
   const nextTop = overlays.at(-1)
 
   if (overlays.length === 0) {
@@ -42,13 +56,19 @@ function unregisterOverlay(id: symbol) {
 
   if (!wasTop || !nextTop) return
 
-  const nextTopElement = nextTop.element()
   if (
     removed.restoreFocusTo?.isConnected &&
-    nextTopElement?.contains(removed.restoreFocusTo)
+    nextTop.root.contains(removed.restoreFocusTo)
   ) {
     removed.restoreFocusTo.focus()
   } else {
-    nextTopElement?.focus()
+    nextTop.focusElement.focus()
   }
+}
+
+function syncOverlayInteractivity() {
+  const topIndex = overlays.length - 1
+  overlays.forEach((entry, index) => {
+    entry.root.toggleAttribute('inert', index !== topIndex)
+  })
 }

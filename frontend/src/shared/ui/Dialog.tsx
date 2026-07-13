@@ -36,6 +36,7 @@ export function Dialog({
   footer,
 }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const overlayRootRef = useRef<HTMLDivElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
   const overlayIdRef = useRef(Symbol('dialog'))
   const titleId = useId()
@@ -46,12 +47,17 @@ export function Dialog({
 
     const activeElement = document.activeElement
     restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null
+    const overlayRoot = overlayRootRef.current
+    const dialog = dialogRef.current
+    if (!overlayRoot || !dialog) return
+
+    dialog.focus()
     const unregister = registerOverlay({
       id: overlayIdRef.current,
-      element: () => dialogRef.current,
+      root: overlayRoot,
+      focusElement: dialog,
       restoreFocusTo: restoreFocusRef.current,
     })
-    dialogRef.current?.focus()
 
     return () => {
       unregister()
@@ -103,6 +109,7 @@ export function Dialog({
 
   return createPortal(
     <div
+      ref={overlayRootRef}
       className="fixed inset-0 z-50 grid place-items-center bg-[rgb(24_28_43_/_48%)] p-4 backdrop-blur-[3px] motion-safe:animate-[overlay-enter_var(--motion-overlay)_both]"
       onMouseDown={(event) => {
         if (
