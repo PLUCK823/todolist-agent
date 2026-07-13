@@ -26,9 +26,70 @@ const variantButtonClasses: Record<ConfirmVariant, string> = {
   info: "bg-[#7165ea] hover:bg-[#5f54d9] focus:ring-[#7165ea]",
 };
 
+const ANIMATION_DURATION = 200;
+
 export default function ConfirmDialog(props: ConfirmDialogProps) {
-  if (!props.isOpen) return null;
-  return <ConfirmDialogContent {...props} />;
+  const [openCycle, setOpenCycle] = useState(() => ({
+    isOpen: props.isOpen,
+    generation: props.isOpen ? 1 : 0,
+  }));
+  if (openCycle.isOpen !== props.isOpen) {
+    setOpenCycle({
+      isOpen: props.isOpen,
+      generation: props.isOpen
+        ? openCycle.generation + 1
+        : openCycle.generation,
+    });
+  }
+
+  const generation = openCycle.generation;
+  const [enteredGeneration, setEnteredGeneration] = useState(0);
+  const [exitedGeneration, setExitedGeneration] = useState(0);
+  const shouldRender = props.isOpen || exitedGeneration !== generation;
+
+  useEffect(() => {
+    if (props.isOpen) {
+      const enterTimer = setTimeout(
+        () => setEnteredGeneration(generation),
+        10,
+      );
+      return () => clearTimeout(enterTimer);
+    }
+
+    if (shouldRender) {
+      const exitTimer = setTimeout(
+        () => setExitedGeneration(generation),
+        ANIMATION_DURATION,
+      );
+      return () => clearTimeout(exitTimer);
+    }
+  }, [generation, props.isOpen, shouldRender]);
+
+  if (!shouldRender) return null;
+
+  const phase = props.isOpen && enteredGeneration === generation
+    ? "entered"
+    : props.isOpen
+      ? "entering"
+      : "exiting";
+
+  const handleTransitionEnd = (event: React.TransitionEvent<HTMLDivElement>) => {
+    if (
+      phase === "exiting" &&
+      event.target === event.currentTarget &&
+      event.propertyName === "opacity"
+    ) {
+      setExitedGeneration(generation);
+    }
+  };
+
+  return (
+    <ConfirmDialogContent
+      {...props}
+      phase={phase}
+      onTransitionEnd={handleTransitionEnd}
+    />
+  );
 }
 
 function ConfirmDialogContent({
@@ -39,13 +100,13 @@ function ConfirmDialogContent({
   onConfirm,
   onCancel,
   variant = "danger",
-}: ConfirmDialogProps) {
-  const [animatedIn, setAnimatedIn] = useState(false);
-
-  useEffect(() => {
-    const enterTimer = setTimeout(() => setAnimatedIn(true), 10);
-    return () => clearTimeout(enterTimer);
-  }, []);
+  phase,
+  onTransitionEnd,
+}: ConfirmDialogProps & {
+  phase: "entering" | "entered" | "exiting";
+  onTransitionEnd: (event: React.TransitionEvent<HTMLDivElement>) => void;
+}) {
+  const animatedIn = phase === "entered";
 
   // Focus trap: focus the confirm button when the dialog opens
   const confirmRef = useRef<HTMLButtonElement>(null);
@@ -66,11 +127,12 @@ function ConfirmDialogContent({
   );
 
   useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
     document.addEventListener("keydown", handleKeyDown);
     document.body.style.overflow = "hidden";
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
-      document.body.style.overflow = "";
+      document.body.style.overflow = previousOverflow;
     };
   }, [handleKeyDown]);
 
@@ -107,6 +169,7 @@ function ConfirmDialogContent({
       <div
         className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden"
         style={dialogStyle}
+        onTransitionEnd={onTransitionEnd}
         onClick={handleDialogClick}
         role="dialog"
         aria-modal="true"

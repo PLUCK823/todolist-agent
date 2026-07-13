@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ConfirmDialog from "../ConfirmDialog";
 
@@ -149,10 +149,36 @@ describe("ConfirmDialog", () => {
         />,
       );
 
-      // After exit animation (200ms) the portal is unmounted
+      const exitingDialog = screen.getByRole("dialog");
+      expect(exitingDialog).toHaveStyle({ opacity: "0" });
+      expect(exitingDialog.style.transform).toContain("scale(0.97)");
+
       act(() => {
-        vi.advanceTimersByTime(250);
+        vi.advanceTimersByTime(199);
       });
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+      // The timer is a fallback for environments that do not emit transitionend.
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("unmounts after the exit transition ends", () => {
+      const { rerender } = renderDialog();
+      rerender(
+        <ConfirmDialog
+          isOpen={false}
+          title="删除任务"
+          message="确定要删除这个任务吗？此操作不可撤销。"
+          onConfirm={vi.fn()}
+          onCancel={vi.fn()}
+        />,
+      );
+
+      const dialog = screen.getByRole("dialog");
+      fireEvent.transitionEnd(dialog, { propertyName: "opacity" });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
@@ -234,6 +260,16 @@ describe("ConfirmDialog", () => {
     it("focuses the confirm button on open", () => {
       renderDialog({ isOpen: true });
       expect(screen.getByText("确认")).toHaveFocus();
+    });
+
+    it("restores the body overflow value that existed before mounting", () => {
+      document.body.style.overflow = "clip";
+      const { unmount } = renderDialog();
+      expect(document.body.style.overflow).toBe("hidden");
+
+      unmount();
+      expect(document.body.style.overflow).toBe("clip");
+      document.body.style.overflow = "";
     });
   });
 });
