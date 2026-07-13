@@ -251,17 +251,36 @@ async def stream(ws: WebSocket):
                     receive_task = None
                 result = process_task.result()
                 reply, _actions, _sid = result
-                await writer.send_json({"type": "reply", "content": reply})
+                try:
+                    await writer.send_json({"type": "reply", "content": reply})
+                except Exception:
+                    logger.warning("Final reply delivery failed", exc_info=True)
+                    return
+                try:
+                    await writer.send_json({"type": "done"})
+                except Exception:
+                    logger.warning("Final done delivery failed", exc_info=True)
+                    return
                 if isinstance(result, ProcessResult):
-                    acknowledged = await complete_turn(
-                        session_id, result.turn_id, result.generation
-                    )
-                    if not acknowledged:
-                        raise RuntimeError(
-                            "final reply acknowledgement lost a session race"
+                    try:
+                        acknowledged = await complete_turn(
+                            session_id, result.turn_id, result.generation
                         )
-                await writer.send_json({"type": "done"})
-                await ws.close()
+                    except Exception:
+                        logger.exception("Final turn checkpoint commit failed")
+                    else:
+                        if not acknowledged:
+                            logger.warning(
+                                "Final turn checkpoint was not committed: "
+                                "session=%s turn=%s generation=%s",
+                                session_id,
+                                result.turn_id,
+                                result.generation,
+                            )
+                try:
+                    await ws.close()
+                except Exception:
+                    logger.warning("WebSocket close failed after done", exc_info=True)
                 return
 
             assert receive_task is not None

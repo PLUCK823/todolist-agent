@@ -131,6 +131,7 @@ class _SessionSlot:
     waiters: int = 0
     refs: int = 0
     active: asyncio.Task[Any] | None = None
+    draining: bool = False
 
 
 _session_slots: dict[str, _SessionSlot] = {}
@@ -293,6 +294,8 @@ async def delete_history(session_id: str) -> bool:
     if slot is not None:
         slot.epoch = next_epoch
     task = slot.active if slot is not None else _active_tasks.get(session_id)
+    if slot is not None and task is not None:
+        slot.draining = True
     _evict_session(session_id)
     if task is not None and task is not asyncio.current_task():
         await _cancel_and_drain(task)
@@ -525,6 +528,11 @@ async def process_message(
     session_id = session_id or str(uuid.uuid4())
     slot = _slot_for(session_id)
     captured_epoch = slot.epoch
+    if slot.draining and slot.active is not None:
+        raise SessionDeletedError(
+            "deleted session still has an active task draining",
+            phase="session",
+        )
     slot.waiters += 1
     slot.refs += 1
     acquired = False
@@ -542,6 +550,7 @@ async def process_message(
         if current_task is not None:
             _active_tasks[session_id] = current_task
             slot.active = current_task
+            slot.draining = False
         try:
             _prune_sessions(protected=session_id)
             existing = copy.deepcopy(_conversations.get(session_id, {}))
@@ -920,6 +929,7 @@ async def process_message(
                 _active_tasks.pop(session_id, None)
             if slot.active is current_task:
                 slot.active = None
+                slot.draining = False
     finally:
         if not acquired:
             slot.waiters -= 1

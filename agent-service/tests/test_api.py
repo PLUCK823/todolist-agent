@@ -507,6 +507,128 @@ async def test_websocket_writer_serializes_concurrent_sends():
     assert [event["type"] for event in ws.events[-2:]] == ["reply", "done"]
 
 
+class _TerminalWebSocket:
+    def __init__(
+        self, *, session_id: str, fail_event: str | None = None, fail_close=False
+    ):
+        self.raw = f'{{"message":"创建一次","session_id":"{session_id}"}}'
+        self.fail_event = fail_event
+        self.fail_close = fail_close
+        self.failed = False
+        self.events: list[dict] = []
+
+    async def accept(self):
+        pass
+
+    async def receive_text(self):
+        return self.raw
+
+    async def receive_json(self):
+        await asyncio.Future()
+
+    async def send_json(self, event):
+        if event["type"] == self.fail_event and not self.failed:
+            self.failed = True
+            raise RuntimeError(f"{self.fail_event} send failed")
+        self.events.append(event)
+
+    async def close(self, code=1000):
+        if self.fail_close:
+            raise RuntimeError("close failed")
+
+
+def _terminal_model_and_tool():
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "一次"}, "terminal")]),
+            _aim("完成"),
+        ]
+    )
+    return model, StubTool(result={"id": 1, "title": "一次"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_event", ["reply", "done"])
+async def test_terminal_send_failure_keeps_checkpoint_and_retry_reuses_side_effect(
+    fail_event,
+):
+    from app.agent import _conversations, _tools_by_name
+    from app.main import stream
+
+    model, tool = _terminal_model_and_tool()
+    first = _TerminalWebSocket(session_id=f"fail-{fail_event}", fail_event=fail_event)
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        await stream(first)
+        state = _conversations[f"fail-{fail_event}"]["incomplete"]
+        assert state["phase"] == "ready_reply"
+        retry = _TerminalWebSocket(session_id=f"fail-{fail_event}")
+        await stream(retry)
+
+    tool.ainvoke.assert_awaited_once()
+    assert [event["type"] for event in retry.events[-2:]] == ["reply", "done"]
+    assert _conversations[f"fail-{fail_event}"]["incomplete"] is None
+    if fail_event == "done":
+        terminal = [
+            event["type"]
+            for event in first.events
+            if event["type"] in {"reply", "done", "step_failed"}
+        ]
+        assert terminal == ["reply"]
+    else:
+        terminal = [
+            event["type"]
+            for event in first.events
+            if event["type"] in {"reply", "done", "step_failed"}
+        ]
+        assert terminal == []
+
+
+@pytest.mark.asyncio
+async def test_complete_false_after_done_adds_no_second_terminal_event():
+    from app.agent import _conversations, _tools_by_name
+    from app.main import stream
+
+    model, tool = _terminal_model_and_tool()
+    ws = _TerminalWebSocket(session_id="complete-false")
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+        patch("app.main.complete_turn", new=AsyncMock(return_value=False)) as complete,
+    ):
+        await stream(ws)
+
+    result_state = _conversations["complete-false"]["incomplete"]
+    assert result_state["phase"] == "ready_reply"
+    assert [event["type"] for event in ws.events[-2:]] == ["reply", "done"]
+    assert len([event for event in ws.events if event["type"] == "done"]) == 1
+    complete.assert_awaited_once_with("complete-false", result_state["turn_id"], 0)
+    tool.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_close_failure_after_commit_adds_no_second_terminal_event():
+    from app.agent import _conversations, _tools_by_name
+    from app.main import stream
+
+    model, tool = _terminal_model_and_tool()
+    ws = _TerminalWebSocket(session_id="close-false", fail_close=True)
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        await stream(ws)
+
+    assert _conversations["close-false"]["incomplete"] is None
+    assert [event["type"] for event in ws.events[-2:]] == ["reply", "done"]
+    assert len([event for event in ws.events if event["type"] == "done"]) == 1
+    tool.ainvoke.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_cancel_and_drain_is_bounded_for_uncooperative_task():
     """Endpoint cleanup returns even when cancellation is temporarily ignored."""

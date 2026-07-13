@@ -1198,6 +1198,40 @@ async def test_delete_invalidates_active_and_all_old_epoch_waiters_then_new_epoc
 
 
 @pytest.mark.asyncio
+async def test_new_epoch_fails_fast_while_deleted_active_task_keeps_draining():
+    from app.agent import SessionDeletedError, delete_history, process_message
+
+    entered = asyncio.Event()
+    cleanup = asyncio.Event()
+
+    class NeverReleasesWithoutTestCleanup:
+        def bind_tools(self, _tools):
+            return self
+
+        async def ainvoke(self, _messages):
+            entered.set()
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                await cleanup.wait()
+                raise
+
+    active = None
+    with patch("app.agent._build_llm", return_value=NeverReleasesWithoutTestCleanup()):
+        try:
+            active = asyncio.create_task(process_message("draining", "old"))
+            await entered.wait()
+            assert await delete_history("draining") is True
+            with pytest.raises(SessionDeletedError, match="draining"):
+                await asyncio.wait_for(process_message("draining", "new"), timeout=0.02)
+        finally:
+            cleanup.set()
+            if active is not None:
+                with pytest.raises(asyncio.CancelledError):
+                    await active
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fault_type,tool_fails",
     [

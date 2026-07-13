@@ -324,7 +324,7 @@ WS /api/agent/stream
 
 Agent 会在每个工具完成后先记录该 turn 的 action journal，并在每次 WebSocket 事件写入前保存稳定的事件内容与 ID。如果写入失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重连；同一 Python worker、且该内存记录仍在 TTL/LRU 保留期内时，服务端会重放未确认事件并复用已记录的 tool-call ID，避免再次执行已经写入 journal 的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
 
-上述 action journal、turn ID、事件 checkpoint 和会话锁都只是**单进程内存状态**，不是数据库级 durable log，也不是 exactly-once 交付协议。进程重启、多 worker 路由到不同进程、缓存淘汰都会丢失恢复上下文；即使服务端成功调用 `send_json`，也不能证明客户端已经收到事件。最终 `reply` 发送后，服务端会用内部 `turn_id + generation` 提交该轮；如果提交与删除历史发生竞态，会返回流错误而不是错误提交另一轮。客户端仍应把未收到 `done` 视为结果不确定，并允许用户查看 Todo 实际状态后决定是否重试。
+上述 action journal、turn ID、事件 checkpoint 和会话锁都只是**单进程内存状态**，不是数据库级 durable log，也不是 exactly-once 交付协议。进程重启、多 worker 路由到不同进程、缓存淘汰都会丢失恢复上下文；即使服务端成功调用 `send_json`，也不能证明客户端已经收到事件。成功终态严格按 `reply → done → complete_turn(turn_id, generation) → close` 处理；`reply` 或 `done` 写入失败时不会提交该轮，同请求可从 `ready_reply` 恢复。`done` 已发送后，提交竞态或 close 失败只记录服务端日志，不会再追加第二个 `step_failed` 或 `done`。客户端仍应把未收到 `done` 视为结果不确定，并允许用户查看 Todo 实际状态后决定是否重试。
 
 服务端为每个 session 串行执行 turn，不同 session 仍可并行。会话采用 TTL/LRU 有界缓存，并限制每个会话保留的消息数、单 turn 的工具轮数和工具调用总数；超限返回 `step_failed(error_code="AGENT_LIMIT_EXCEEDED", retryable=false)`。删除历史会建立 tombstone 并取消同 session 的在途处理，晚到结果不能重新创建已删除的历史或确认状态。
 
