@@ -61,7 +61,7 @@ export interface AgentMessage {
 export interface AgentStep {
   id: string
   label: string
-  status: 'running' | 'waiting_confirmation' | 'completed' | 'failed'
+  status: 'waiting' | 'running' | 'waiting_confirmation' | 'completed' | 'failed'
   tool?: string
   args?: Record<string, unknown>
   startedAt?: string

@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import ConfirmDialog from '../../components/common/ConfirmDialog'
 import { useDebounce } from '../../hooks/useDebounce'
+import { ShellHeaderActionsSlot } from '../shell/ShellHeaderActions'
 import { Button } from '../../shared/ui/Button'
 import { useToast } from '../../shared/ui/toast-context'
 import { getApiErrorMessage } from './todo.api'
@@ -161,7 +162,11 @@ export function TaskDashboard() {
           <h1 className="mb-0 mt-2 text-[28px] font-extrabold tracking-[-.04em] text-[var(--text)]">今天，保持专注</h1>
           <p className="mb-0 mt-1 text-sm text-[var(--text-secondary)]">还有 {summary.active} 项任务等待完成</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)} leadingIcon={<span className="text-lg leading-none">＋</span>}>新建任务</Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))} leadingIcon={<span>✦</span>}>快速询问 <kbd>⌘K</kbd></Button>
+          <Button onClick={() => setCreateOpen(true)} leadingIcon={<span className="text-lg leading-none">＋</span>}>新建任务</Button>
+          <ShellHeaderActionsSlot />
+        </div>
       </header>
 
       <section aria-label="任务摘要" className="mt-5 grid grid-cols-3 gap-3">

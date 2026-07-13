@@ -21,7 +21,7 @@ const variantClasses: Record<ButtonVariant, string> = {
 }
 
 const sizeClasses: Record<ButtonSize, string> = {
-  sm: 'min-h-8 rounded-lg px-3 text-xs',
+  sm: 'min-h-10 rounded-lg px-3 text-xs',
   md: 'min-h-10 rounded-[var(--radius-control)] px-4 text-sm',
   lg: 'min-h-12 rounded-xl px-5 text-sm',
 }
@@ -38,7 +38,7 @@ export function Button({
   return (
     <button
       type={type}
-      className={`inline-flex items-center justify-center gap-2 border font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] active:translate-y-px disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-45 ${variantClasses[variant]} ${sizeClasses[size]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 border font-semibold transition-[background-color,border-color,color,box-shadow,scale] duration-200 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] active:scale-[.96] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-45 ${variantClasses[variant]} ${sizeClasses[size]} ${className}`}
       {...props}
     >
       {leadingIcon ? <span aria-hidden="true">{leadingIcon}</span> : null}

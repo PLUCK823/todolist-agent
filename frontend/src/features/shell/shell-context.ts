@@ -6,9 +6,11 @@ export interface ShellState {
 }
 
 export interface ShellContextValue extends ShellState {
+  headerActionsElement: HTMLDivElement | null
   toggleNav(): void
   openAgent(): void
   closeAgent(): void
+  setHeaderActionsElement(element: HTMLDivElement | null): void
 }
 
 export const ShellContext = createContext<ShellContextValue | null>(null)

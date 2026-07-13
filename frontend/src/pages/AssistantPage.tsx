@@ -1,148 +1,73 @@
-import { useState, useRef, useEffect, type FormEvent } from 'react'
-
-interface Message {
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: string
-}
-
-const WELCOME_MESSAGE: Message = {
-  role: 'assistant',
-  content: '你好！我是你的智能待办助手。你可以告诉我任何关于任务的事情，比如：\n\n- "帮我创建一个高优先级的任务：明天下午开会"\n- "显示我所有未完成的任务"\n- "把「买牛奶」标记为已完成"',
-  timestamp: new Date().toISOString(),
-}
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+import AgentStepTimeline from '../features/agent/AgentStepTimeline'
+import { useAgentSessionContext } from '../features/agent/agent-session-context'
+import { useShell } from '../features/shell/shell-context'
+import { Button } from '../shared/ui/Button'
 
 export default function AssistantPage() {
-  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE])
-  const [input, setInput] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const session = useAgentSessionContext()
+  const { agentExpanded, closeAgent, openAgent } = useShell()
+  const restoreExpanded = useRef(agentExpanded)
+  const [draft, setDraft] = useState('')
+  const [clearError, setClearError] = useState('')
+  const busy = ['connecting', 'running', 'waiting_confirmation'].includes(session.status)
 
   useEffect(() => {
-    try {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    } catch {
-      // scrollIntoView not supported in test environment (jsdom)
-      messagesEndRef.current?.scrollIntoView?.()
-    }
-  }, [messages])
+    const shouldRestore = restoreExpanded.current
+    closeAgent()
+    return () => { if (shouldRestore) openAgent() }
+  }, [closeAgent, openAgent])
 
-  const handleSend = async (e: FormEvent) => {
-    e.preventDefault()
-    const trimmed = input.trim()
-    if (!trimmed || isLoading) return
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    const message = draft.trim()
+    if (!message || busy) return
+    session.send(message)
+    setDraft('')
+  }
 
-    const userMsg: Message = {
-      role: 'user',
-      content: trimmed,
-      timestamp: new Date().toISOString(),
-    }
-    setMessages((prev) => [...prev, userMsg])
-    setInput('')
-    setIsLoading(true)
-
-    // Simulate agent response (in production this calls the real API)
-    setTimeout(() => {
-      const assistantMsg: Message = {
-        role: 'assistant',
-        content: `收到！你说的是："${trimmed}"。\n\n（Agent 服务正在开发中，此功能即将上线。届时你可以通过 WebSocket 实时看到 Agent 的思考和执行过程。）`,
-        timestamp: new Date().toISOString(),
-      }
-      setMessages((prev) => [...prev, assistantMsg])
-      setIsLoading(false)
-    }, 1500)
+  async function clear() {
+    setClearError('')
+    try { await session.clear() } catch { setClearError('清空失败，对话记录已保留。') }
   }
 
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: '#f7f7f9' }}>
-      {/* Header */}
-      <div
-        className="px-6 py-4 border-b flex items-center gap-3"
-        style={{ borderColor: '#e5e7eb', backgroundColor: '#ffffff' }}
-      >
-        <div
-          className="w-10 h-10 rounded-full flex items-center justify-center text-white text-lg font-bold"
-          style={{ backgroundColor: '#7165ea' }}
-        >
-          AI
-        </div>
-        <div>
-          <h1 className="text-lg font-semibold" style={{ color: '#1a1a2e' }}>
-            智能助手
-          </h1>
-          <p className="text-xs" style={{ color: '#6b7280' }}>
-            {isLoading ? '正在思考...' : '随时为你服务'}
-          </p>
-        </div>
-      </div>
+    <main className="assistant-workspace">
+      <aside className="assistant-sessions">
+        <header><span className="agent-spark" aria-hidden="true">✦</span><strong>Agent</strong></header>
+        <nav aria-label="Agent 会话">
+          <p>会话</p>
+          <a href="#current" aria-current="page"><span>今天</span><strong>{session.messages.at(-1)?.content || '新对话'}</strong><small>{session.sessionId ? '当前会话' : '尚未开始'}</small></a>
+        </nav>
+        <section aria-label="工具连接状态">
+          <p>工具连接</p>
+          <div><span aria-hidden="true" /> <strong>Todo API</strong><small>已连接</small></div>
+          <div><span aria-hidden="true" /> <strong>Agent Stream</strong><small>{busy ? '执行中' : '在线'}</small></div>
+        </section>
+      </aside>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {messages.map((msg, idx) => (
-          <div
-            key={idx}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
-            <div
-              className={`max-w-[80%] rounded-xl px-4 py-3 text-sm whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'text-white'
-                  : 'bg-white border'
-              }`}
-              style={
-                msg.role === 'user'
-                  ? { backgroundColor: '#7165ea' }
-                  : { borderColor: '#e5e7eb', color: '#1a1a2e' }
-              }
-            >
-              {msg.content}
-            </div>
-          </div>
-        ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div
-              className="bg-white border rounded-xl px-4 py-3"
-              style={{ borderColor: '#e5e7eb' }}
-            >
-              <div className="flex gap-1">
-                <span className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: '#7165ea', animationDelay: '0ms' }} />
-                <span className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: '#7165ea', animationDelay: '150ms' }} />
-                <span className="w-2 h-2 rounded-full animate-bounce" style={{ backgroundColor: '#7165ea', animationDelay: '300ms' }} />
-              </div>
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <div className="p-4 border-t bg-white" style={{ borderColor: '#e5e7eb' }}>
-        <form onSubmit={handleSend} className="flex gap-3">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="输入你想做的事情，比如：帮我创建一个任务..."
-            className="flex-1 px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2"
-            style={{
-              borderColor: '#e5e7eb',
-              color: '#1a1a2e',
-            }}
-            disabled={isLoading}
-            onFocus={(e) => (e.target.style.borderColor = '#7165ea')}
-            onBlur={(e) => (e.target.style.borderColor = '#e5e7eb')}
-          />
-          <button
-            type="submit"
-            disabled={!input.trim() || isLoading}
-            className="px-6 py-3 rounded-xl text-white font-medium text-sm transition-opacity disabled:opacity-50"
-            style={{ backgroundColor: '#7165ea' }}
-          >
-            发送
-          </button>
+      <section className="assistant-conversation" id="current">
+        <header>
+          <div><p>WORKSPACE / TODAY</p><h1>智能助手</h1><span>{busy ? '正在执行你的请求' : '把想法变成清晰、可追踪的行动'}</span></div>
+          <Button variant="ghost" size="sm" onClick={() => void clear()}>清空对话</Button>
+        </header>
+        {clearError ? <p className="assistant-clear-error" role="alert">{clearError}</p> : null}
+        <div className="assistant-conversation__scroll" role="log" aria-live="polite">
+          {!session.messages.length ? <div className="assistant-empty"><span aria-hidden="true">✦</span><h2>从一句话开始</h2><p>创建任务、调整安排，或让我梳理今天的优先级。</p></div> : null}
+          {session.messages.map((message) => <article key={message.id} className="assistant-message" data-role={message.role}><span>{message.role === 'assistant' ? '✦' : '你'}</span><div><p>{message.content}</p><time dateTime={message.createdAt}>{new Date(message.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div></article>)}
+          <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+        </div>
+        <form className="assistant-composer" onSubmit={submit}>
+          <textarea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={busy} />
+          <footer><span>Agent 会展示调用工具与等待结果的全过程</span><Button type="submit" disabled={!draft.trim() || busy} aria-label="发送消息">发送 <span aria-hidden="true">↗</span></Button></footer>
         </form>
-      </div>
-    </div>
+      </section>
+
+      <aside className="assistant-inspector" aria-label="执行详情">
+        <p>执行详情</p>
+        <h2>{session.steps.length ? '当前任务轨迹' : '等待新指令'}</h2>
+        <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+      </aside>
+    </main>
   )
 }

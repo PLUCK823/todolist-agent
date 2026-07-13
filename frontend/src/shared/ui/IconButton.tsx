@@ -34,7 +34,7 @@ export function IconButton({
       type={type}
       aria-label={label}
       title={label}
-      className={`inline-flex shrink-0 items-center justify-center transition-[background-color,color,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] active:scale-[.97] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40 ${sizeClasses[size]} ${toneClasses[tone]} ${className}`}
+      className={`inline-flex shrink-0 items-center justify-center transition-[background-color,color,box-shadow,scale] duration-200 focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] active:scale-[.96] disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-40 ${sizeClasses[size]} ${toneClasses[tone]} ${className}`}
       {...props}
     >
       <span aria-hidden="true" className="flex items-center justify-center">

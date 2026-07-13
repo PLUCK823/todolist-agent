@@ -13,6 +13,7 @@ import {
 
 export function ShellProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ShellState>(readShellState)
+  const [headerActionsElement, setHeaderActionsElement] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
     writeShellState(state)
@@ -42,8 +43,8 @@ export function ShellProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const value = useMemo<ShellContextValue>(
-    () => ({ ...state, toggleNav, openAgent, closeAgent }),
-    [closeAgent, openAgent, state, toggleNav],
+    () => ({ ...state, headerActionsElement, toggleNav, openAgent, closeAgent, setHeaderActionsElement }),
+    [closeAgent, headerActionsElement, openAgent, state, toggleNav],
   )
 
   return <ShellContext.Provider value={value}>{children}</ShellContext.Provider>
