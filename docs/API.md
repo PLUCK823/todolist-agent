@@ -261,7 +261,23 @@ POST /api/agent/chat
 WS /api/agent/stream
 ```
 
-**连接后，发送文本消息即可。服务端逐条推送 JSON 事件：**
+连接后，客户端先发送一条消息请求。推荐使用 JSON；为兼容旧客户端，也接受纯文本（等价于仅提供 `message`）：
+
+```json
+{ "message": "删除待办 7", "session_id": "abc-123-def" }
+```
+
+`message` 必须为非空字符串；`session_id` 可省略，此时服务端在执行前生成并固定会话 ID。JSON 中的未知字段会被拒绝。
+
+服务端从 Agent 的实际执行点逐条转发事件，而不是在工具执行结束后补造进度。真实顺序如下：
+
+1. 调用 LLM 前发送 `step_started(understand)`；
+2. LLM 返回 tool call 后发送 `step_completed(understand)`；
+3. 每个工具真正执行前发送 `step_started(tool)`；
+4. 工具 await 返回后立即发送 `action_completed`，失败或超时则发送 `step_failed`；
+5. Agent 生成最终文本后发送 `reply`，最后发送 `done`。
+
+事件示例：
 
 ```json
 // 步骤开始：理解请求
@@ -290,7 +306,21 @@ WS /api/agent/stream
 { "type": "done" }
 ```
 
-前端应根据步骤事件展示等待、运行、完成和失败状态。上述事件是 UI 原型所需的目标契约；Agent 服务实现前仍可使用 Mock 事件，但字段名称和状态语义应保持一致。
+收到 `confirmation_required` 后，客户端必须在同一 WebSocket 连接中发送：
+
+```json
+{
+  "type": "confirmation_response",
+  "confirmation_id": "confirm-123",
+  "approved": true
+}
+```
+
+`approved` 必须是 JSON 布尔值，不能使用字符串或数字代替。确认 ID 与服务端保存的 `session_id`、工具名和完整参数绑定，并且只能消费一次；跨会话、重复或已过期的确认不会执行工具。`approved=false` 会把“用户取消”结果交回 Agent，删除接口不会被调用。确认超时会发送 `step_failed`，其 `error_code` 为 `CONFIRMATION_TIMEOUT`。
+
+同一个 WebSocket 消息处理过程中可以顺序出现多次 `confirmation_required`；客户端应逐次使用各自的 ID 回复，因此一个会话可以安全完成多轮确认。客户端断开连接时，服务端会取消仍在运行的 Agent/后端请求并清理未决确认，不会继续尝试向已断开的连接写事件。
+
+前端应根据步骤事件展示等待、运行、完成和失败状态。后端接口超时对应 `step_failed(error_code="TOOL_TIMEOUT", retryable=true)`，可用于展示重试入口。
 
 ### 3.3 获取对话历史
 

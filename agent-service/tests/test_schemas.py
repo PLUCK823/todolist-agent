@@ -9,6 +9,7 @@ from app.schemas import (
     ApiResponse,
     ChatRequest,
     ChatResponse,
+    ConfirmationResponse,
     ConversationMessage,
     PaginatedData,
     Todo,
@@ -113,6 +114,40 @@ class TestChatRequest:
     def test_empty_message_raises(self):
         with pytest.raises(ValidationError):
             ChatRequest(message="")
+
+    def test_blank_message_and_unknown_fields_raise(self):
+        with pytest.raises(ValidationError):
+            ChatRequest(message="   ")
+        with pytest.raises(ValidationError):
+            ChatRequest(message="你好", injected=True)
+
+
+class TestConfirmationResponse:
+    def test_valid_boolean_response(self):
+        response = ConfirmationResponse(
+            type="confirmation_response",
+            confirmation_id="confirm-1",
+            approved=False,
+        )
+        assert response.approved is False
+
+    @pytest.mark.parametrize("approved", ["true", 1, None])
+    def test_approval_is_strict_boolean(self, approved):
+        with pytest.raises(ValidationError):
+            ConfirmationResponse(
+                type="confirmation_response",
+                confirmation_id="confirm-1",
+                approved=approved,
+            )
+
+    def test_unknown_fields_are_rejected(self):
+        with pytest.raises(ValidationError):
+            ConfirmationResponse(
+                type="confirmation_response",
+                confirmation_id="confirm-1",
+                approved=True,
+                session_id="not-client-controlled",
+            )
 
 
 class TestChatResponse:

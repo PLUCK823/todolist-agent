@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -16,6 +17,7 @@ def _reset_agent():
 
     app.agent._reset_graph()
     app.agent._conversations.clear()
+    app.agent._pending_confirmations.clear()
 
 
 @pytest.fixture
@@ -27,12 +29,16 @@ def client() -> TestClient:
 
 
 # Mock agent return value
-def _mock_process_message(session_id, message):
+def _mock_process_message(session_id, message, on_event=None):
     """Default mock for process_message."""
     import uuid
 
     sid = session_id or str(uuid.uuid4())
-    return "这是模拟回复", [{"type": "create_todo", "result": {"id": 1, "title": "测试"}}], sid
+    return (
+        "这是模拟回复",
+        [{"type": "create_todo", "result": {"id": 1, "title": "测试"}}],
+        sid,
+    )
 
 
 def _seed_conversation(session_id: str):
@@ -65,7 +71,9 @@ def test_health_check(client):
 
 
 def test_chat_without_session_creates_one(client):
-    with patch("app.main.process_message", new=AsyncMock(side_effect=_mock_process_message)):
+    with patch(
+        "app.main.process_message", new=AsyncMock(side_effect=_mock_process_message)
+    ):
         resp = client.post(
             "/api/agent/chat",
             json={"message": "帮我创建一个待办"},
@@ -82,7 +90,9 @@ def test_chat_without_session_creates_one(client):
 
 def test_chat_with_existing_session(client):
     sid = "test-session-123"
-    with patch("app.main.process_message", new=AsyncMock(side_effect=_mock_process_message)):
+    with patch(
+        "app.main.process_message", new=AsyncMock(side_effect=_mock_process_message)
+    ):
         resp = client.post(
             "/api/agent/chat",
             json={"message": "你好", "session_id": sid},
@@ -179,12 +189,39 @@ def test_delete_history_success(client):
 
 
 def test_websocket_stream_chat(client):
-    """The WebSocket should send a sequence of typed events then close."""
-    async def _mock_stream(session_id, message):
-        import uuid
+    """The WebSocket directly forwards events emitted during execution."""
 
-        sid = session_id or str(uuid.uuid4())
-        return "这是流式回复", [{"type": "create_todo", "result": {"id": 1}}], sid
+    async def _mock_stream(session_id, message, on_event=None):
+        assert on_event is not None
+        await on_event(
+            {"type": "step_started", "step_id": "understand", "label": "理解请求"}
+        )
+        await on_event(
+            {"type": "step_completed", "step_id": "understand", "duration_ms": 2}
+        )
+        await on_event(
+            {
+                "type": "step_started",
+                "step_id": "create-1",
+                "label": "调用 Todo API",
+                "tool": "create_todo",
+                "args": {"title": "测试"},
+            }
+        )
+        await on_event(
+            {
+                "type": "action_completed",
+                "step_id": "create-1",
+                "action": "create_todo",
+                "result": {"id": 1},
+                "duration_ms": 10,
+            }
+        )
+        return (
+            "这是流式回复",
+            [{"type": "create_todo", "result": {"id": 1}}],
+            session_id,
+        )
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_mock_stream)):
         with client.websocket_connect("/api/agent/stream") as ws:
@@ -200,20 +237,33 @@ def test_websocket_stream_chat(client):
                 except Exception:
                     break
 
-    types = [e["type"] for e in events]
-    assert "step_started" in types
-    assert "step_completed" in types or "action_completed" in types
-    assert "reply" in types
-    assert "done" in types
+    assert [event["type"] for event in events] == [
+        "step_started",
+        "step_completed",
+        "step_started",
+        "action_completed",
+        "reply",
+        "done",
+    ]
 
 
 def test_websocket_sends_step_events(client):
     """Verify the step_started events have the required fields."""
-    async def _mock_stream(session_id, message):
-        import uuid
 
-        sid = session_id or str(uuid.uuid4())
-        return "好的", [], sid
+    async def _mock_stream(session_id, message, on_event=None):
+        assert on_event is not None
+        await on_event(
+            {
+                "type": "step_started",
+                "step_id": "understand",
+                "label": "理解请求",
+                "started_at": "2026-07-13T10:30:00Z",
+            }
+        )
+        await on_event(
+            {"type": "step_completed", "step_id": "understand", "duration_ms": 1}
+        )
+        return "好的", [], session_id
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_mock_stream)):
         with client.websocket_connect("/api/agent/stream") as ws:
@@ -241,3 +291,95 @@ def test_websocket_sends_step_events(client):
     assert "content" in replies[0]
 
     assert events[-1]["type"] == "done"
+
+
+def test_websocket_confirmation_response_resumes_bound_delete(client):
+    """The receive loop can approve a paused delete while processing runs."""
+    from app.agent import _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("delete_todo", {"todo_id": 7})]),
+            _aim("已删除"),
+        ]
+    )
+    delete = StubTool(result={"deleted": True, "id": 7})
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"delete_todo": delete}),
+        client.websocket_connect("/api/agent/stream") as ws,
+    ):
+        ws.send_json({"message": "删除 7", "session_id": "ws-owner"})
+        confirmation = None
+        while confirmation is None:
+            event = ws.receive_json()
+            if event["type"] == "confirmation_required":
+                confirmation = event
+        ws.send_json(
+            {
+                "type": "confirmation_response",
+                "confirmation_id": confirmation["confirmation_id"],
+                "approved": True,
+            }
+        )
+        remaining = []
+        while not remaining or remaining[-1]["type"] != "done":
+            remaining.append(ws.receive_json())
+
+    delete.ainvoke.assert_awaited_once_with({"todo_id": 7})
+    assert [event["type"] for event in remaining] == [
+        "action_completed",
+        "reply",
+        "done",
+    ]
+
+
+def test_websocket_disconnect_cancels_processing(client):
+    """Closing the socket cancels rather than detaching an agent task."""
+    cancelled = asyncio.Event()
+
+    async def _blocked(session_id, message, on_event=None):
+        await on_event({"type": "step_started", "step_id": "slow", "label": "慢任务"})
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    with patch("app.main.process_message", new=AsyncMock(side_effect=_blocked)):
+        with client.websocket_connect("/api/agent/stream") as ws:
+            ws.send_json({"message": "一直运行", "session_id": "disconnect-session"})
+            assert ws.receive_json()["step_id"] == "slow"
+
+    # TestClient drives the app loop until endpoint cleanup completes.
+    assert cancelled.is_set()
+
+
+def test_websocket_rejects_unvalidated_confirmation_frame(client):
+    """Unknown fields and non-boolean approvals never reach the resolver."""
+
+    async def _blocked(session_id, message, on_event=None):
+        await on_event({"type": "step_started", "step_id": "wait", "label": "等待确认"})
+        await asyncio.Future()
+
+    with (
+        patch("app.main.process_message", new=AsyncMock(side_effect=_blocked)),
+        patch("app.main.resolve_confirmation") as resolve,
+        client.websocket_connect("/api/agent/stream") as ws,
+    ):
+        ws.send_json({"message": "等待", "session_id": "validate-session"})
+        assert ws.receive_json()["step_id"] == "wait"
+        ws.send_json(
+            {
+                "type": "confirmation_response",
+                "confirmation_id": "confirm-x",
+                "approved": "yes",
+                "session_id": "attacker-controlled",
+            }
+        )
+        failure = ws.receive_json()
+
+    resolve.assert_not_called()
+    assert failure["type"] == "step_failed"
+    assert failure["error_code"] == "INVALID_CLIENT_EVENT"
