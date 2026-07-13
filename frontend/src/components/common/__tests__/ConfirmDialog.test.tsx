@@ -53,6 +53,11 @@ describe("ConfirmDialog", () => {
   });
 
   describe("interactions", () => {
+    it("disables confirmation when pending even without confirmDisabled", () => {
+      renderDialog({ pending: true });
+      expect(screen.getByRole("button", { name: "确认" })).toBeDisabled();
+    });
+
     it("disables all closing controls and gestures while pending", () => {
       const onCancel = vi.fn();
       renderDialog({ confirmDisabled: true, pending: true, onCancel });

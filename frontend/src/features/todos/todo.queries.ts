@@ -93,9 +93,26 @@ function filtersFromKey(key: readonly unknown[]): TodoFilters | null {
     : null
 }
 
+function hasNonCompletionFilters(filters: TodoFilters) {
+  return filters.priority !== undefined || (filters.keyword !== undefined && filters.keyword !== '')
+}
+
+export function matchesNonCompletionFilters(todo: Todo, filters: TodoFilters) {
+  if (filters.priority !== undefined && todo.priority !== filters.priority) return false
+  if (filters.keyword !== undefined && filters.keyword !== '') {
+    // Mirrors the repository's SQLite `title LIKE %keyword%` contract.
+    return todo.title.toLowerCase().includes(filters.keyword.toLowerCase())
+  }
+  return true
+}
+
 export function applyTodoCompletion(client: QueryClient, id: number, completed: boolean): TodoCompletionSnapshot {
   const cachedLists = client.getQueriesData<PaginatedData<Todo>>({ queryKey: todoKeys.lists() })
   const detail = client.getQueryData<Todo>(todoKeys.detail(id))
+  const original = detail
+    ? { ...detail }
+    : cachedLists.flatMap(([, current]) => current?.items ?? []).find((todo) => todo.id === id)
+  const changesCompletion = original?.completed !== completed
   const lists: TodoListCompletionPatch[] = []
   cachedLists.forEach(([key, current]) => {
     const filters = filtersFromKey(key)
@@ -104,10 +121,15 @@ export function applyTodoCompletion(client: QueryClient, id: number, completed: 
     const originalItem = originalIndex >= 0 ? current.items[originalIndex] : undefined
     const isTarget = filters.completed === completed
     const isSource = filters.completed === !completed
-    const totalDelta = isTarget ? 1 : isSource ? -1 : 0
-    const items = isSource
-      ? current.items.filter((todo) => todo.id !== id)
-      : current.items.map((todo) => todo.id === id ? { ...todo, completed } : todo)
+    const canAdjustTotal = changesCompletion && (original
+      ? matchesNonCompletionFilters(original, filters)
+      : !hasNonCompletionFilters(filters))
+    const totalDelta = canAdjustTotal ? (isTarget ? 1 : isSource ? -1 : 0) : 0
+    const items = !changesCompletion
+      ? current.items
+      : isSource
+        ? current.items.filter((todo) => todo.id !== id)
+        : current.items.map((todo) => todo.id === id ? { ...todo, completed } : todo)
 
     lists.push({ key, originalItem, originalIndex, totalDelta })
     client.setQueryData<PaginatedData<Todo>>(key, {
@@ -116,7 +138,9 @@ export function applyTodoCompletion(client: QueryClient, id: number, completed: 
       items,
     })
   })
-  client.setQueryData<Todo>(todoKeys.detail(id), (current) => current ? { ...current, completed } : current)
+  if (changesCompletion) {
+    client.setQueryData<Todo>(todoKeys.detail(id), (current) => current ? { ...current, completed } : current)
+  }
   return { lists, detail, id }
 }
 

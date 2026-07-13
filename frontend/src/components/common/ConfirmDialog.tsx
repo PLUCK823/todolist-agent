@@ -113,6 +113,7 @@ function ConfirmDialogContent({
   const animatedIn = phase === "entered";
   const interactive = phase !== "exiting";
   const canDismiss = interactive && !pending;
+  const effectiveConfirmDisabled = pending || confirmDisabled;
   const [restoreFocusTo] = useState<HTMLElement | null>(() => {
     const activeElement = document.activeElement;
     return activeElement instanceof HTMLElement && activeElement !== document.body
@@ -225,8 +226,8 @@ function ConfirmDialogContent({
           <button
             ref={confirmRef}
             type="button"
-            onClick={interactive && !confirmDisabled ? onConfirm : undefined}
-            disabled={!interactive || confirmDisabled}
+            onClick={interactive && !effectiveConfirmDisabled ? onConfirm : undefined}
+            disabled={!interactive || effectiveConfirmDisabled}
             aria-busy={pending || undefined}
             className={`px-4 py-2 text-sm font-medium text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors cursor-pointer ${buttonClass}`}
           >

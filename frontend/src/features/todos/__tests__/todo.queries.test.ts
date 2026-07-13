@@ -4,7 +4,7 @@ import { renderHook } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import { server } from '../../../mocks/server'
-import { applyTodoCompletion, restoreTodoCompletion, todoKeys, useCompleteTodo } from '../todo.queries'
+import { applyTodoCompletion, matchesNonCompletionFilters, restoreTodoCompletion, todoKeys, useCompleteTodo } from '../todo.queries'
 import type { PaginatedData, Todo } from '../todo.types'
 
 const active: Todo = { id: 1, title: 'active', description: '', priority: 'medium', completed: false, due_date: null, created_at: '', updated_at: '' }
@@ -21,6 +21,13 @@ function seededClient() {
 }
 
 describe('optimistic todo completion cache', () => {
+  it('mirrors repository keyword matching for title, case, and untrimmed input', () => {
+    const described = { ...active, title: 'Plan Launch', description: 'secret phrase' }
+    expect(matchesNonCompletionFilters(described, { keyword: 'LAUNCH' })).toBe(true)
+    expect(matchesNonCompletionFilters(described, { keyword: 'secret' })).toBe(false)
+    expect(matchesNonCompletionFilters(described, { keyword: ' Launch ' })).toBe(false)
+  })
+
   it('removes a completed task from active filters and updates matching caches', () => {
     const client = seededClient()
     applyTodoCompletion(client, 1, true)
@@ -45,6 +52,57 @@ describe('optimistic todo completion cache', () => {
     applyTodoCompletion(client, 1, true)
     expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: false }))).toMatchObject({ items: [], total: 7 })
     expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: true }))).toMatchObject({ items: [], total: 5 })
+  })
+
+  it('does not change source or target totals when priority does not match', () => {
+    const client = seededClient()
+    client.setQueryData(todoKeys.list({ completed: false, priority: 'high' }), page([], 6))
+    client.setQueryData(todoKeys.list({ completed: true, priority: 'high' }), page([], 3))
+    applyTodoCompletion(client, 1, true)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: false, priority: 'high' }))?.total).toBe(6)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: true, priority: 'high' }))?.total).toBe(3)
+  })
+
+  it('does not change filtered totals when the backend keyword contract does not match', () => {
+    const client = seededClient()
+    client.setQueryData(todoKeys.list({ completed: false, keyword: 'missing' }), page([], 5))
+    client.setQueryData(todoKeys.list({ completed: true, keyword: 'missing' }), page([], 2))
+    applyTodoCompletion(client, 1, true)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: false, keyword: 'missing' }))?.total).toBe(5)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: true, keyword: 'missing' }))?.total).toBe(2)
+  })
+
+  it('updates matching combined-filter totals off-page using an original found in another list', () => {
+    const client = seededClient()
+    client.removeQueries({ queryKey: todoKeys.detail(1), exact: true })
+    const source = { completed: false, priority: 'medium' as const, keyword: 'ACT' }
+    const target = { completed: true, priority: 'medium' as const, keyword: 'ACT' }
+    client.setQueryData(todoKeys.list(source), page([], 7))
+    client.setQueryData(todoKeys.list(target), page([], 4))
+    applyTodoCompletion(client, 1, true)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list(source))).toMatchObject({ items: [], total: 6 })
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list(target))).toMatchObject({ items: [], total: 5 })
+  })
+
+  it('does not inflate totals when the todo is already in the requested completion state', () => {
+    const client = seededClient()
+    applyTodoCompletion(client, 1, true)
+    applyTodoCompletion(client, 1, true)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: false }))?.total).toBe(0)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: true }))?.total).toBe(2)
+  })
+
+  it('updates only uncombined completion totals when the original todo is unknown', () => {
+    const client = new QueryClient()
+    client.setQueryData(todoKeys.list({ completed: false }), page([], 8))
+    client.setQueryData(todoKeys.list({ completed: true }), page([], 4))
+    client.setQueryData(todoKeys.list({ completed: false, priority: 'medium' }), page([], 3))
+    client.setQueryData(todoKeys.list({ completed: true, priority: 'medium' }), page([], 2))
+    applyTodoCompletion(client, 99, true)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: false }))?.total).toBe(7)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: true }))?.total).toBe(5)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: false, priority: 'medium' }))?.total).toBe(3)
+    expect(client.getQueryData<PaginatedData<Todo>>(todoKeys.list({ completed: true, priority: 'medium' }))?.total).toBe(2)
   })
 
   it('restores every list and detail snapshot after failure', () => {
