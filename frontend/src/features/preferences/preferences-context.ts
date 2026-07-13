@@ -3,7 +3,7 @@ import type { Preferences } from './preferences.types'
 
 export interface PreferencesContextValue {
   preferences: Preferences
-  updatePreferences(update: Partial<Preferences>): void
+  updatePreferences(update: Partial<Preferences>): Promise<void>
 }
 
 export const PreferencesContext = createContext<PreferencesContextValue | null>(null)

@@ -1,4 +1,4 @@
-import { useId, type InputHTMLAttributes, type ReactNode } from 'react'
+import { useId, type InputHTMLAttributes, type ReactNode, type Ref } from 'react'
 
 export interface TextFieldProps
   extends Omit<InputHTMLAttributes<HTMLInputElement>, 'size'> {
@@ -6,6 +6,7 @@ export interface TextFieldProps
   description?: string
   error?: string
   leadingIcon?: ReactNode
+  inputRef?: Ref<HTMLInputElement>
 }
 
 export function TextField({
@@ -14,6 +15,7 @@ export function TextField({
   description,
   error,
   leadingIcon,
+  inputRef,
   className = '',
   ...props
 }: TextFieldProps) {
@@ -36,10 +38,11 @@ export function TextField({
           </span>
         ) : null}
         <input
+          ref={inputRef}
           id={inputId}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`min-h-11 w-full rounded-[var(--radius-control)] border bg-white px-3 text-sm font-normal text-[var(--text)] shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow] placeholder:text-[var(--text-secondary)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-[var(--surface-subtle)] disabled:text-[var(--text-secondary)] ${leadingIcon ? 'pl-10' : ''} ${error ? 'border-[var(--danger-action)]' : 'border-[var(--border)]'} ${className}`}
+          className={`min-h-11 w-full rounded-[var(--radius-control)] border bg-[var(--control-bg)] px-3 text-sm font-normal text-[var(--text)] shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow] placeholder:text-[var(--control-placeholder)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-[var(--surface-subtle)] disabled:text-[var(--text-secondary)] ${leadingIcon ? 'pl-10' : ''} ${error ? 'border-[var(--danger-action)]' : 'border-[var(--border)]'} ${className}`}
           {...props}
         />
       </span>

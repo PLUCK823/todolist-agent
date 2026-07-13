@@ -1,0 +1,41 @@
+import type { AvatarValue } from '../auth/auth.types'
+
+const DB_NAME = 'todolist-profile'
+const STORE_NAME = 'avatars'
+const memoryBlobs = new Map<string, Blob>()
+
+function openDatabase(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null)
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, 1)
+    request.onupgradeneeded = () => request.result.createObjectStore(STORE_NAME)
+    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => reject(request.error ?? new Error('无法打开头像存储'))
+  })
+}
+
+export async function persistAvatarFile(file: File): Promise<AvatarValue> {
+  if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('仅支持 PNG 或 JPEG 图片')
+  if (file.size > 5 * 1024 * 1024) throw new Error('图片不能超过 5MB')
+  const key = `avatar:${crypto.randomUUID()}`
+  const database = await openDatabase()
+  if (!database) memoryBlobs.set(key, file)
+  else await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, 'readwrite')
+    transaction.objectStore(STORE_NAME).put(file, key)
+    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('头像存储失败')) }
+    transaction.onabort = transaction.onerror
+  })
+  return { kind: 'blob', value: key }
+}
+
+export async function getAvatarBlob(key: string): Promise<Blob | null> {
+  const database = await openDatabase()
+  if (!database) return memoryBlobs.get(key) ?? null
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(STORE_NAME).objectStore(STORE_NAME).get(key)
+    request.onsuccess = () => { database.close(); resolve(request.result instanceof Blob ? request.result : null) }
+    request.onerror = () => { database.close(); reject(request.error ?? new Error('读取头像失败')) }
+  })
+}

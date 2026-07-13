@@ -217,6 +217,17 @@ describe("ToastRegion", () => {
       });
       expect(screen.queryByText("操作成功")).not.toBeInTheDocument();
     });
+
+    it("does not retain the JS exit delay when motion is reduced", async () => {
+      vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+      renderToastApp();
+      await userEvent.click(screen.getByTestId("add-success"));
+      await userEvent.click(screen.getByTestId("remove-last"));
+
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByText("操作成功")).not.toBeInTheDocument();
+      vi.unstubAllGlobals();
+    });
   });
 
   describe("auto-dismiss (with fake timers)", () => {

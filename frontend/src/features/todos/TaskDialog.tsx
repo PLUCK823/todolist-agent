@@ -114,7 +114,7 @@ export function TaskDialog({
             value={description}
             rows={4}
             onChange={(event) => setDescription(event.target.value)}
-            className="w-full resize-y rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 py-2.5 text-sm font-normal leading-6 text-[var(--text)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
+            className="w-full resize-y rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] px-3 py-2.5 text-sm font-normal leading-6 text-[var(--text)] placeholder:text-[var(--control-placeholder)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
           />
         </label>
         <div className="grid gap-4 sm:grid-cols-2">
@@ -123,7 +123,7 @@ export function TaskDialog({
             <select
               value={priority}
               onChange={(event) => setPriority(event.target.value as TodoPriority)}
-              className="min-h-11 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-sm font-normal focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
+              className="min-h-11 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] px-3 text-sm font-normal text-[var(--text)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
             >
               <option value="high">高</option>
               <option value="medium">中</option>

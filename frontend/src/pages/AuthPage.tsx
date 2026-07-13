@@ -53,6 +53,7 @@ export default function AuthPage() {
     try {
       if (isRegister) {
         const account = await register({ name, email, password })
+        setPassword('')
         navigate('/login', { replace: true, state: { registeredEmail: account.email, from: returnTarget } })
       } else {
         await login({ email, password })
@@ -84,9 +85,9 @@ export default function AuthPage() {
           {state?.registeredEmail && !isRegister ? <p className="form-success" role="status">账号已创建，请登录</p> : null}
           {formError ? <p className="form-error" role="alert">{formError}</p> : null}
           <form onSubmit={handleSubmit} noValidate>
-            {isRegister ? <TextField label="显示名称" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} error={errors.name} placeholder="例如：Plucky HZ" /> : null}
-            <TextField label="邮箱地址" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} error={errors.email} placeholder="you@example.com" />
-            <TextField label="密码" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} error={errors.password} placeholder="至少 8 位" />
+            {isRegister ? <TextField name="name" label="显示名称" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} error={errors.name} placeholder="例如：Plucky HZ" /> : null}
+            <TextField name="email" label="邮箱地址" type="email" spellCheck={false} autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} error={errors.email} placeholder="you@example.com" />
+            <TextField name="password" label="密码" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} error={errors.password} placeholder="至少 8 位" />
             <Button type="submit" size="lg" disabled={pending} className="w-full" aria-label={isRegister ? '创建账号' : '登录'}>{pending ? '请稍候...' : isRegister ? '注册' : '登录'}</Button>
           </form>
           <p className="auth-form-card__switch">{isRegister ? <>已有账号？ <Link to="/login" state={{ from: returnTarget }}>去登录</Link></> : <>没有账号？ <Link to="/register" state={{ from: returnTarget }}>注册</Link></>}</p>

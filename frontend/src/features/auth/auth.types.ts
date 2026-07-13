@@ -3,6 +3,7 @@ export type AvatarPreset = 'amber' | 'ocean' | 'forest' | 'violet'
 export type AvatarValue =
   | { kind: 'preset'; value: AvatarPreset }
   | { kind: 'image'; value: string }
+  | { kind: 'blob'; value: string }
 
 export interface Account {
   id: string

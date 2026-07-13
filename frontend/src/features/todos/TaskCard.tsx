@@ -27,7 +27,7 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = fal
 
   return (
     <article
-      className="group flex min-h-[58px] items-center gap-3 rounded-[var(--radius-panel)] border border-[var(--border)] bg-white px-3.5 py-3 text-left shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--border-strong)] hover:shadow-[0_10px_26px_rgb(32_37_56_/_8%)]"
+      className="group flex min-h-[58px] items-center gap-3 rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-3 text-left shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--border-strong)] hover:shadow-[0_10px_26px_rgb(32_37_56_/_8%)]"
     >
       <button
         type="button"
@@ -36,7 +36,7 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = fal
         aria-busy={togglePending || undefined}
         disabled={togglePending}
         onClick={() => onToggle(todo)}
-        className={`grid h-8 w-8 flex-none place-items-center rounded-full border-[3px] text-xs font-bold transition-colors ${todo.completed ? 'border-[var(--success-action)] bg-[var(--success-action)] text-white' : 'border-[var(--control-border-strong)] bg-white text-transparent hover:border-[var(--primary)]'}`}
+        className={`grid h-8 w-8 flex-none place-items-center rounded-full border-[3px] text-xs font-bold transition-colors ${todo.completed ? 'border-[var(--success-action)] bg-[var(--success-action)] text-white' : 'border-[var(--control-border-strong)] bg-[var(--control-bg)] text-transparent hover:border-[var(--primary)]'}`}
       >
         ✓
       </button>

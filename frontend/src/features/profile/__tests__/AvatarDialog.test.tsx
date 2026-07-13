@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import AvatarDialog from '../AvatarDialog'
+import { persistAvatarFile } from '../avatar.storage'
 
 describe('AvatarDialog', () => {
   it('selects and saves one of four preset avatars', async () => {
@@ -12,6 +13,23 @@ describe('AvatarDialog', () => {
     await userEvent.click(screen.getByRole('radio', { name: '海蓝' }))
     await userEvent.click(screen.getByRole('button', { name: '保存头像' }))
     expect(onSave).toHaveBeenCalledWith({ kind: 'preset', value: 'ocean' })
+  })
+
+  it('keeps the dialog open and reports an asynchronous save failure', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('quota failed'))
+    render(<AvatarDialog open avatar="amber" onOpenChange={() => undefined} onSave={onSave} />)
+    await userEvent.click(screen.getByRole('radio', { name: '海蓝' }))
+    await userEvent.click(screen.getByRole('button', { name: '保存头像' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('头像保存失败')
+    expect(screen.getByRole('dialog', { name: '更换头像' })).toBeInTheDocument()
+  })
+
+  it('persists a file at the 5MB boundary without putting Base64 in localStorage', async () => {
+    localStorage.clear()
+    const file = new File([new Uint8Array(5 * 1024 * 1024)], 'avatar.png', { type: 'image/png' })
+    const avatar = await persistAvatarFile(file)
+    expect(avatar).toMatchObject({ kind: 'blob' })
+    expect(JSON.stringify(localStorage)).not.toContain('data:image')
   })
 
   it('rejects files that are not PNG/JPEG or exceed 5MB', async () => {

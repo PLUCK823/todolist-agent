@@ -37,11 +37,11 @@ export function TaskFilters({ filters, onChange, keyword = '', onKeywordChange }
           value={keyword}
           onChange={(event) => onKeywordChange?.(event.target.value)}
           placeholder="搜索任务…"
-          className="min-h-10 w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white pl-10 pr-3 text-sm text-[var(--text)] placeholder:text-[var(--text-secondary)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
+          className="min-h-10 w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] pl-10 pr-3 text-sm text-[var(--text)] placeholder:text-[var(--control-placeholder)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
         />
       </label>
       <div>
-        <button ref={statusRef} type="button" aria-label={statusLabel} onClick={() => setOpen(open === 'status' ? null : 'status')} className="min-h-10 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-sm font-semibold text-[var(--text-secondary)] hover:border-[var(--border-strong)]">{statusLabel}<span aria-hidden="true">⌄</span></button>
+        <button ref={statusRef} type="button" aria-label={statusLabel} onClick={() => setOpen(open === 'status' ? null : 'status')} className="min-h-10 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] px-3 text-sm font-semibold text-[var(--text-secondary)] hover:border-[var(--border-strong)]">{statusLabel}<span aria-hidden="true">⌄</span></button>
         <Popover open={open === 'status'} anchorRef={statusRef} ariaLabel="状态筛选" onOpenChange={(next) => setOpen(next ? 'status' : null)}>
           <button className={optionClass} onClick={() => patch({ completed: undefined })}>全部状态</button>
           <button className={optionClass} onClick={() => patch({ completed: false })}>进行中</button>
@@ -49,7 +49,7 @@ export function TaskFilters({ filters, onChange, keyword = '', onKeywordChange }
         </Popover>
       </div>
       <div>
-        <button ref={priorityRef} type="button" aria-label={priorityLabel} onClick={() => setOpen(open === 'priority' ? null : 'priority')} className="min-h-10 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-sm font-semibold text-[var(--text-secondary)] hover:border-[var(--border-strong)]">{priorityLabel}<span aria-hidden="true">⌄</span></button>
+        <button ref={priorityRef} type="button" aria-label={priorityLabel} onClick={() => setOpen(open === 'priority' ? null : 'priority')} className="min-h-10 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] px-3 text-sm font-semibold text-[var(--text-secondary)] hover:border-[var(--border-strong)]">{priorityLabel}<span aria-hidden="true">⌄</span></button>
         <Popover open={open === 'priority'} anchorRef={priorityRef} ariaLabel="优先级筛选" onOpenChange={(next) => setOpen(next ? 'priority' : null)}>
           <button className={optionClass} onClick={() => patch({ priority: undefined })}>全部优先级</button>
           <button className={optionClass} onClick={() => patch({ priority: 'high' })}>高优先级</button>
@@ -66,7 +66,7 @@ export function TaskFilters({ filters, onChange, keyword = '', onKeywordChange }
           const [sort_by, order] = event.target.value.split(':') as [TodoFilters['sort_by'], TodoFilters['order']]
           patch({ sort_by, order })
         }}
-        className="min-h-10 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-sm font-semibold text-[var(--text-secondary)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
+        className="min-h-10 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] px-3 text-sm font-semibold text-[var(--text-secondary)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
       >
         <option value="created_at:desc">最近创建</option>
         <option value="due_date:asc">截止时间</option>

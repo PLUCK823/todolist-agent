@@ -123,7 +123,7 @@ export function Dialog({
     <div
       ref={overlayRootRef}
       data-testid={overlayTestId}
-      className={`fixed inset-0 z-50 grid place-items-center bg-[rgb(24_28_43_/_48%)] p-4 backdrop-blur-[3px] motion-safe:animate-[overlay-enter_var(--motion-overlay)_both] ${overlayClassName}`}
+      className={`fixed inset-0 z-50 grid animate-[overlay-enter_var(--motion-overlay)_both] place-items-center bg-[rgb(24_28_43_/_48%)] p-4 backdrop-blur-[3px] ${overlayClassName}`}
       onMouseDown={(event) => {
         if (
           event.target === event.currentTarget &&
@@ -141,7 +141,7 @@ export function Dialog({
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className={`max-h-[min(760px,calc(100vh-2rem))] w-full max-w-lg overflow-auto rounded-[var(--radius-panel)] border border-white/80 bg-white shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] motion-safe:animate-[panel-enter_var(--motion-overlay)_both] ${panelClassName}`}
+        className={`max-h-[min(760px,calc(100vh-2rem))] w-full max-w-lg animate-[panel-enter_var(--motion-overlay)_both] overflow-auto rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] ${panelClassName}`}
       >
         <header className="flex items-start justify-between gap-5 border-b border-[var(--border)] px-6 pb-4 pt-5">
           <div>

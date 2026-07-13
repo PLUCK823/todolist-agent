@@ -325,7 +325,8 @@ button:not(:disabled),
 .profile-identity p { margin: 5px 0 0; color: var(--text-secondary); font-size: .76rem; }
 .profile-identity > button { margin-left: auto; }
 .profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
-.profile-grid > section { padding: 20px; }
+.profile-grid > section,
+.profile-grid > form { padding: 20px; }
 .profile-grid h2 { margin: 0 0 20px; font-size: .88rem; }
 .profile-form { display: grid; gap: 16px; }
 .profile-status dl { margin: 0 0 20px; }
@@ -339,8 +340,10 @@ button:not(:disabled),
 .profile-stats span { color: var(--text-muted); font-size: .68rem; }
 
 .avatar-picker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
-.avatar-picker button { display: grid; gap: 8px; place-items: center; border: 1px solid var(--border); border-radius: 13px; padding: 12px 8px; background: var(--surface); color: var(--text-secondary); font-size: .72rem; }
-.avatar-picker button[aria-checked="true"] { border-color: var(--primary); background: var(--primary-soft); color: var(--text); box-shadow: var(--focus-ring); }
+.avatar-picker label { position: relative; display: grid; gap: 8px; place-items: center; border: 1px solid var(--border); border-radius: 13px; padding: 12px 8px; background: var(--surface); color: var(--text-secondary); font-size: .72rem; cursor: pointer; }
+.avatar-picker label:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); color: var(--text); box-shadow: var(--focus-ring); }
+.avatar-picker label:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+.avatar-picker label > input { position: absolute; width: 1px; height: 1px; clip: rect(0, 0, 0, 0); }
 .avatar-picker .account-avatar { width: 48px; height: 48px; }
 .avatar-upload { display: inline-flex; min-height: 42px; align-items: center; margin-top: 18px; border: 1px dashed var(--control-border-strong); border-radius: 10px; padding: 0 14px; color: var(--text); font-size: .76rem; font-weight: 700; }
 .avatar-upload input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }

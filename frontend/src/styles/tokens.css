@@ -7,6 +7,8 @@
   --agent-bg: #262b3d;
   --surface: #ffffff;
   --surface-subtle: #f1f2f6;
+  --control-bg: #ffffff;
+  --control-placeholder: #646a7a;
   --text: #222738;
   --text-muted: #898e9d;
   --text-secondary: #646a7a;
@@ -64,6 +66,8 @@
   --page-bg: #10131c;
   --surface: #222634;
   --surface-subtle: #1b1f2c;
+  --control-bg: #282d3c;
+  --control-placeholder: #aeb3c0;
   --text: #f4f4f8;
   --text-muted: #999faf;
   --text-secondary: #c0c4d0;
@@ -80,6 +84,8 @@
     --page-bg: #10131c;
     --surface: #222634;
     --surface-subtle: #1b1f2c;
+    --control-bg: #282d3c;
+    --control-placeholder: #aeb3c0;
     --text: #f4f4f8;
     --text-muted: #999faf;
     --text-secondary: #c0c4d0;

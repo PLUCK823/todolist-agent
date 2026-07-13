@@ -39,7 +39,7 @@ function isSoon(todo: Todo) {
 
 function SummaryCard({ value, label }: { value: number; label: string }) {
   return (
-    <div className="rounded-[var(--radius-panel)] border border-[var(--border)] bg-white px-4 py-3 shadow-[0_1px_0_rgb(32_37_56_/_2%)]">
+    <div className="rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 shadow-[0_1px_0_rgb(32_37_56_/_2%)]">
       <strong className="block text-xl tracking-[-.03em] text-[var(--text)]">{value}</strong>
       <span className="mt-1 block text-xs text-[var(--text-secondary)]">{label}</span>
     </div>
@@ -182,7 +182,7 @@ export function TaskDashboard() {
       <div className="mt-5 min-h-64">
         {query.isLoading ? (
           <div role="status" className="grid gap-2" aria-label="正在加载任务">
-            {[1, 2, 3].map((item) => <div key={item} className="h-[58px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-white/70" />)}
+            {[1, 2, 3].map((item) => <div key={item} className="h-[58px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-[color:var(--surface)]/70" />)}
           </div>
         ) : query.isError ? (
           <section role="alert" className="rounded-[var(--radius-panel)] border border-red-100 bg-red-50 p-7 text-center">
@@ -191,7 +191,7 @@ export function TaskDashboard() {
             <Button size="sm" onClick={() => query.refetch()}>重新加载</Button>
           </section>
         ) : todos.length === 0 ? (
-          <section className="rounded-[var(--radius-panel)] border border-dashed border-[var(--border-strong)] bg-white/55 p-10 text-center">
+          <section className="rounded-[var(--radius-panel)] border border-dashed border-[var(--border-strong)] bg-[color:var(--surface)]/55 p-10 text-center">
             <h2 className="m-0 text-base font-bold">{hasFilters ? '没有符合条件的任务' : '还没有任务'}</h2>
             <p className="mb-4 mt-2 text-sm text-[var(--text-secondary)]">{hasFilters ? '换个关键词或清除筛选后再试。' : '从一件清晰的小事开始。'}</p>
             {hasFilters ? <Button variant="secondary" size="sm" onClick={() => { setKeyword(''); setFilters({ page: 1, page_size: PAGE_SIZE }) }}>清除筛选</Button> : <Button size="sm" onClick={() => setCreateOpen(true)}>新建任务</Button>}

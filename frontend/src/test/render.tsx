@@ -29,13 +29,15 @@ export function TestProviders({ children, initialEntries }: { children: ReactNod
   const queryClient = createTestQueryClient()
   const account: Account = { id: 'test-user', name: 'Plucky HZ', email: 'plucky@example.com', timezone: 'Asia/Shanghai (UTC+8)', avatar: { kind: 'preset', value: 'amber' }, taskCount: 37, agentSessionCount: 12 }
   const current = useRef(account)
+  const password = useRef('password1')
   const storage: AuthStorageAdapter = {
     register: async (input) => {
       current.current = { ...current.current, name: input.name, email: input.email }
+      password.current = input.password
       return current.current
     },
     login: async (input) => {
-      if (input.email !== current.current.email) throw new Error('邮箱或密码不正确')
+      if (input.email !== current.current.email || input.password !== password.current) throw new Error('邮箱或密码不正确')
       return current.current
     },
     logout: async () => undefined,

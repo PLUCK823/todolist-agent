@@ -6,8 +6,17 @@ export interface KeyValueStorage {
   removeItem(key: string): void
 }
 
-const ACCOUNT_KEY = 'todolist.auth.account'
-const SESSION_KEY = 'todolist.auth.session'
+export const AUTH_ACCOUNT_KEY = 'todolist.auth.account'
+export const AUTH_CREDENTIAL_KEY = 'todolist.auth.credential'
+export const AUTH_SESSION_KEY = 'todolist.auth.session'
+export const AUTH_STORAGE_KEYS = new Set<string | null>([AUTH_ACCOUNT_KEY, AUTH_CREDENTIAL_KEY, AUTH_SESSION_KEY, null])
+
+interface StoredCredential {
+  version: 1
+  accountId: string
+  salt: string
+  hash: string
+}
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase()
@@ -23,11 +32,74 @@ function parseAccount(value: string | null): Account | null {
   }
 }
 
-export function createAuthStorage(storage: KeyValueStorage): AuthStorageAdapter {
-  let prototypeCredential: { email: string; password: string } | null = null
+function parseCredential(value: string | null): StoredCredential | null {
+  if (!value) return null
+  try {
+    const credential = JSON.parse(value) as StoredCredential
+    return credential?.version === 1 && credential.accountId && credential.salt && credential.hash ? credential : null
+  } catch {
+    return null
+  }
+}
 
-  const readAccount = () => parseAccount(storage.getItem(ACCOUNT_KEY))
-  const writeAccount = (account: Account) => storage.setItem(ACCOUNT_KEY, JSON.stringify(account))
+function createResilientStorage(primary: KeyValueStorage): KeyValueStorage {
+  const fallback = new Map<string, string>()
+  const fallbackOnly = new Set<string>()
+
+  return {
+    getItem(key) {
+      try {
+        const value = primary.getItem(key)
+        if (value !== null) {
+          fallback.set(key, value)
+          fallbackOnly.delete(key)
+          return value
+        }
+        if (!fallbackOnly.has(key)) fallback.delete(key)
+        return fallbackOnly.has(key) ? fallback.get(key) ?? null : null
+      } catch {
+        return fallback.get(key) ?? null
+      }
+    },
+    setItem(key, value) {
+      fallback.set(key, value)
+      try {
+        primary.setItem(key, value)
+        fallbackOnly.delete(key)
+      } catch {
+        fallbackOnly.add(key)
+      }
+    },
+    removeItem(key) {
+      fallback.delete(key)
+      fallbackOnly.delete(key)
+      try {
+        primary.removeItem(key)
+      } catch {
+        // The in-memory copy is still cleared when persistent storage is blocked.
+      }
+    },
+  }
+}
+
+function toHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function hashPassword(password: string, salt: string) {
+  const encoded = new TextEncoder().encode(`${salt}:${password}`)
+  const digest = await crypto.subtle.digest('SHA-256', encoded)
+  return toHex(new Uint8Array(digest))
+}
+
+function createSalt() {
+  return toHex(crypto.getRandomValues(new Uint8Array(16)))
+}
+
+export function createAuthStorage(primaryStorage: KeyValueStorage): AuthStorageAdapter {
+  const storage = createResilientStorage(primaryStorage)
+  const readAccount = () => parseAccount(storage.getItem(AUTH_ACCOUNT_KEY))
+  const writeAccount = (account: Account) => storage.setItem(AUTH_ACCOUNT_KEY, JSON.stringify(account))
 
   return {
     async register(input: RegisterInput) {
@@ -40,38 +112,44 @@ export function createAuthStorage(storage: KeyValueStorage): AuthStorageAdapter 
         taskCount: 37,
         agentSessionCount: 12,
       }
-      prototypeCredential = { email: account.email, password: input.password }
+      const salt = createSalt()
+      const credential: StoredCredential = {
+        version: 1,
+        accountId: account.id,
+        salt,
+        hash: await hashPassword(input.password, salt),
+      }
       writeAccount(account)
-      storage.removeItem(SESSION_KEY)
+      storage.setItem(AUTH_CREDENTIAL_KEY, JSON.stringify(credential))
+      storage.removeItem(AUTH_SESSION_KEY)
       return account
     },
 
     async login(input: LoginInput) {
       const account = readAccount()
+      const credential = parseCredential(storage.getItem(AUTH_CREDENTIAL_KEY))
       const email = normalizeEmail(input.email)
-      const credentialMatches = prototypeCredential
-        ? prototypeCredential.email === email && prototypeCredential.password === input.password
-        : input.password.length >= 8
-      if (!account || account.email !== email || !credentialMatches) {
+      const hash = credential ? await hashPassword(input.password, credential.salt) : ''
+      if (!account || account.email !== email || credential?.accountId !== account.id || credential.hash !== hash) {
         throw new Error('邮箱或密码不正确')
       }
-      storage.setItem(SESSION_KEY, account.id)
+      storage.setItem(AUTH_SESSION_KEY, account.id)
       return account
     },
 
     async logout() {
-      storage.removeItem(SESSION_KEY)
+      storage.removeItem(AUTH_SESSION_KEY)
     },
 
     async getSession(): Promise<Session | null> {
       const account = readAccount()
-      if (!account || storage.getItem(SESSION_KEY) !== account.id) return null
+      if (!account || storage.getItem(AUTH_SESSION_KEY) !== account.id) return null
       return { account }
     },
 
     async updateProfile(input: ProfileUpdate) {
       const account = readAccount()
-      if (!account || storage.getItem(SESSION_KEY) !== account.id) throw new Error('登录状态已失效')
+      if (!account || storage.getItem(AUTH_SESSION_KEY) !== account.id) throw new Error('登录状态已失效')
       const updated = { ...account, ...input, email: input.email ? normalizeEmail(input.email) : account.email }
       writeAccount(updated)
       return updated
@@ -86,4 +164,13 @@ const memoryStorage: KeyValueStorage = {
   removeItem: (key) => fallbackStorage.delete(key),
 }
 
-export const authStorage = createAuthStorage(typeof window === 'undefined' ? memoryStorage : window.localStorage)
+function browserStorage(): KeyValueStorage {
+  if (typeof window === 'undefined') return memoryStorage
+  try {
+    return window.localStorage
+  } catch {
+    return memoryStorage
+  }
+}
+
+export const authStorage = createAuthStorage(browserStorage())

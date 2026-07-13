@@ -74,6 +74,7 @@ describe('AuthPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '创建账号' }))
     expect(await screen.findByDisplayValue('new@example.com')).toBeInTheDocument()
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/login|/tasks?priority=high#today')
+    await userEvent.clear(screen.getByLabelText('密码'))
     await userEvent.type(screen.getByLabelText('密码'), 'password1')
     await userEvent.click(screen.getByRole('button', { name: '登录' }))
     expect(screen.getByLabelText('当前位置')).toHaveTextContent('/tasks?priority=high#today|')

@@ -12,11 +12,13 @@ import {
   type ToastContextValue,
   type ToastType,
 } from "../../shared/ui/toast-context";
+import { useReducedMotion } from "../../features/preferences/useReducedMotion";
 
 // --- Provider ---
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const reduceMotion = useReducedMotion();
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) =>
@@ -25,8 +27,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     // Actually unmount after exit animation completes
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 300);
-  }, []);
+    }, reduceMotion ? 1 : 300);
+  }, [reduceMotion]);
 
   const addToast = useCallback(
     (type: ToastType, message: string) => {
@@ -41,7 +43,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <ToastRegion toasts={toasts} onRemove={removeToast} />
+      <ToastRegion toasts={toasts} onRemove={removeToast} reduceMotion={reduceMotion} />
     </ToastContext.Provider>
   );
 }
@@ -83,9 +85,11 @@ const toastConfig: Record<
 function ToastItem({
   toast,
   onRemove,
+  reduceMotion,
 }: {
   toast: Toast;
   onRemove: (id: string) => void;
+  reduceMotion: boolean;
 }) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -108,10 +112,12 @@ function ToastItem({
     backgroundColor: config.bgColor,
     borderLeft: `4px solid ${config.borderColor}`,
     opacity: toast.leaving ? 0 : 1,
-    transform: toast.leaving
+    transform: reduceMotion
+      ? "none"
+      : toast.leaving
       ? "translateX(100%) scale(0.95)"
       : "translateX(0) scale(1)",
-    transition: "opacity 0.25s ease-out, transform 0.25s ease-out",
+    transition: `opacity ${reduceMotion ? 1 : 250}ms ease-out, transform ${reduceMotion ? 1 : 250}ms ease-out`,
   };
 
   const iconStyle: React.CSSProperties = {
@@ -157,9 +163,10 @@ function ToastItem({
 interface ToastRegionProps {
   toasts: readonly Toast[];
   onRemove: (id: string) => void;
+  reduceMotion: boolean;
 }
 
-function ToastRegion({ toasts, onRemove }: ToastRegionProps) {
+function ToastRegion({ toasts, onRemove, reduceMotion }: ToastRegionProps) {
   if (toasts.length === 0) return null;
 
   return createPortal(
@@ -169,7 +176,7 @@ function ToastRegion({ toasts, onRemove }: ToastRegionProps) {
       data-overlay-allow-interaction
     >
       {toasts.map((toast) => (
-        <ToastItem key={toast.id} toast={toast} onRemove={onRemove} />
+        <ToastItem key={toast.id} toast={toast} onRemove={onRemove} reduceMotion={reduceMotion} />
       ))}
     </div>,
     document.body,

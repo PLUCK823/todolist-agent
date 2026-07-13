@@ -46,4 +46,17 @@ describe('ProfilePage', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存头像' }))
     expect(await screen.findByLabelText('Plucky HZ的头像')).toHaveClass('account-avatar--ocean')
   })
+
+  it('validates the profile form inline and focuses the first invalid field', async () => {
+    renderWithProviders(<ProfilePage />)
+    const name = await screen.findByLabelText('显示名称')
+    await userEvent.clear(name)
+    await userEvent.clear(screen.getByLabelText('邮箱地址'))
+    await userEvent.type(screen.getByLabelText('邮箱地址'), 'invalid-email')
+    await userEvent.click(screen.getByRole('button', { name: '保存修改' }))
+    expect(screen.getByText('请输入显示名称')).toBeInTheDocument()
+    expect(screen.getByText('请输入有效的邮箱地址')).toBeInTheDocument()
+    expect(name).toHaveAttribute('aria-invalid', 'true')
+    expect(name).toHaveFocus()
+  })
 })

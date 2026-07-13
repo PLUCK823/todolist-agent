@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ConfirmDialog from "../ConfirmDialog";
+import { Dialog } from "../../../shared/ui/Dialog";
+import { useState } from "react";
 
 function renderDialog(
   props: Partial<Parameters<typeof ConfirmDialog>[0]> = {},
@@ -278,6 +280,17 @@ describe("ConfirmDialog", () => {
       });
       expect(screen.getByRole("dialog")).toHaveStyle({ opacity: "1" });
     });
+
+    it("does not retain the JS exit delay when motion is reduced", () => {
+      vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+      const props = { title: "测试", message: "...", onConfirm: vi.fn(), onCancel: vi.fn() };
+      const { rerender } = render(<ConfirmDialog isOpen {...props} />);
+
+      rerender(<ConfirmDialog isOpen={false} {...props} />);
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      vi.unstubAllGlobals();
+    });
   });
 
   describe("variant styling", () => {
@@ -301,6 +314,44 @@ describe("ConfirmDialog", () => {
   });
 
   describe("accessibility", () => {
+    it("traps Tab focus inside the confirmation actions", async () => {
+      renderDialog();
+      const confirm = screen.getByRole("button", { name: "确认" });
+      const cancel = screen.getByRole("button", { name: "取消" });
+
+      expect(confirm).toHaveFocus();
+      await userEvent.tab();
+      expect(cancel).toHaveFocus();
+      await userEvent.tab({ shift: true });
+      expect(confirm).toHaveFocus();
+    });
+
+    it("joins the shared overlay stack so only the top overlay handles Escape", async () => {
+      function Harness() {
+        const [dialogOpen, setDialogOpen] = useState(true);
+        const [confirmOpen, setConfirmOpen] = useState(true);
+        return <>
+          <button type="button">页面操作</button>
+          <Dialog open={dialogOpen} title="底层弹窗" onOpenChange={setDialogOpen}>
+            <button type="button">底层操作</button>
+          </Dialog>
+          <ConfirmDialog isOpen={confirmOpen} title="顶层确认" message="继续吗？" onConfirm={vi.fn()} onCancel={() => setConfirmOpen(false)} />
+        </>;
+      }
+
+      render(<Harness />);
+      const bottom = screen.getByRole("dialog", { name: "底层弹窗" }).parentElement;
+      expect(bottom).toHaveAttribute("inert");
+
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog", { name: "顶层确认" })).not.toBeInTheDocument();
+      expect(screen.getByRole("dialog", { name: "底层弹窗" })).toBeInTheDocument();
+      expect(bottom).not.toHaveAttribute("inert");
+
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
     it("sets aria-modal to true on the dialog", () => {
       renderDialog();
       expect(screen.getByRole("dialog")).toHaveAttribute(

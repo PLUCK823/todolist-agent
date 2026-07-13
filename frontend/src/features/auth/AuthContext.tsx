@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { authStorage, type KeyValueStorage } from './auth.storage'
+import { AUTH_STORAGE_KEYS, authStorage, type KeyValueStorage } from './auth.storage'
 import type { Account, AuthStorageAdapter, LoginInput, ProfileUpdate, RegisterInput } from './auth.types'
 import { AuthContext, type AuthStatus } from './auth-context'
 
@@ -10,13 +10,42 @@ export function AuthProvider({ children, storage = authStorage, initialAccount }
   useEffect(() => {
     if (initialAccount) return
     let active = true
-    storage.getSession().then((session) => {
-      if (!active) return
-      setAccount(session?.account ?? null)
-      setStatus(session ? 'authenticated' : 'anonymous')
-    })
+    storage.getSession()
+      .then((session) => {
+        if (!active) return
+        setAccount(session?.account ?? null)
+        setStatus(session ? 'authenticated' : 'anonymous')
+      })
+      .catch(() => {
+        if (!active) return
+        setAccount(null)
+        setStatus('anonymous')
+      })
     return () => { active = false }
   }, [initialAccount, storage])
+
+  useEffect(() => {
+    let active = true
+    const syncSession = async (event: StorageEvent) => {
+      if (!AUTH_STORAGE_KEYS.has(event.key)) return
+      try {
+        const session = await storage.getSession()
+        if (!active) return
+        setAccount(session?.account ?? null)
+        setStatus(session ? 'authenticated' : 'anonymous')
+      } catch {
+        if (!active) return
+        setAccount(null)
+        setStatus('anonymous')
+      }
+    }
+    const onStorage = (event: StorageEvent) => { void syncSession(event) }
+    window.addEventListener('storage', onStorage)
+    return () => {
+      active = false
+      window.removeEventListener('storage', onStorage)
+    }
+  }, [storage])
 
   const login = useCallback(async (input: LoginInput) => {
     const next = await storage.login(input)

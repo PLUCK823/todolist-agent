@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Button } from '../../shared/ui/Button'
 import { Dialog } from '../../shared/ui/Dialog'
 import type { AvatarPreset, AvatarValue } from '../auth/auth.types'
+import { getAvatarBlob, persistAvatarFile } from './avatar.storage'
 
 const presets: { value: AvatarPreset; label: string; initials: string }[] = [
   { value: 'amber', label: '暖橙', initials: 'HZ' },
@@ -12,11 +13,27 @@ const presets: { value: AvatarPreset; label: string; initials: string }[] = [
 
 export function Avatar({ avatar, name, className = '' }: { avatar: AvatarValue; name: string; className?: string }) {
   if (avatar.kind === 'image') return <img className={`account-avatar ${className}`} src={avatar.value} alt={`${name}的头像`} />
+  if (avatar.kind === 'blob') return <StoredAvatar storageKey={avatar.value} name={name} className={className} />
   const preset = presets.find((item) => item.value === avatar.value) ?? presets[0]
   return <span className={`account-avatar account-avatar--${preset.value} ${className}`} aria-label={`${name}的头像`}>{preset.initials}</span>
 }
 
-interface AvatarDialogProps { open: boolean; avatar: AvatarValue | AvatarPreset; onOpenChange(open: boolean): void; onSave(avatar: AvatarValue): void }
+function StoredAvatar({ storageKey, name, className }: { storageKey: string; name: string; className: string }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    let active = true
+    let objectUrl = ''
+    getAvatarBlob(storageKey).then((blob) => {
+      if (!active || !blob) return
+      objectUrl = URL.createObjectURL(blob)
+      setUrl(objectUrl)
+    }).catch(() => undefined)
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [storageKey])
+  return url ? <img className={`account-avatar ${className}`} src={url} alt={`${name}的头像`} /> : <span className={`account-avatar account-avatar--amber ${className}`} aria-label={`${name}的头像`}>…</span>
+}
+
+interface AvatarDialogProps { open: boolean; avatar: AvatarValue | AvatarPreset; onOpenChange(open: boolean): void; onSave(avatar: AvatarValue): void | Promise<void> }
 
 export default function AvatarDialog({ open, ...props }: AvatarDialogProps) {
   return open ? <AvatarDialogSession {...props} /> : null
@@ -27,6 +44,7 @@ function AvatarDialogSession({ avatar, onOpenChange, onSave }: Omit<AvatarDialog
   const [selected, setSelected] = useState<AvatarValue>({ kind: 'preset', value: initialPreset })
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [pending, setPending] = useState(false)
   const fileRef = useRef<File | null>(null)
 
   useEffect(() => () => { if (previewUrl) URL.revokeObjectURL(previewUrl) }, [previewUrl])
@@ -44,18 +62,29 @@ function AvatarDialogSession({ avatar, onOpenChange, onSave }: Omit<AvatarDialog
     setSelected({ kind: 'image', value: url })
   }
 
-  const save = () => {
-    const file = fileRef.current
-    if (!file) { onSave(selected); onOpenChange(false); return }
-    const reader = new FileReader()
-    reader.onload = () => { onSave({ kind: 'image', value: String(reader.result) }); onOpenChange(false) }
-    reader.readAsDataURL(file)
+  const choosePreset = (preset: AvatarPreset) => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null); fileRef.current = null
+    setSelected({ kind: 'preset', value: preset }); setError('')
+  }
+
+  const save = async () => {
+    setPending(true); setError('')
+    try {
+      const value = fileRef.current ? await persistAvatarFile(fileRef.current) : selected
+      await onSave(value)
+      onOpenChange(false)
+    } catch {
+      setError('头像保存失败，请稍后重试')
+    } finally {
+      setPending(false)
+    }
   }
 
   return (
-    <Dialog open onOpenChange={onOpenChange} title="更换头像" description="选择一个预设头像，或上传你自己的图片。" footer={<><Button variant="secondary" onClick={() => onOpenChange(false)}>取消</Button><Button onClick={save}>保存头像</Button></>}>
+    <Dialog open onOpenChange={onOpenChange} title="更换头像" description="选择一个预设头像，或上传你自己的图片。" footer={<><Button variant="secondary" onClick={() => onOpenChange(false)} disabled={pending}>取消</Button><Button onClick={save} disabled={pending}>{pending ? '保存中…' : '保存头像'}</Button></>}>
       <div className="avatar-picker" role="radiogroup" aria-label="预设头像">
-        {presets.map((preset) => <button key={preset.value} type="button" role="radio" aria-checked={selected.kind === 'preset' && selected.value === preset.value} aria-label={preset.label} onClick={() => { setSelected({ kind: 'preset', value: preset.value }); fileRef.current = null }}><Avatar avatar={{ kind: 'preset', value: preset.value }} name={preset.label} /><span>{preset.label}</span></button>)}
+        {presets.map((preset) => <label key={preset.value}><input type="radio" name="avatar-preset" value={preset.value} checked={selected.kind === 'preset' && selected.value === preset.value} onChange={() => choosePreset(preset.value)} aria-label={preset.label} /><Avatar avatar={{ kind: 'preset', value: preset.value }} name={preset.label} /><span>{preset.label}</span></label>)}
       </div>
       <label className="avatar-upload">上传头像<input aria-label="上传头像" type="file" accept="image/png,image/jpeg" onChange={chooseFile} /></label>
       {previewUrl ? <img className="avatar-upload__preview" src={previewUrl} alt="头像预览" /> : null}

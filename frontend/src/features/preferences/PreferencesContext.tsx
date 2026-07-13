@@ -6,7 +6,15 @@ const PREFERENCES_KEY = 'todolist.preferences'
 
 function readPreferences(): Preferences {
   try {
-    return { ...defaultPreferences, ...JSON.parse(localStorage.getItem(PREFERENCES_KEY) ?? '{}') }
+    const value: unknown = JSON.parse(localStorage.getItem(PREFERENCES_KEY) ?? '{}')
+    if (!value || typeof value !== 'object') return defaultPreferences
+    const candidate = value as Partial<Preferences>
+    return {
+      language: candidate.language === 'zh-CN' ? candidate.language : defaultPreferences.language,
+      theme: candidate.theme === 'system' || candidate.theme === 'light' || candidate.theme === 'dark' ? candidate.theme : defaultPreferences.theme,
+      agentStartsOpen: typeof candidate.agentStartsOpen === 'boolean' ? candidate.agentStartsOpen : defaultPreferences.agentStartsOpen,
+      reducedMotion: candidate.reducedMotion === null || typeof candidate.reducedMotion === 'boolean' ? candidate.reducedMotion : defaultPreferences.reducedMotion,
+    }
   } catch {
     return defaultPreferences
   }
@@ -24,12 +32,10 @@ export function PreferencesProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({
     preferences,
-    updatePreferences(update: Partial<Preferences>) {
-      setPreferences((current) => {
-        const next = { ...current, ...update }
-        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next))
-        return next
-      })
+    async updatePreferences(update: Partial<Preferences>) {
+      const next = { ...preferences, ...update }
+      localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next))
+      setPreferences(next)
     },
   }), [preferences])
 

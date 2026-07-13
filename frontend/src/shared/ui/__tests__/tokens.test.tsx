@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import tokens from '../../../styles/tokens.css?raw'
+import { render, screen } from '@testing-library/react'
+import { Dialog } from '../Dialog'
+import { TextField } from '../TextField'
 
 function token(name: string) {
   const match = tokens.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))
@@ -49,5 +52,30 @@ describe('V6 color tokens', () => {
 
   it('provides 3:1 non-text contrast for the unchecked completion ring', () => {
     expect(contrastRatio(token('control-border-strong'), '#ffffff')).toBeGreaterThanOrEqual(3)
+  })
+
+  it('defines surface and control tokens for explicit and system dark themes', () => {
+    const explicitDark = tokens.match(/:root\[data-theme="dark"\]\s*\{([\s\S]*?)\}/)?.[1] ?? ''
+    const systemDark = tokens.match(/:root\[data-theme="system"\]\s*\{([\s\S]*?)\}/)?.[1] ?? ''
+
+    for (const block of [explicitDark, systemDark]) {
+      expect(block).toContain('--surface:')
+      expect(block).toContain('--control-bg:')
+      expect(block).toContain('--control-placeholder:')
+    }
+  })
+
+  it('keeps shared fields and dialogs on theme-aware surfaces', () => {
+    render(
+      <>
+        <TextField label="名称" placeholder="输入名称" />
+        <Dialog open title="主题弹窗" onOpenChange={() => undefined}>
+          内容
+        </Dialog>
+      </>,
+    )
+
+    expect(screen.getByRole('textbox', { name: '名称' })).toHaveClass('bg-[var(--control-bg)]')
+    expect(screen.getByRole('dialog', { name: '主题弹窗' })).toHaveClass('bg-[var(--surface)]')
   })
 })

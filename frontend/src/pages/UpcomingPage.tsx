@@ -84,7 +84,7 @@ export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
           <p className="mb-0 mt-1 text-sm text-[var(--text-secondary)]">按时间查看即将到来的任务</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
-          <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-[var(--border)] bg-white px-3 text-sm font-semibold text-[var(--text-secondary)] focus-within:shadow-[var(--focus-ring)]">
+          <label className="inline-flex min-h-10 cursor-pointer items-center gap-2 rounded-[var(--radius-control)] border border-[var(--border)] bg-[var(--control-bg)] px-3 text-sm font-semibold text-[var(--text-secondary)] focus-within:shadow-[var(--focus-ring)]">
             <input
               type="checkbox"
               checked={showCompleted}
@@ -102,9 +102,9 @@ export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
       {query.isLoading ? (
         <div role="status" aria-label="正在加载近期安排" className="mt-5 grid gap-3">
           <div className="grid grid-cols-7 gap-2">
-            {Array.from({ length: 7 }, (_, index) => <div key={index} className="h-[74px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-white/70" />)}
+            {Array.from({ length: 7 }, (_, index) => <div key={index} className="h-[74px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-[color:var(--surface)]/70" />)}
           </div>
-          <div className="h-24 animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-white/70" />
+          <div className="h-24 animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-[color:var(--surface)]/70" />
         </div>
       ) : query.isError ? (
         <section role="alert" className="mt-5 rounded-[var(--radius-panel)] border border-red-100 bg-red-50 p-7 text-center">

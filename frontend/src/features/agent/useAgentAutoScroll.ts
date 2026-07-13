@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from 'react'
 import type { AgentMessage, AgentSessionStatus, AgentStep } from './agent.types'
+import { useReducedMotion } from '../preferences/useReducedMotion'
 
 export function getAgentScrollRevision(value: { status: AgentSessionStatus; messages: AgentMessage[]; steps: AgentStep[] }) {
   const message = value.messages.at(-1)
@@ -21,6 +22,7 @@ export function useAgentAutoScroll(
   endRef: RefObject<HTMLElement | null>,
   revision: string,
 ) {
+  const reduceMotion = useReducedMotion()
   const shouldFollow = useRef(true)
   const onScroll = useCallback(() => {
     const container = containerRef.current
@@ -30,9 +32,8 @@ export function useAgentAutoScroll(
 
   useEffect(() => {
     if (!shouldFollow.current) return
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
     endRef.current?.scrollIntoView?.({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'end' })
-  }, [endRef, revision])
+  }, [endRef, reduceMotion, revision])
 
   return onScroll
 }
