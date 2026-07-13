@@ -22,11 +22,11 @@ type CreateTodoRequest struct {
 
 // UpdateTodoRequest represents the input for updating a todo (all fields optional)
 type UpdateTodoRequest struct {
-	Title       *string    `json:"title"`
-	Description *string    `json:"description"`
-	Priority    *string    `json:"priority"`
-	Completed   *bool      `json:"completed"`
-	DueDate     *time.Time `json:"due_date"`
+	Title       *string            `json:"title"`
+	Description *string            `json:"description"`
+	Priority    *string            `json:"priority"`
+	Completed   *bool              `json:"completed"`
+	DueDate     model.OptionalTime `json:"due_date"`
 }
 
 // ListTodosRequest represents the input for listing todos
@@ -166,8 +166,8 @@ func (s *TodoService) Update(id uint, req UpdateTodoRequest) (*model.Todo, error
 	if req.Completed != nil {
 		todo.Completed = *req.Completed
 	}
-	if req.DueDate != nil {
-		todo.DueDate = req.DueDate
+	if req.DueDate.Set {
+		todo.DueDate = req.DueDate.Value
 	}
 
 	if err := todo.Validate(); err != nil {

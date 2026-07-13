@@ -18,6 +18,8 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   onCancel: () => void;
   variant?: ConfirmVariant;
+  confirmDisabled?: boolean;
+  pending?: boolean;
 }
 
 const variantButtonClasses: Record<ConfirmVariant, string> = {
@@ -100,6 +102,8 @@ function ConfirmDialogContent({
   onConfirm,
   onCancel,
   variant = "danger",
+  confirmDisabled = false,
+  pending = false,
   phase,
   onTransitionEnd,
 }: ConfirmDialogProps & {
@@ -219,8 +223,9 @@ function ConfirmDialogContent({
           <button
             ref={confirmRef}
             type="button"
-            onClick={interactive ? onConfirm : undefined}
-            disabled={!interactive}
+            onClick={interactive && !confirmDisabled ? onConfirm : undefined}
+            disabled={!interactive || confirmDisabled}
+            aria-busy={pending || undefined}
             className={`px-4 py-2 text-sm font-medium text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors cursor-pointer ${buttonClass}`}
           >
             {confirmLabel}

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -10,8 +11,8 @@ import (
 
 // mockRepo implements TodoRepository interface for testing
 type mockRepo struct {
-	todos    map[uint]*model.Todo
-	nextID   uint
+	todos  map[uint]*model.Todo
+	nextID uint
 }
 
 func newMockRepo() *mockRepo {
@@ -205,6 +206,42 @@ func TestUpdate_Success(t *testing.T) {
 	}
 	if todo.Title != "Updated" {
 		t.Errorf("expected title 'Updated', got '%s'", todo.Title)
+	}
+}
+
+func TestUpdate_ExplicitNullClearsDueDate(t *testing.T) {
+	repo := newMockRepo()
+	svc := NewTodoService(repo)
+	due := time.Now().Add(24 * time.Hour)
+	created, _ := svc.Create(CreateTodoRequest{Title: "Dated", DueDate: &due})
+	var req UpdateTodoRequest
+	if err := json.Unmarshal([]byte(`{"due_date":null}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(created.ID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DueDate != nil {
+		t.Fatalf("expected explicit null to clear due date, got %v", updated.DueDate)
+	}
+}
+
+func TestUpdate_MissingDueDatePreservesValue(t *testing.T) {
+	repo := newMockRepo()
+	svc := NewTodoService(repo)
+	due := time.Now().Add(24 * time.Hour)
+	created, _ := svc.Create(CreateTodoRequest{Title: "Dated", DueDate: &due})
+	var req UpdateTodoRequest
+	if err := json.Unmarshal([]byte(`{"title":"Renamed"}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(created.ID, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DueDate == nil || !updated.DueDate.Equal(due) {
+		t.Fatalf("expected missing due_date to preserve %v, got %v", due, updated.DueDate)
 	}
 }
 

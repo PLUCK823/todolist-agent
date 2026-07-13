@@ -1,4 +1,3 @@
-import type { KeyboardEvent } from 'react'
 import { IconButton } from '../../shared/ui/IconButton'
 import type { Todo } from './todo.types'
 
@@ -7,6 +6,7 @@ interface TaskCardProps {
   onOpen(todo: Todo): void
   onToggle(todo: Todo): void
   onDelete(todo: Todo): void
+  togglePending?: boolean
 }
 
 const priority = {
@@ -22,14 +22,8 @@ function formatDueDate(value: string | null) {
   }).format(new Date(value))
 }
 
-export function TaskCard({ todo, onOpen, onToggle, onDelete }: TaskCardProps) {
+export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = false }: TaskCardProps) {
   const badge = priority[todo.priority]
-  const openFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      onOpen(todo)
-    }
-  }
 
   return (
     <article
@@ -39,8 +33,10 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete }: TaskCardProps) {
         type="button"
         aria-label={`${todo.completed ? '取消完成' : '完成任务'}：${todo.title}`}
         aria-pressed={todo.completed}
+        aria-busy={togglePending || undefined}
+        disabled={togglePending}
         onClick={() => onToggle(todo)}
-        className={`grid h-5 w-5 flex-none place-items-center rounded-full border-2 text-[10px] font-bold transition-colors ${todo.completed ? 'border-[var(--success-action)] bg-[var(--success-action)] text-white' : 'border-[var(--border-strong)] bg-white text-transparent hover:border-[var(--primary)]'}`}
+        className={`grid h-8 w-8 flex-none place-items-center rounded-full border-[3px] text-xs font-bold transition-colors ${todo.completed ? 'border-[var(--success-action)] bg-[var(--success-action)] text-white' : 'border-[var(--control-border-strong)] bg-white text-transparent hover:border-[var(--primary)]'}`}
       >
         ✓
       </button>
@@ -48,11 +44,10 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete }: TaskCardProps) {
         type="button"
         aria-label={`查看任务：${todo.title}`}
         onClick={() => onOpen(todo)}
-        onKeyDown={openFromKeyboard}
-        className="min-w-0 flex-1 rounded-md text-left focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+        className="min-w-0 flex-1 rounded-md text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--primary)]"
       >
         <div className="flex items-center gap-2">
-          <strong className={`truncate text-sm text-[var(--text)] ${todo.completed ? 'line-through opacity-55' : ''}`}>{todo.title}</strong>
+          <strong className={`truncate text-sm text-[var(--text)] ${todo.completed ? 'line-through' : ''}`}>{todo.title}</strong>
           <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${badge.className}`}>{badge.label}</span>
         </div>
         <p className="mb-0 mt-1 truncate text-xs text-[var(--text-secondary)]">
@@ -63,7 +58,7 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete }: TaskCardProps) {
         label={`删除任务：${todo.title}`}
         size="sm"
         onClick={() => onDelete(todo)}
-        className="opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        className="text-[var(--text-secondary)]"
         icon={<svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M4 6h12M8 3h4l1 3H7l1-3Zm-2 3 1 11h6l1-11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
       />
     </article>

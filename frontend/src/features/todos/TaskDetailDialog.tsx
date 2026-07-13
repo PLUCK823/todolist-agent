@@ -27,10 +27,10 @@ export function TaskDetailDialog({ open, todo, onOpenChange, onEdit }: TaskDetai
       onOpenChange={onOpenChange}
       footer={<Button onClick={onEdit}>编辑任务</Button>}
     >
-      <dl className="grid gap-5 text-sm">
+      <dl className="min-w-0 grid gap-5 text-sm">
         <div>
           <dt className="font-semibold text-[var(--text-secondary)]">描述</dt>
-          <dd className="mb-0 ml-0 mt-1 whitespace-pre-wrap leading-6 text-[var(--text)]">
+          <dd className="mb-0 ml-0 mt-1 break-words whitespace-pre-wrap leading-6 text-[var(--text)]">
             {todo.description || '暂无描述'}
           </dd>
         </div>

@@ -99,8 +99,8 @@ func (m *mockService) Update(id uint, req service.UpdateTodoRequest) (*model.Tod
 	if req.Completed != nil {
 		todo.Completed = *req.Completed
 	}
-	if req.DueDate != nil {
-		todo.DueDate = req.DueDate
+	if req.DueDate.Set {
+		todo.DueDate = req.DueDate.Value
 	}
 	todo.UpdatedAt = time.Now()
 	return todo, nil
@@ -347,6 +347,22 @@ func TestHandler_UpdateTodo(t *testing.T) {
 	data := resp["data"].(map[string]interface{})
 	if data["title"] != "Updated" {
 		t.Errorf("expected title 'Updated', got '%v'", data["title"])
+	}
+}
+
+func TestHandler_UpdateTodo_ExplicitNullClearsDueDate(t *testing.T) {
+	svc := newMockService()
+	due := time.Now().Add(24 * time.Hour)
+	svc.Create(service.CreateTodoRequest{Title: "Dated", DueDate: &due})
+	router := setupTestRouter(svc)
+	w := makeRequest(router, "PUT", "/api/todos/1", map[string]interface{}{"due_date": nil})
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+	resp := parseResponse(t, w)
+	data := resp["data"].(map[string]interface{})
+	if data["due_date"] != nil {
+		t.Fatalf("expected null due_date, got %v", data["due_date"])
 	}
 }
 

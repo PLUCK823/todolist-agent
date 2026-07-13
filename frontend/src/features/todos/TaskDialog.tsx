@@ -3,14 +3,14 @@ import { Button } from '../../shared/ui/Button'
 import { Dialog } from '../../shared/ui/Dialog'
 import { TextField } from '../../shared/ui/TextField'
 import { getApiErrorMessage } from './todo.api'
-import type { CreateTodoDTO, Todo, TodoPriority } from './todo.types'
+import type { Todo, TodoFormDTO, TodoPriority } from './todo.types'
 
 interface TaskDialogProps {
   open: boolean
   mode: 'create' | 'edit'
   todo?: Todo | null
   onOpenChange(open: boolean): void
-  onSubmit(data: CreateTodoDTO): Promise<void>
+  onSubmit(data: TodoFormDTO): Promise<void>
 }
 
 function toLocalInput(date: string | null | undefined) {
@@ -43,7 +43,9 @@ export function TaskDialog({ open, mode, todo, onOpenChange, onSubmit }: TaskDia
         title: title.trim(),
         description: description.trim(),
         priority,
-        ...(dueDate ? { due_date: new Date(dueDate).toISOString() } : {}),
+        ...(dueDate
+          ? { due_date: new Date(dueDate).toISOString() }
+          : mode === 'edit' ? { due_date: null } : {}),
       })
     } catch (error) {
       setRequestError(getApiErrorMessage(error))

@@ -53,6 +53,12 @@ describe("ConfirmDialog", () => {
   });
 
   describe("interactions", () => {
+    it("disables and marks confirm busy while pending", () => {
+      renderDialog({ confirmDisabled: true, pending: true });
+      const confirm = screen.getByRole("button", { name: "确认" });
+      expect(confirm).toBeDisabled();
+      expect(confirm).toHaveAttribute("aria-busy", "true");
+    });
     it("calls onConfirm when the confirm button is clicked", async () => {
       const onConfirm = vi.fn();
       renderDialog({ onConfirm });

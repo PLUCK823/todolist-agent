@@ -32,10 +32,11 @@ export function TaskFilters({ filters, onChange, keyword = '', onKeywordChange }
         <input
           type="search"
           aria-label="搜索任务"
+          autoComplete="off"
           value={keyword}
           onChange={(event) => onKeywordChange?.(event.target.value)}
-          placeholder="搜索任务"
-          className="min-h-10 w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white pl-10 pr-3 text-sm text-[var(--text)] placeholder:text-[var(--text-muted)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
+          placeholder="搜索任务…"
+          className="min-h-10 w-full rounded-[var(--radius-control)] border border-[var(--border)] bg-white pl-10 pr-3 text-sm text-[var(--text)] placeholder:text-[var(--text-secondary)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)]"
         />
       </label>
       <div>

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import ConfirmDialog from '../../components/common/ConfirmDialog'
 import { useDebounce } from '../../hooks/useDebounce'
 import { Button } from '../../shared/ui/Button'
@@ -17,7 +17,7 @@ import { TaskCard } from './TaskCard'
 import { TaskDetailDialog } from './TaskDetailDialog'
 import { TaskDialog } from './TaskDialog'
 import { TaskFilters } from './TaskFilters'
-import type { CreateTodoDTO, Todo, TodoFilters } from './todo.types'
+import type { CreateTodoDTO, Todo, TodoFilters, TodoFormDTO } from './todo.types'
 
 const PAGE_SIZE = 10
 
@@ -45,22 +45,23 @@ function SummaryCard({ value, label }: { value: number; label: string }) {
   )
 }
 
-function TaskGroup({ title, todos, onOpen, onToggle, onDelete }: {
+function TaskGroup({ title, todos, onOpen, onToggle, onDelete, pendingToggleIds }: {
   title: string
   todos: Todo[]
   onOpen(todo: Todo): void
   onToggle(todo: Todo): void
   onDelete(todo: Todo): void
+  pendingToggleIds?: ReadonlySet<number>
 }) {
   if (!todos.length) return null
   return (
     <section className="grid gap-2" aria-labelledby={`group-${title}`}>
       <header className="flex items-center justify-between px-0.5">
         <h2 id={`group-${title}`} className="m-0 text-xs font-bold tracking-[.02em] text-[var(--text)]">{title}</h2>
-        <span className="text-[11px] text-[var(--text-muted)]">{todos.length} 项</span>
+        <span className="text-[11px] text-[var(--text-secondary)]">{todos.length} 项</span>
       </header>
       <div className="grid gap-2">
-        {todos.map((todo) => <TaskCard key={todo.id} todo={todo} onOpen={onOpen} onToggle={onToggle} onDelete={onDelete} />)}
+        {todos.map((todo) => <TaskCard key={todo.id} todo={todo} togglePending={pendingToggleIds?.has(todo.id)} onOpen={onOpen} onToggle={onToggle} onDelete={onDelete} />)}
       </div>
     </section>
   )
@@ -73,6 +74,9 @@ export function TaskDashboard() {
   const [detailTodo, setDetailTodo] = useState<Todo | null>(null)
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [deletingTodo, setDeletingTodo] = useState<Todo | null>(null)
+  const [pendingToggleIds, setPendingToggleIds] = useState<ReadonlySet<number>>(new Set())
+  const toggleGuardsRef = useRef(new Set<number>())
+  const deleteGuardRef = useRef(false)
   const debouncedKeyword = useDebounce(keyword, 300)
   const toast = useToast()
   const effectiveFilters = useMemo(() => ({
@@ -96,13 +100,19 @@ export function TaskDashboard() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const hasFilters = Boolean(keyword || filters.completed !== undefined || filters.priority)
 
-  async function create(data: CreateTodoDTO) {
-    await createMutation.mutateAsync(data)
+  async function create(data: TodoFormDTO) {
+    const dto: CreateTodoDTO = {
+      title: data.title,
+      description: data.description,
+      priority: data.priority,
+      ...(typeof data.due_date === 'string' ? { due_date: data.due_date } : {}),
+    }
+    await createMutation.mutateAsync(dto)
     setCreateOpen(false)
     toast.addToast('success', '任务已创建')
   }
 
-  async function update(data: CreateTodoDTO) {
+  async function update(data: TodoFormDTO) {
     if (!editingTodo) return
     await updateMutation.mutateAsync({ id: editingTodo.id, dto: data })
     setEditingTodo(null)
@@ -110,20 +120,36 @@ export function TaskDashboard() {
   }
 
   function toggle(todo: Todo) {
+    if (toggleGuardsRef.current.has(todo.id)) return
+    toggleGuardsRef.current.add(todo.id)
+    setPendingToggleIds((current) => new Set(current).add(todo.id))
     const mutation = todo.completed ? uncompleteMutation : completeMutation
-    mutation.mutate(todo.id, {
-      onError: (error) => toast.addToast('error', getApiErrorMessage(error)),
-    })
+    void mutation.mutateAsync(todo.id)
+      .catch((error) => toast.addToast('error', getApiErrorMessage(error)))
+      .finally(() => {
+        toggleGuardsRef.current.delete(todo.id)
+        setPendingToggleIds((current) => {
+          const next = new Set(current)
+          next.delete(todo.id)
+          return next
+        })
+      })
   }
 
   async function remove() {
-    if (!deletingTodo) return
+    if (!deletingTodo || deleteGuardRef.current) return
+    deleteGuardRef.current = true
     try {
       await deleteMutation.mutateAsync(deletingTodo.id)
+      if ((filters.page ?? 1) > 1 && todos.length === 1) {
+        setFilters((current) => ({ ...current, page: Math.max(1, (current.page ?? 1) - 1) }))
+      }
       setDeletingTodo(null)
       toast.addToast('success', '任务已删除')
     } catch (error) {
       toast.addToast('error', getApiErrorMessage(error))
+    } finally {
+      deleteGuardRef.current = false
     }
   }
 
@@ -131,7 +157,7 @@ export function TaskDashboard() {
     <main className="mx-auto w-full max-w-[1120px] px-7 py-7 xl:px-9">
       <header className="flex flex-wrap items-start justify-between gap-5">
         <div>
-          <p className="m-0 text-[11px] font-bold tracking-[.18em] text-[var(--text-muted)]">{formatToday()}</p>
+          <p className="m-0 text-[11px] font-bold tracking-[.18em] text-[var(--text-secondary)]">{formatToday()}</p>
           <h1 className="mb-0 mt-2 text-[28px] font-extrabold tracking-[-.04em] text-[var(--text)]">今天，保持专注</h1>
           <p className="mb-0 mt-1 text-sm text-[var(--text-secondary)]">还有 {summary.active} 项任务等待完成</p>
         </div>
@@ -167,9 +193,9 @@ export function TaskDashboard() {
           </section>
         ) : (
           <div className="grid gap-5">
-            <TaskGroup title="即将到期" todos={soon} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
-            <TaskGroup title="稍后处理" todos={later} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
-            <TaskGroup title="已完成" todos={completed} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
+            <TaskGroup title="即将到期" todos={soon} pendingToggleIds={pendingToggleIds} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
+            <TaskGroup title="稍后处理" todos={later} pendingToggleIds={pendingToggleIds} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
+            <TaskGroup title="已完成" todos={completed} pendingToggleIds={pendingToggleIds} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
           </div>
         )}
       </div>
@@ -190,6 +216,8 @@ export function TaskDashboard() {
         title="删除任务"
         message={<>确定删除“{deletingTodo?.title}”吗？此操作无法撤销。</>}
         confirmLabel={deleteMutation.isPending ? '删除中…' : '确认删除'}
+        confirmDisabled={deleteMutation.isPending}
+        pending={deleteMutation.isPending}
         onCancel={() => { if (!deleteMutation.isPending) setDeletingTodo(null) }}
         onConfirm={() => { if (!deleteMutation.isPending) void remove() }}
         variant="danger"

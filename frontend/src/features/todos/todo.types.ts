@@ -22,7 +22,14 @@ export interface UpdateTodoDTO {
   title?: string
   description?: string
   priority?: TodoPriority
-  due_date?: string
+  due_date?: string | null
+}
+
+export interface TodoFormDTO {
+  title: string
+  description?: string
+  priority?: TodoPriority
+  due_date?: string | null
 }
 
 export interface ApiResponse<T> {

@@ -9,6 +9,7 @@ import { server } from '../../../mocks/server'
 import { TaskDashboard } from '../TaskDashboard'
 import { TaskCard } from '../TaskCard'
 import { TaskDetailDialog } from '../TaskDetailDialog'
+import { createTodo } from '../todo.api'
 import type { Todo } from '../todo.types'
 
 function renderDashboard() {
@@ -217,6 +218,26 @@ describe('TaskDashboard', () => {
     expect(await screen.findByRole('button', { name: '完成任务：完成项目文档' })).toBeVisible()
   })
 
+  it('guards a task from concurrent completion toggles', async () => {
+    let completeRequests = 0
+    let resolveRequest!: () => void
+    const pending = new Promise<void>((resolve) => { resolveRequest = resolve })
+    server.use(http.patch('/api/todos/:id/complete', async () => {
+      completeRequests += 1
+      await pending
+      return HttpResponse.json({ code: 0, message: 'ok', data: { ...fixture, id: 1, title: '完成项目文档', completed: true } })
+    }))
+    renderDashboard()
+    const toggle = await screen.findByRole('button', { name: '完成任务：完成项目文档' })
+    fireEvent.click(toggle)
+    fireEvent.click(toggle)
+    await waitFor(() => expect(completeRequests).toBe(1))
+    const pendingToggle = screen.getByRole('button', { name: '取消完成：完成项目文档' })
+    expect(pendingToggle).toBeDisabled()
+    expect(pendingToggle).toHaveAttribute('aria-busy', 'true')
+    resolveRequest()
+  })
+
   it('rolls optimistic completion back when the request fails', async () => {
     server.use(
       http.patch('/api/todos/:id/complete', () =>
@@ -245,6 +266,48 @@ describe('TaskDashboard', () => {
     await user.click(screen.getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(screen.queryByText('健身 30 分钟')).not.toBeInTheDocument())
     expect(screen.getByRole('alert')).toHaveTextContent('任务已删除')
+  })
+
+  it('submits delete only once during rapid confirmation', async () => {
+    let requests = 0
+    server.use(http.delete('/api/todos/:id', () => { requests += 1; return new HttpResponse(null, { status: 204 }) }))
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByText('健身 30 分钟')
+    await user.click(screen.getByRole('button', { name: '删除任务：健身 30 分钟' }))
+    const confirm = screen.getByRole('button', { name: '确认删除' })
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
+    await waitFor(() => expect(requests).toBe(1))
+    expect(screen.queryByText('待办不存在')).not.toBeInTheDocument()
+  })
+
+  it('moves to the previous page after deleting the only item on the last page', async () => {
+    for (let index = 0; index < 7; index += 1) await createTodo({ title: `分页任务 ${index}` })
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByRole('navigation', { name: '任务分页' })
+    await user.click(screen.getByRole('button', { name: '下一页' }))
+    expect(await screen.findByText('第 2 / 2 页')).toBeVisible()
+    const deleteButton = await screen.findByRole('button', { name: /^删除任务：/ })
+    await user.click(deleteButton)
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(screen.queryByText('第 2 / 2 页')).not.toBeInTheDocument())
+    expect(await screen.findByText('分页任务 0')).toBeVisible()
+  })
+
+  it('clears an existing deadline and keeps it cleared after reopening', async () => {
+    const user = userEvent.setup()
+    renderDashboard()
+    await user.click(await screen.findByRole('button', { name: '查看任务：完成项目文档' }))
+    await user.click(screen.getByRole('button', { name: '编辑任务' }))
+    expect(screen.getByLabelText('截止时间')).not.toHaveValue('')
+    await user.clear(screen.getByLabelText('截止时间'))
+    await user.click(screen.getByRole('button', { name: '保存修改' }))
+    await user.click(await screen.findByRole('button', { name: '查看任务：完成项目文档' }))
+    expect(screen.getByText('未设置')).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '编辑任务' }))
+    expect(screen.getByLabelText('截止时间')).toHaveValue('')
   })
 
   it('keeps a task visible when delete fails', async () => {
@@ -294,9 +357,11 @@ describe('TaskCard', () => {
     expect(screen.getByText(/未设置截止时间/)).toBeVisible()
   })
 
-  it.each(['Enter', ' '] as const)('opens details from the %s key', (key) => {
+  it.each([['Enter', '{Enter}'], ['Space', ' ']] as const)('opens details from the %s key using native button behavior', async (_label, key) => {
+    const user = userEvent.setup()
     const { onOpen, todo } = renderCard()
-    fireEvent.keyDown(screen.getByRole('button', { name: '查看任务：测试卡片' }), { key })
+    screen.getByRole('button', { name: '查看任务：测试卡片' }).focus()
+    await user.keyboard(key)
     expect(onOpen).toHaveBeenCalledWith(todo)
   })
 
@@ -336,6 +401,14 @@ describe('TaskCard', () => {
     renderCard({ completed: true })
     expect(screen.getByText('测试卡片')).toHaveClass('line-through')
     expect(screen.getByRole('button', { name: '取消完成：测试卡片' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('uses an AA-sized completion target and high-contrast native focus', () => {
+    renderCard()
+    expect(screen.getByRole('button', { name: '完成任务：测试卡片' })).toHaveClass('h-8', 'w-8')
+    expect(screen.getByRole('button', { name: '查看任务：测试卡片' })).toHaveClass('focus-visible:outline-2')
+    expect(screen.getByText('测试卡片')).not.toHaveClass('opacity-55')
+    expect(screen.getByRole('button', { name: '删除任务：测试卡片' })).not.toHaveClass('opacity-60')
   })
 })
 

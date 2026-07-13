@@ -46,4 +46,8 @@ describe('V6 color tokens', () => {
   ])('provides AA contrast for --%s on its priority badge surface', (name, surface) => {
     expect(contrastRatio(token(name), surface)).toBeGreaterThanOrEqual(4.5)
   })
+
+  it('provides 3:1 non-text contrast for the unchecked completion ring', () => {
+    expect(contrastRatio(token('control-border-strong'), '#ffffff')).toBeGreaterThanOrEqual(3)
+  })
 })
