@@ -9,15 +9,19 @@
   --surface-subtle: #f1f2f6;
   --text: #222738;
   --text-muted: #898e9d;
+  --text-secondary: #646a7a;
   --text-on-dark: #f8f8fb;
   --primary: #7165ea;
   --primary-hover: #5f54d9;
+  --primary-action: #5f54d9;
   --primary-soft: #efedff;
   --border: #e3e5eb;
   --border-strong: #d4d7e0;
   --success: #54ad82;
+  --success-action: #287a54;
   --warning: #d99b3f;
   --danger: #d9574c;
+  --danger-action: #b7423a;
 
   --shadow-panel: 0 18px 50px rgb(32 37 56 / 12%);
   --shadow-overlay: 0 24px 80px rgb(21 25 38 / 24%);
@@ -36,14 +40,14 @@
   --color-nav-expanded: var(--nav-bg);
   --color-agent-bg: var(--agent-bg);
   --color-text-primary: var(--text);
-  --color-text-secondary: var(--text-muted);
-  --color-primary: var(--primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-primary: var(--primary-action);
   --color-primary-hover: var(--primary-hover);
   --color-border: var(--border);
-  --color-success: var(--success);
+  --color-success: var(--success-action);
   --color-warning: var(--warning);
-  --color-danger: var(--danger);
-  --color-high-priority: var(--danger);
+  --color-danger: var(--danger-action);
+  --color-high-priority: var(--danger-action);
   --color-medium-priority: var(--warning);
   --color-low-priority: var(--text-muted);
 }

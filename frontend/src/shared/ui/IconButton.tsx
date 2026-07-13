@@ -15,8 +15,8 @@ const sizeClasses = {
 }
 
 const toneClasses = {
-  default: 'text-[var(--text-muted)] hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]',
-  primary: 'bg-[var(--primary)] text-white hover:bg-[var(--primary-hover)]',
+  default: 'text-[var(--text-secondary)] hover:bg-[var(--surface-subtle)] hover:text-[var(--text)]',
+  primary: 'bg-[var(--primary-action)] text-white hover:bg-[var(--primary-hover)]',
   onDark: 'text-white/70 hover:bg-white/10 hover:text-white',
 }
 

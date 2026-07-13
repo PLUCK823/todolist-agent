@@ -6,6 +6,8 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { IconButton } from './IconButton'
+import { isTopOverlay, registerOverlay } from './overlay-stack'
 
 export interface DialogProps {
   open: boolean
@@ -35,6 +37,7 @@ export function Dialog({
 }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const restoreFocusRef = useRef<HTMLElement | null>(null)
+  const overlayIdRef = useRef(Symbol('dialog'))
   const titleId = useId()
   const descriptionId = useId()
 
@@ -43,13 +46,15 @@ export function Dialog({
 
     const activeElement = document.activeElement
     restoreFocusRef.current = activeElement instanceof HTMLElement ? activeElement : null
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const unregister = registerOverlay({
+      id: overlayIdRef.current,
+      element: () => dialogRef.current,
+      restoreFocusTo: restoreFocusRef.current,
+    })
     dialogRef.current?.focus()
 
     return () => {
-      document.body.style.overflow = previousOverflow
-      restoreFocusRef.current?.focus()
+      unregister()
       restoreFocusRef.current = null
     }
   }, [open])
@@ -58,7 +63,7 @@ export function Dialog({
     if (!open) return
 
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && isTopOverlay(overlayIdRef.current)) {
         event.preventDefault()
         onOpenChange(false)
       }
@@ -68,7 +73,7 @@ export function Dialog({
     return () => document.removeEventListener('keydown', handleEscape)
   }, [onOpenChange, open])
 
-  if (!open) return null
+  if (!open || typeof document === 'undefined') return null
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Tab') return
@@ -100,7 +105,12 @@ export function Dialog({
     <div
       className="fixed inset-0 z-50 grid place-items-center bg-[rgb(24_28_43_/_48%)] p-4 backdrop-blur-[3px] motion-safe:animate-[overlay-enter_var(--motion-overlay)_both]"
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onOpenChange(false)
+        if (
+          event.target === event.currentTarget &&
+          isTopOverlay(overlayIdRef.current)
+        ) {
+          onOpenChange(false)
+        }
       }}
     >
       <div
@@ -113,15 +123,27 @@ export function Dialog({
         onKeyDown={handleKeyDown}
         className="max-h-[min(760px,calc(100vh-2rem))] w-full max-w-lg overflow-auto rounded-[var(--radius-panel)] border border-white/80 bg-white shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] motion-safe:animate-[panel-enter_var(--motion-overlay)_both]"
       >
-        <header className="border-b border-[var(--border)] px-6 pb-4 pt-5">
-          <h2 id={titleId} className="m-0 text-lg font-bold tracking-[-.015em] text-[var(--text)]">
-            {title}
-          </h2>
-          {description ? (
-            <p id={descriptionId} className="mb-0 mt-1 text-sm leading-6 text-[var(--text-muted)]">
-              {description}
-            </p>
-          ) : null}
+        <header className="flex items-start justify-between gap-5 border-b border-[var(--border)] px-6 pb-4 pt-5">
+          <div>
+            <h2 id={titleId} className="m-0 text-lg font-bold tracking-[-.015em] text-[var(--text)]">
+              {title}
+            </h2>
+            {description ? (
+              <p id={descriptionId} className="mb-0 mt-1 text-sm leading-6 text-[var(--text-secondary)]">
+                {description}
+              </p>
+            ) : null}
+          </div>
+          <IconButton
+            label={`关闭${title}`}
+            icon={
+              <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true">
+                <path d="m5 5 10 10M15 5 5 15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+            }
+            size="sm"
+            onClick={() => onOpenChange(false)}
+          />
         </header>
         <div className="px-6 py-5">{children}</div>
         {footer ? (

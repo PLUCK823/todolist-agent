@@ -30,7 +30,7 @@ export function TextField({
         {leadingIcon ? (
           <span
             aria-hidden="true"
-            className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-[var(--text-muted)]"
+            className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-[var(--text-secondary)]"
           >
             {leadingIcon}
           </span>
@@ -39,17 +39,17 @@ export function TextField({
           id={inputId}
           aria-invalid={error ? true : undefined}
           aria-describedby={describedBy}
-          className={`min-h-11 w-full rounded-[var(--radius-control)] border bg-white px-3 text-sm font-normal text-[var(--text)] shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow] placeholder:text-[var(--text-muted)]/70 focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-[var(--surface-subtle)] disabled:text-[var(--text-muted)] ${leadingIcon ? 'pl-10' : ''} ${error ? 'border-[var(--danger)]' : 'border-[var(--border)]'} ${className}`}
+          className={`min-h-11 w-full rounded-[var(--radius-control)] border bg-white px-3 text-sm font-normal text-[var(--text)] shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow] placeholder:text-[var(--text-secondary)] focus:border-[var(--primary)] focus:outline-none focus:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:bg-[var(--surface-subtle)] disabled:text-[var(--text-secondary)] ${leadingIcon ? 'pl-10' : ''} ${error ? 'border-[var(--danger-action)]' : 'border-[var(--border)]'} ${className}`}
           {...props}
         />
       </span>
       {description ? (
-        <span id={descriptionId} className="text-xs font-normal text-[var(--text-muted)]">
+        <span id={descriptionId} className="text-xs font-normal text-[var(--text-secondary)]">
           {description}
         </span>
       ) : null}
       {error ? (
-        <span id={errorId} role="alert" className="text-xs font-medium text-[var(--danger)]">
+        <span id={errorId} role="alert" className="text-xs font-medium text-[var(--danger-action)]">
           {error}
         </span>
       ) : null}
