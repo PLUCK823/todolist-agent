@@ -147,6 +147,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   }, [])
 
   const resolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
+    if (clearingRef.current) return
     if (stateRef.current.pendingConfirmation?.confirmationId !== confirmationId) return
     const sent = controlRef.current?.({
       type: 'confirmation_response',
@@ -167,14 +168,21 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   )
 
   const cancel = useCallback(() => {
+    if (clearingRef.current) return
     generationRef.current++
     closeStream()
-    if (!clearingRef.current) dispatch({ type: 'cancelled' })
+    dispatch({ type: 'cancelled' })
   }, [closeStream, dispatch])
 
   const clear = useCallback((): Promise<void> => {
     if (clearPromiseRef.current) return clearPromiseRef.current
     const currentSessionId = stateRef.current.sessionId
+    if (!currentSessionId) {
+      generationRef.current++
+      closeStream()
+      dispatch({ type: 'clear' })
+      return Promise.resolve()
+    }
     const generation = ++generationRef.current
     clearingRef.current = true
     closeStream()

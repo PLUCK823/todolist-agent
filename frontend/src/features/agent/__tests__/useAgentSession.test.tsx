@@ -605,6 +605,53 @@ describe('useAgentSession', () => {
     await act(() => first)
   })
 
+  it('does not retain an empty clear promise across a later real session', async () => {
+    const clearHistory = vi.fn().mockResolvedValue(undefined)
+    const client = new ControlledClient()
+    const { result } = renderHook(() => useAgentSession({
+      client, historyApi: { clear: clearHistory }, sessionIdFactory: () => 'later-session',
+    }))
+
+    await act(() => result.current.clear())
+    expect(clearHistory).not.toHaveBeenCalled()
+    act(() => result.current.send('稍后创建的会话'))
+    act(() => client.handlers[0].onEvent({ type: 'done' }))
+    await act(() => result.current.clear())
+
+    expect(clearHistory).toHaveBeenCalledTimes(1)
+    expect(clearHistory).toHaveBeenCalledWith('later-session')
+    expect(result.current.messages).toEqual([])
+    expect(result.current.sessionId).toBeUndefined()
+  })
+
+  it('treats cancel as a no-op while clear is pending and still commits successful clear', async () => {
+    let resolveHistory!: () => void
+    const pending = new Promise<void>((resolve) => { resolveHistory = resolve })
+    const client = new ControlledClient()
+    const { result } = renderHook(() => useAgentSession({
+      client, historyApi: { clear: vi.fn(() => pending) }, sessionIdFactory: () => 's',
+    }))
+    act(() => result.current.send('待清理会话'))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({
+      type: 'confirmation_required', step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+    }))
+    let clearPromise!: Promise<void>
+    act(() => { clearPromise = result.current.clear() })
+    act(() => {
+      result.current.cancel()
+      result.current.confirm('confirm-1')
+      result.current.reject('confirm-1')
+    })
+
+    expect(result.current.messages).toHaveLength(1)
+    expect(client.controls).toEqual([])
+    resolveHistory()
+    await act(() => clearPromise)
+    expect(result.current.messages).toEqual([])
+    expect(result.current.status).toBe('idle')
+  })
+
   it('ignores all callbacks after done or failure terminal states', () => {
     const client = new ControlledClient()
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
