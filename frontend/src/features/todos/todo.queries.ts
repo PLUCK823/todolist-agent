@@ -50,7 +50,11 @@ export async function fetchUpcomingTodos(
   for (let page = 2; page <= pageCount; page += 1) {
     const before = unique.size
     const result = await fetchTodos({ ...filters, page }, signal)
-    if (result.page !== page || result.page_size !== first.page_size) {
+    if (
+      result.page !== page ||
+      result.page_size !== first.page_size ||
+      result.total !== first.total
+    ) {
       throw new ApiError(-2, '任务分页响应异常，请稍后重试', 200)
     }
     result.items.forEach((todo) => unique.set(todo.id, todo))

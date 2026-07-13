@@ -199,6 +199,24 @@ describe('todo API contract', () => {
     expect(result.items).toHaveLength(2)
   })
 
+  it('rejects a page containing more items than page_size', async () => {
+    server.use(http.get('/api/todos', () => HttpResponse.json({
+      code: 0,
+      message: 'ok',
+      data: {
+        items: [
+          { id: 1, title: 'one', description: '', priority: 'medium', completed: false, due_date: null, created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' },
+          { id: 2, title: 'two', description: '', priority: 'medium', completed: false, due_date: null, created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' },
+        ],
+        total: 2,
+        page: 1,
+        page_size: 1,
+      },
+    })))
+
+    await expect(fetchTodos()).rejects.toMatchObject({ name: 'ApiError', message: '服务响应异常，请稍后重试' })
+  })
+
   it('fetches a task by id', async () => {
     await expect(fetchTodo(1)).resolves.toMatchObject({ id: 1, title: '完成项目文档' })
   })

@@ -104,7 +104,8 @@ function validatePage(value: unknown, status: number): PaginatedData<Todo> {
   if (
     !Array.isArray(page.items) || !Number.isInteger(page.total) || page.total! < 0 ||
     !Number.isInteger(page.page) || page.page! < 1 ||
-    !Number.isInteger(page.page_size) || page.page_size! < 1
+    !Number.isInteger(page.page_size) || page.page_size! < 1 ||
+    page.items.length > (page.page_size ?? 0)
   ) throw contractError(status)
   return { ...page, items: page.items.map((todo) => validateTodo(todo, status)) } as PaginatedData<Todo>
 }

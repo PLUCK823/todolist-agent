@@ -224,6 +224,16 @@ describe('upcoming pagination query', () => {
     await expect(fetchUpcomingTodos('2026-07-13T16:00:00Z', '2026-07-20T16:00:00Z')).rejects.toMatchObject({ message: '第二页失败' })
   })
 
+  it('rejects a changed total on a later page even when unique IDs fill the first total', async () => {
+    server.use(http.get('/api/todos', ({ request }) => {
+      const page = Number(new URL(request.url).searchParams.get('page'))
+      const items = page === 1 ? [ranged(1), ranged(2)] : [ranged(3)]
+      return HttpResponse.json({ code: 0, message: 'ok', data: { items, total: page === 1 ? 3 : 999, page, page_size: 2 } })
+    }))
+
+    await expect(fetchUpcomingTodos('2026-07-13T16:00:00Z', '2026-07-20T16:00:00Z')).rejects.toMatchObject({ message: '任务分页响应异常，请稍后重试' })
+  })
+
   it('rejects an implausible page count before requesting page two', async () => {
     let requests = 0
     server.use(http.get('/api/todos', () => {
