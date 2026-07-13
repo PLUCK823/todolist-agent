@@ -38,6 +38,17 @@ const fixture: Todo = {
 }
 
 describe('TaskDashboard', () => {
+  it('renders the complete localized Chinese date', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-14T08:00:00+08:00'))
+    try {
+      renderDashboard()
+      expect(screen.getByText('2026 年 7 月 14 日 · 星期二')).toBeVisible()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders a dedicated loading state before data arrives', () => {
     renderDashboard()
     expect(screen.getByRole('status', { name: '正在加载任务' })).toBeVisible()

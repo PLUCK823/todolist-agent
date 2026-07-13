@@ -26,7 +26,7 @@ function formatToday() {
     year: 'numeric', month: 'long', day: 'numeric', weekday: 'long',
   }).formatToParts(new Date())
   const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ''
-  return `${get('year')} 年 ${get('month')} ${get('day')} 日 · ${get('weekday')}`
+  return `${get('year')} 年 ${get('month')} 月 ${get('day')} 日 · ${get('weekday')}`
 }
 
 function isSoon(todo: Todo) {
