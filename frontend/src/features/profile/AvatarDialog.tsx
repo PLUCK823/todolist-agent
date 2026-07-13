@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Button } from '../../shared/ui/Button'
 import { Dialog } from '../../shared/ui/Dialog'
 import type { AvatarPreset, AvatarValue } from '../auth/auth.types'
-import { getAvatarBlob, persistAvatarFile } from './avatar.storage'
+import { deleteAvatarBlob, getAvatarBlob, persistAvatarFile } from './avatar.storage'
 
 const presets: { value: AvatarPreset; label: string; initials: string }[] = [
   { value: 'amber', label: '暖橙', initials: 'HZ' },
@@ -70,11 +70,18 @@ function AvatarDialogSession({ avatar, onOpenChange, onSave }: Omit<AvatarDialog
 
   const save = async () => {
     setPending(true); setError('')
+    let newlyStored: AvatarValue | null = null
     try {
       const value = fileRef.current ? await persistAvatarFile(fileRef.current) : selected
+      if (fileRef.current) newlyStored = value
       await onSave(value)
+      const previous = typeof avatar === 'string' ? null : avatar
+      if (previous?.kind === 'blob' && (value.kind !== 'blob' || value.value !== previous.value)) {
+        await deleteAvatarBlob(previous.value).catch(() => undefined)
+      }
       onOpenChange(false)
     } catch {
+      if (newlyStored?.kind === 'blob') await deleteAvatarBlob(newlyStored.value).catch(() => undefined)
       setError('头像保存失败，请稍后重试')
     } finally {
       setPending(false)

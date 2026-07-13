@@ -185,7 +185,7 @@ export function TaskDashboard() {
             {[1, 2, 3].map((item) => <div key={item} className="h-[58px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-[color:var(--surface)]/70" />)}
           </div>
         ) : query.isError ? (
-          <section role="alert" className="rounded-[var(--radius-panel)] border border-red-100 bg-red-50 p-7 text-center">
+          <section role="alert" className="rounded-[var(--radius-panel)] border border-[var(--danger-surface-border)] bg-[var(--danger-surface)] p-7 text-center">
             <h2 className="m-0 text-base font-bold text-[var(--text)]">暂时无法加载任务</h2>
             <p className="mb-4 mt-2 text-sm text-[var(--text-secondary)]">{getApiErrorMessage(query.error)}</p>
             <Button size="sm" onClick={() => query.refetch()}>重新加载</Button>

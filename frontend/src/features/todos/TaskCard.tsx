@@ -10,9 +10,9 @@ interface TaskCardProps {
 }
 
 const priority = {
-  high: { label: '高', className: 'bg-red-50 text-[#9f2f29]' },
-  medium: { label: '中', className: 'bg-amber-50 text-[#744800]' },
-  low: { label: '低', className: 'bg-emerald-50 text-[#276347]' },
+  high: { label: '高', className: 'bg-[var(--danger-surface)] text-[var(--danger-surface-text)]' },
+  medium: { label: '中', className: 'bg-[var(--warning-surface)] text-[var(--warning-surface-text)]' },
+  low: { label: '低', className: 'bg-[var(--success-surface)] text-[var(--success-surface-text)]' },
 }
 
 function formatDueDate(value: string | null) {

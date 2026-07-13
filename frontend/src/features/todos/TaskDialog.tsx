@@ -142,7 +142,7 @@ export function TaskDialog({
           />
         </div>
         {requestError ? (
-          <p role="alert" className="m-0 rounded-lg bg-red-50 px-3 py-2 text-sm font-medium text-[var(--danger-action)]">
+          <p role="alert" className="m-0 rounded-lg border border-[var(--danger-surface-border)] bg-[var(--danger-surface)] px-3 py-2 text-sm font-medium text-[var(--danger-surface-text)]">
             {requestError}
           </p>
         ) : null}

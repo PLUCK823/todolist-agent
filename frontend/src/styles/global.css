@@ -1014,11 +1014,14 @@ figcaption {
 .assistant-inspector .agent-step__heading > span,
 .assistant-inspector .agent-step__timer { color: var(--text-muted); }
 .assistant-conversation .agent-step__result,
-.assistant-inspector .agent-step__result { background: #eff9f4; }
+.assistant-inspector .agent-step__result {
+  background: var(--success-surface);
+  box-shadow: inset 0 0 0 1px var(--success-surface-border);
+}
 .assistant-conversation .agent-step__result > span,
-.assistant-inspector .agent-step__result > span { color: var(--success-action); }
+.assistant-inspector .agent-step__result > span { color: var(--success-surface-text); }
 .assistant-conversation .agent-step__result pre,
-.assistant-inspector .agent-step__result pre { color: var(--text); }
+.assistant-inspector .agent-step__result pre { color: var(--success-surface-text); }
 
 .assistant-timeline {
   width: min(720px, 100%);
@@ -1071,10 +1074,11 @@ figcaption {
 
 .assistant-clear-error {
   margin: 0 0 8px;
+  border: 1px solid var(--danger-surface-border);
   border-radius: 10px;
   padding: 9px 11px;
-  background: #fff0ef;
-  color: var(--danger-action);
+  background: var(--danger-surface);
+  color: var(--danger-surface-text);
   font-size: .7rem;
 }
 

@@ -39,3 +39,18 @@ export async function getAvatarBlob(key: string): Promise<Blob | null> {
     request.onerror = () => { database.close(); reject(request.error ?? new Error('读取头像失败')) }
   })
 }
+
+export async function deleteAvatarBlob(key: string): Promise<void> {
+  const database = await openDatabase()
+  if (!database) {
+    memoryBlobs.delete(key)
+    return
+  }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, 'readwrite')
+    transaction.objectStore(STORE_NAME).delete(key)
+    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('头像清理失败')) }
+    transaction.onabort = transaction.onerror
+  })
+}
