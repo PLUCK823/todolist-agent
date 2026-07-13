@@ -48,19 +48,21 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     setState(next)
   }, [])
 
-  const startRequest = useCallback((message: string, force = false) => {
+  const startRequest = useCallback((message: string, isRetry = false) => {
     const trimmed = message.trim()
-    if (!trimmed || (!force && activeStatuses.has(stateRef.current.status))) return
+    if (!trimmed || (!isRetry && activeStatuses.has(stateRef.current.status))) return
     cancelRef.current?.()
     controlRef.current = undefined
     const sessionId = stateRef.current.sessionId ?? sessionIdFactory()
-    dispatch({
-      type: 'request_started',
-      message: trimmed,
-      sessionId,
-      messageId: messageIdFactory(),
-      createdAt: now(),
-    })
+    dispatch(isRetry
+      ? { type: 'retry_started', message: trimmed, sessionId }
+      : {
+          type: 'request_started',
+          message: trimmed,
+          sessionId,
+          messageId: messageIdFactory(),
+          createdAt: now(),
+        })
     cancelRef.current = client.send(
       { message: trimmed, session_id: sessionId },
       {

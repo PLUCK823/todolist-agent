@@ -66,6 +66,16 @@ export function reduceAgent(
         activeAssistantMessageId: undefined,
         lastRequest: action.message,
       }
+    case 'retry_started':
+      return {
+        ...state,
+        sessionId: action.sessionId,
+        steps: [],
+        status: 'connecting',
+        pendingConfirmation: undefined,
+        activeAssistantMessageId: undefined,
+        lastRequest: action.message,
+      }
     case 'connected':
       return { ...state, status: 'running' }
     case 'step_started': {

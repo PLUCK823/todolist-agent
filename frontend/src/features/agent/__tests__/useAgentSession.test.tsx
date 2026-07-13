@@ -228,6 +228,8 @@ describe('useAgentSession', () => {
     })
     expect(client.requests).toHaveLength(2)
     expect(client.requests[1]).toEqual({ message: '创建任务', session_id: 's' })
+    expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(1)
+    expect(result.current.sessionId).toBe('s')
   })
 
   it('cancels on unmount and clear deletes server history before resetting local state', async () => {

@@ -96,6 +96,10 @@ export type AgentReducerAction = AgentEvent | {
   messageId: string
   createdAt: string
 } | {
+  type: 'retry_started'
+  message: string
+  sessionId: string
+} | {
   type: 'connected'
 } | {
   type: 'confirmation_submitted'
