@@ -332,7 +332,7 @@ def _failure_metadata(exc: Exception) -> tuple[str, bool]:
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(
         marker in message for marker in ("超时", "timeout")
     ):
-        return "TOOL_TIMEOUT", False
+        return "TOOL_TIMEOUT", True
     if isinstance(exc, ConnectionError) or any(
         marker in message
         for marker in (

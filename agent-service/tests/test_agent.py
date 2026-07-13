@@ -494,8 +494,8 @@ async def test_delete_confirmation_is_bound_to_session_and_consumed_once():
 
 
 @pytest.mark.asyncio
-async def test_backend_timeout_is_not_falsely_marked_safe_to_retry():
-    """The protocol has no idempotency key, so tool retries are user-controlled."""
+async def test_backend_timeout_is_marked_retryable_for_manual_or_future_retry():
+    """Timeouts may suggest a retry, while the current client never auto-replays it."""
     from app.agent import _tools_by_name, process_message
 
     events: list[dict[str, Any]] = []
@@ -515,7 +515,7 @@ async def test_backend_timeout_is_not_falsely_marked_safe_to_retry():
 
     failure = next(event for event in events if event["type"] == "step_failed")
     assert failure["error_code"] == "TOOL_TIMEOUT"
-    assert failure["retryable"] is False
+    assert failure["retryable"] is True
 
 
 @pytest.mark.asyncio
@@ -928,7 +928,7 @@ async def test_tool_call_limit_stops_execution_with_stable_diagnostic():
     "error,retryable",
     [
         (ConnectionError("无法连接到后端服务"), False),
-        (TimeoutError("timeout"), False),
+        (TimeoutError("timeout"), True),
         (ValueError("待办不存在"), False),
         (ValueError("参数校验失败"), False),
         (RuntimeError("permanent failure"), False),
@@ -938,6 +938,34 @@ def test_tool_failure_retryability_is_classified(error, retryable):
     from app.agent import _failure_metadata
 
     assert _failure_metadata(error)[1] is retryable
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("deadline exceeded"),
+        asyncio.TimeoutError("async deadline exceeded"),
+        RuntimeError("Todo API 响应超时"),
+    ],
+)
+def test_timeout_tool_failures_are_marked_retryable(error):
+    from app.agent import _failure_metadata
+
+    assert _failure_metadata(error)[1] is True
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionError("connection reset"),
+        RuntimeError("temporary backend failure"),
+        ValueError("permanent validation failure"),
+    ],
+)
+def test_non_timeout_tool_failures_are_not_marked_retryable(error):
+    from app.agent import _failure_metadata
+
+    assert _failure_metadata(error)[1] is False
 
 
 def test_capacity_evicts_only_safe_idle_completed_session():
