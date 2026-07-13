@@ -149,6 +149,30 @@ describe('Popover', () => {
     expect(anchor).toHaveAttribute('aria-expanded', 'false')
     expect(anchor).toHaveAttribute('aria-controls', 'caller-menu')
   })
+
+  it('does not overwrite aria attributes changed externally while mounted', async () => {
+    const user = userEvent.setup()
+    render(<IdentifiedPopoverHarness />)
+
+    const anchor = screen.getByRole('button', { name: '自定义筛选' })
+    await user.click(anchor)
+    anchor.setAttribute('aria-haspopup', 'listbox')
+    anchor.setAttribute('aria-expanded', 'false')
+    anchor.setAttribute('aria-controls', 'runtime-controls')
+
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(anchor).toHaveAttribute('aria-haspopup', 'listbox')
+    expect(anchor).toHaveAttribute('aria-expanded', 'false')
+    expect(anchor).toHaveAttribute('aria-controls', 'runtime-controls')
+
+    fireEvent.click(screen.getByRole('button', { name: '卸载浮层' }))
+
+    expect(anchor).toHaveAttribute('aria-haspopup', 'listbox')
+    expect(anchor).toHaveAttribute('aria-expanded', 'false')
+    expect(anchor).toHaveAttribute('aria-controls', 'runtime-controls')
+    expect(anchor).toHaveAttribute('id', 'caller-filter')
+  })
 })
 
 function rect({

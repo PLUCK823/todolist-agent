@@ -22,6 +22,8 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
   const popoverRef = useRef<HTMLDivElement>(null)
   const popoverId = useId()
   const anchorId = `${popoverId}-anchor`
+  const initialOpenRef = useRef(open)
+  const managedExpandedValueRef = useRef<string | null>(null)
 
   useClientLayoutEffect(() => {
     const anchor = anchorRef.current
@@ -32,23 +34,59 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
       expanded: anchor.getAttribute('aria-expanded'),
       controls: anchor.getAttribute('aria-controls'),
     }
+    const managed = {
+      hasPopup: 'dialog',
+      expanded: String(initialOpenRef.current),
+      controls: popoverId,
+    }
     const ownsId = anchor.id.length === 0
     if (ownsId) anchor.id = anchorId
-    anchor.setAttribute('aria-haspopup', 'dialog')
-    anchor.setAttribute('aria-expanded', String(open))
-    anchor.setAttribute('aria-controls', popoverId)
-    popoverRef.current?.setAttribute(
-      'aria-labelledby',
-      `${anchor.id} ${popoverId}-label`,
-    )
+    anchor.setAttribute('aria-haspopup', managed.hasPopup)
+    anchor.setAttribute('aria-expanded', managed.expanded)
+    anchor.setAttribute('aria-controls', managed.controls)
+    managedExpandedValueRef.current = managed.expanded
 
     return () => {
-      restoreAttribute(anchor, 'aria-haspopup', previous.hasPopup)
-      restoreAttribute(anchor, 'aria-expanded', previous.expanded)
-      restoreAttribute(anchor, 'aria-controls', previous.controls)
+      restoreManagedAttribute(
+        anchor,
+        'aria-haspopup',
+        managed.hasPopup,
+        previous.hasPopup,
+      )
+      const managedExpanded = managedExpandedValueRef.current
+      if (managedExpanded !== null) {
+        restoreManagedAttribute(
+          anchor,
+          'aria-expanded',
+          managedExpanded,
+          previous.expanded,
+        )
+      }
+      restoreManagedAttribute(
+        anchor,
+        'aria-controls',
+        managed.controls,
+        previous.controls,
+      )
       if (ownsId && anchor.id === anchorId) anchor.removeAttribute('id')
+      managedExpandedValueRef.current = null
     }
-  }, [anchorId, anchorRef, open, popoverId])
+  }, [anchorId, anchorRef, popoverId])
+
+  useClientLayoutEffect(() => {
+    const anchor = anchorRef.current
+    const managedExpanded = managedExpandedValueRef.current
+    if (!anchor || managedExpanded === null) return
+
+    if (anchor.getAttribute('aria-expanded') !== managedExpanded) {
+      managedExpandedValueRef.current = null
+      return
+    }
+
+    const nextExpanded = String(open)
+    anchor.setAttribute('aria-expanded', nextExpanded)
+    managedExpandedValueRef.current = nextExpanded
+  }, [anchorRef, open])
 
   useClientLayoutEffect(() => {
     if (!open) return
@@ -58,6 +96,10 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
 
       const anchor = anchorRef.current.getBoundingClientRect()
       const popover = popoverRef.current
+      popover.setAttribute(
+        'aria-labelledby',
+        `${anchorRef.current.id} ${popoverId}-label`,
+      )
       const { left, top } = getPopoverPosition({
         anchor,
         popover: { width: popover.offsetWidth, height: popover.offsetHeight },
@@ -78,7 +120,7 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
       window.removeEventListener('resize', updatePosition)
       window.removeEventListener('scroll', updatePosition, true)
     }
-  }, [anchorRef, open])
+  }, [anchorRef, open, popoverId])
 
   useEffect(() => {
     if (!open) return
@@ -137,4 +179,15 @@ export function Popover({ open, anchorRef, onOpenChange, children }: PopoverProp
 function restoreAttribute(element: HTMLElement, name: string, value: string | null) {
   if (value === null) element.removeAttribute(name)
   else element.setAttribute(name, value)
+}
+
+function restoreManagedAttribute(
+  element: HTMLElement,
+  name: string,
+  managedValue: string,
+  previousValue: string | null,
+) {
+  if (element.getAttribute(name) === managedValue) {
+    restoreAttribute(element, name, previousValue)
+  }
 }
