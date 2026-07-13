@@ -4,6 +4,7 @@ import {
   useRef,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from 'react'
 import { createPortal } from 'react-dom'
 import { IconButton } from './IconButton'
@@ -16,6 +17,11 @@ export interface DialogProps {
   onOpenChange(open: boolean): void
   children: ReactNode
   footer?: ReactNode
+  initialFocusRef?: RefObject<HTMLElement | null>
+  overlayClassName?: string
+  panelClassName?: string
+  bodyClassName?: string
+  overlayTestId?: string
 }
 
 const focusableSelector = [
@@ -34,6 +40,11 @@ export function Dialog({
   onOpenChange,
   children,
   footer,
+  initialFocusRef,
+  overlayClassName = '',
+  panelClassName = '',
+  bodyClassName = '',
+  overlayTestId,
 }: DialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const overlayRootRef = useRef<HTMLDivElement>(null)
@@ -51,11 +62,12 @@ export function Dialog({
     const dialog = dialogRef.current
     if (!overlayRoot || !dialog) return
 
-    dialog.focus()
+    const focusElement = initialFocusRef?.current ?? dialog
+    focusElement.focus()
     const unregister = registerOverlay({
       id: overlayIdRef.current,
       root: overlayRoot,
-      focusElement: dialog,
+      focusElement,
       restoreFocusTo: restoreFocusRef.current,
     })
 
@@ -63,7 +75,7 @@ export function Dialog({
       unregister()
       restoreFocusRef.current = null
     }
-  }, [open])
+  }, [initialFocusRef, open])
 
   useEffect(() => {
     if (!open) return
@@ -110,7 +122,8 @@ export function Dialog({
   return createPortal(
     <div
       ref={overlayRootRef}
-      className="fixed inset-0 z-50 grid place-items-center bg-[rgb(24_28_43_/_48%)] p-4 backdrop-blur-[3px] motion-safe:animate-[overlay-enter_var(--motion-overlay)_both]"
+      data-testid={overlayTestId}
+      className={`fixed inset-0 z-50 grid place-items-center bg-[rgb(24_28_43_/_48%)] p-4 backdrop-blur-[3px] motion-safe:animate-[overlay-enter_var(--motion-overlay)_both] ${overlayClassName}`}
       onMouseDown={(event) => {
         if (
           event.target === event.currentTarget &&
@@ -128,7 +141,7 @@ export function Dialog({
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className="max-h-[min(760px,calc(100vh-2rem))] w-full max-w-lg overflow-auto rounded-[var(--radius-panel)] border border-white/80 bg-white shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] motion-safe:animate-[panel-enter_var(--motion-overlay)_both]"
+        className={`max-h-[min(760px,calc(100vh-2rem))] w-full max-w-lg overflow-auto rounded-[var(--radius-panel)] border border-white/80 bg-white shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] motion-safe:animate-[panel-enter_var(--motion-overlay)_both] ${panelClassName}`}
       >
         <header className="flex items-start justify-between gap-5 border-b border-[var(--border)] px-6 pb-4 pt-5">
           <div>
@@ -152,7 +165,7 @@ export function Dialog({
             onClick={() => onOpenChange(false)}
           />
         </header>
-        <div className="px-6 py-5">{children}</div>
+        <div className={`px-6 py-5 ${bodyClassName}`}>{children}</div>
         {footer ? (
           <footer className="flex items-center justify-end gap-2 border-t border-[var(--border)] bg-[var(--surface-subtle)]/55 px-6 py-4">
             {footer}

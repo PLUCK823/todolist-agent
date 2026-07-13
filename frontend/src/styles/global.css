@@ -616,12 +616,17 @@ figcaption {
 
 .command-palette {
   width: min(680px, 100%);
+  max-width: none;
   overflow: hidden;
   border-radius: 24px;
   padding: 8px;
   background: rgb(255 255 255 / 96%);
   box-shadow: 0 0 0 1px rgb(255 255 255 / 80%), 0 28px 90px rgb(28 32 48 / 28%);
   animation: panel-enter 280ms cubic-bezier(.2, 0, 0, 1) both;
+}
+
+.command-palette__body {
+  padding: 0;
 }
 
 .command-palette > header,

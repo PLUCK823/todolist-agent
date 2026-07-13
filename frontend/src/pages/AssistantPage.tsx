@@ -49,7 +49,7 @@ export default function AssistantPage() {
       <section className="assistant-conversation" id="current">
         <header>
           <div><p>WORKSPACE / TODAY</p><h1>智能助手</h1><span>{agentStatus.label}</span></div>
-          <Button variant="ghost" size="sm" onClick={() => void clear()}>清空对话</Button>
+          <Button variant="ghost" size="sm" disabled={session.isClearing} onClick={() => void clear()}>{session.isClearing ? '正在清空…' : '清空对话'}</Button>
         </header>
         {clearError ? <p className="assistant-clear-error" role="alert">{clearError}</p> : null}
         <div className="assistant-conversation__scroll" role="log" aria-live="polite">
