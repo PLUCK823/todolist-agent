@@ -1,144 +1,80 @@
 import { useState, type FormEvent } from 'react'
-import { useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Button } from '../shared/ui/Button'
+import { TextField } from '../shared/ui/TextField'
+import { useAuth } from '../features/auth/auth-context'
+
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+interface FieldErrors { name?: string; email?: string; password?: string }
 
 export default function AuthPage() {
   const location = useLocation()
+  const navigate = useNavigate()
+  const { login, register } = useAuth()
   const isRegister = location.pathname === '/register'
-  const [email, setEmail] = useState('')
+  const state = location.state as { registeredEmail?: string; from?: { pathname?: string } } | null
+  const [email, setEmail] = useState(state?.registeredEmail ?? '')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
-  const [error, setError] = useState('')
+  const [errors, setErrors] = useState<FieldErrors>({})
+  const [formError, setFormError] = useState('')
+  const [pending, setPending] = useState(false)
 
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault()
-    setError('')
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault()
+    const nextErrors: FieldErrors = {}
+    if (isRegister && !name.trim()) nextErrors.name = '请输入显示名称'
+    if (!emailPattern.test(email.trim())) nextErrors.email = '请输入有效的邮箱地址'
+    if (password.length < 8) nextErrors.password = '密码至少需要 8 位'
+    setErrors(nextErrors)
+    setFormError('')
+    if (Object.keys(nextErrors).length) return
 
-    if (!email.trim() || !password.trim()) {
-      setError('请填写所有必填字段')
-      return
+    setPending(true)
+    try {
+      if (isRegister) {
+        const account = await register({ name, email, password })
+        navigate('/login', { replace: true, state: { registeredEmail: account.email } })
+      } else {
+        await login({ email, password })
+        navigate(state?.from?.pathname || '/tasks', { replace: true })
+      }
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : '暂时无法完成操作，请稍后再试')
+    } finally {
+      setPending(false)
     }
-    if (isRegister && !name.trim()) {
-      setError('请填写昵称')
-      return
-    }
-    if (password.length < 6) {
-      setError('密码至少需要6位')
-      return
-    }
-
-    // Placeholder: auth not yet implemented
-    setError('用户认证功能即将上线')
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#f7f7f9' }}>
-      <div className="w-full max-w-md">
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div
-            className="w-16 h-16 rounded-2xl flex items-center justify-center text-white text-xl font-bold mx-auto mb-4"
-            style={{ backgroundColor: '#7165ea' }}
-          >
-            AT
-          </div>
-          <h1 className="text-2xl font-bold" style={{ color: '#1a1a2e' }}>
-            Agent TodoList
-          </h1>
-          <p className="text-sm mt-1" style={{ color: '#6b7280' }}>
-            {isRegister ? '创建新账号' : '登录你的账号'}
-          </p>
+    <main className="auth-layout">
+      <section className="auth-story" aria-labelledby="auth-story-title">
+        <div className="auth-brand"><span aria-hidden="true">✓</span><strong>Agent TodoList</strong></div>
+        <div className="auth-story__copy">
+          <p>专注，从一句话开始</p>
+          <h1 id="auth-story-title">把零散想法，交给你的智能任务搭档。</h1>
+          <p>创建、整理与推进任务都在同一处完成，让每一天保持清晰。</p>
         </div>
-
-        {/* Form */}
-        <div className="bg-white rounded-2xl shadow-sm border p-8" style={{ borderColor: '#e5e7eb' }}>
-          {error && (
-            <div
-              className="mb-4 p-3 rounded-lg text-sm text-center"
-              style={{ backgroundColor: '#fef2f2', color: '#ef4444' }}
-            >
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {isRegister && (
-              <div>
-                <label className="block text-sm font-medium mb-1" style={{ color: '#6b7280' }}>
-                  昵称
-                </label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="你的昵称"
-                  className="w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2"
-                  style={{ borderColor: '#e5e7eb', color: '#1a1a2e' }}
-                  onFocus={(e) => (e.target.style.borderColor = '#7165ea')}
-                  onBlur={(e) => (e.target.style.borderColor = '#e5e7eb')}
-                />
-              </div>
-            )}
-
-            <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#6b7280' }}>
-                邮箱
-              </label>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2"
-                style={{ borderColor: '#e5e7eb', color: '#1a1a2e' }}
-                onFocus={(e) => (e.target.style.borderColor = '#7165ea')}
-                onBlur={(e) => (e.target.style.borderColor = '#e5e7eb')}
-              />
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-1" style={{ color: '#6b7280' }}>
-                密码
-              </label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="至少6位"
-                className="w-full px-4 py-3 rounded-xl border text-sm focus:outline-none focus:ring-2"
-                style={{ borderColor: '#e5e7eb', color: '#1a1a2e' }}
-                onFocus={(e) => (e.target.style.borderColor = '#7165ea')}
-                onBlur={(e) => (e.target.style.borderColor = '#e5e7eb')}
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-3 rounded-xl text-white font-medium text-sm transition-opacity hover:opacity-90"
-              style={{ backgroundColor: '#7165ea' }}
-            >
-              {isRegister ? '注册' : '登录'}
-            </button>
+        <div className="auth-story__preview" aria-hidden="true"><span>✦ 智能助手</span><strong>已为你整理明日计划</strong><small>3 个步骤 · 即刻可执行</small></div>
+      </section>
+      <section className="auth-form-section">
+        <div className="auth-form-card">
+          <p className="auth-form-card__eyebrow">{isRegister ? '开始使用' : '欢迎回来'}</p>
+          <h2>Agent TodoList</h2>
+          <p>{isRegister ? '创建新账号' : '登录你的账号'}</p>
+          {state?.registeredEmail && !isRegister ? <p className="form-success" role="status">账号已创建，请登录</p> : null}
+          {formError ? <p className="form-error" role="alert">{formError}</p> : null}
+          <form onSubmit={handleSubmit} noValidate>
+            {isRegister ? <TextField label="显示名称" autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} error={errors.name} placeholder="例如：Plucky HZ" /> : null}
+            <TextField label="邮箱地址" type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} error={errors.email} placeholder="you@example.com" />
+            <TextField label="密码" type="password" autoComplete={isRegister ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} error={errors.password} placeholder="至少 8 位" />
+            <Button type="submit" size="lg" disabled={pending} className="w-full" aria-label={isRegister ? '创建账号' : '登录'}>{pending ? '请稍候...' : isRegister ? '注册' : '登录'}</Button>
           </form>
-
-          <p className="text-xs text-center mt-6" style={{ color: '#6b7280' }}>
-            {isRegister ? (
-              <>
-                已有账号？{' '}
-                <a href="/login" className="font-medium" style={{ color: '#7165ea' }}>
-                  去登录
-                </a>
-              </>
-            ) : (
-              <>
-                没有账号？{' '}
-                <a href="/register" className="font-medium" style={{ color: '#7165ea' }}>
-                  注册
-                </a>
-              </>
-            )}
-          </p>
+          <p className="auth-form-card__switch">{isRegister ? <>已有账号？ <Link to="/login">去登录</Link></> : <>没有账号？ <Link to="/register">注册</Link></>}</p>
+          <small>继续即表示你同意以本地演示数据体验此原型。</small>
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   )
 }

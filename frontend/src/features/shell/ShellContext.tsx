@@ -10,9 +10,15 @@ import {
   SHELL_STORAGE_KEY,
   writeShellState,
 } from './shell-storage'
+import { useOptionalPreferences } from '../preferences/preferences-context'
 
 export function ShellProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<ShellState>(readShellState)
+  const preferenceContext = useOptionalPreferences()
+  const [state, setState] = useState<ShellState>(() => {
+    const persisted = window.localStorage.getItem(SHELL_STORAGE_KEY)
+    const initial = readShellState()
+    return persisted === null && preferenceContext ? { ...initial, agentExpanded: preferenceContext.preferences.agentStartsOpen } : initial
+  })
   const [headerActionsElement, setHeaderActionsElement] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {

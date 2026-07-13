@@ -2,6 +2,8 @@ import { NavLink } from 'react-router-dom'
 import type { ReactNode, SVGProps } from 'react'
 import { useShell } from './shell-context'
 import { requestSettingsOpen } from './shell-events'
+import { useOptionalAuth } from '../auth/auth-context'
+import { Avatar } from '../profile/AvatarDialog'
 
 type IconProps = SVGProps<SVGSVGElement>
 
@@ -56,6 +58,7 @@ function navClassName(isActive: boolean) {
 
 export default function NavigationRail() {
   const { navExpanded, toggleNav } = useShell()
+  const account = useOptionalAuth()?.account ?? { name: 'Plucky HZ', email: 'plucky@example.com', avatar: { kind: 'preset' as const, value: 'amber' as const } }
   const labelState = navExpanded ? 'expanded' : 'collapsed'
 
   return (
@@ -119,14 +122,14 @@ export default function NavigationRail() {
         className={({ isActive }) => `${navClassName(isActive)} nav-rail__profile`}
         aria-label="用户资料"
       >
-        <span className="nav-rail__avatar" aria-hidden="true">HZ</span>
+        <Avatar avatar={account.avatar} name={account.name} className="nav-rail__avatar" />
         <span
           className="nav-rail__user"
           data-state={labelState}
           aria-hidden={!navExpanded}
         >
-          <strong data-state={labelState} aria-hidden={!navExpanded}>Plucky HZ</strong>
-          <small aria-hidden={!navExpanded}>plucky@example.com</small>
+          <strong data-state={labelState} aria-hidden={!navExpanded}>{account.name}</strong>
+          <small aria-hidden={!navExpanded}>{account.email}</small>
         </span>
       </NavLink>
 

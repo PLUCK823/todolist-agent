@@ -7,6 +7,7 @@ import CommandPalette from '../agent/CommandPalette'
 import { IconButton } from '../../shared/ui/IconButton'
 import NavigationRail from './NavigationRail'
 import { useShell } from './shell-context'
+import SettingsDialog from '../preferences/SettingsDialog'
 
 type ShellStyle = CSSProperties & {
   '--nav-width': string
@@ -50,6 +51,7 @@ function AppShellContent() {
       {showPanel ? <><button type="button" className="agent-drawer-backdrop" aria-label="关闭智能助手遮罩" onClick={closeAgent} /><div className="app-shell__agent" data-testid="agent-column"><AgentPanel onCollapse={closeAgent} draft={agentDraft} onDraftChange={setAgentDraft} /></div></> : null}
       {spark && headerActionsElement ? createPortal(spark, headerActionsElement) : spark ? <div className="shell-header-actions-fallback">{spark}</div> : null}
       <CommandPalette onOpenAgent={location.pathname === '/assistant' ? () => undefined : openAgent} />
+      <SettingsDialog />
     </div>
   )
 }
