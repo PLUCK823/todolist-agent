@@ -149,14 +149,14 @@ describe("ConfirmDialog", () => {
         />,
       );
 
-      const exitingDialog = screen.getByRole("dialog");
+      const exitingDialog = screen.getByRole("dialog", { hidden: true });
       expect(exitingDialog).toHaveStyle({ opacity: "0" });
       expect(exitingDialog.style.transform).toContain("scale(0.97)");
 
       act(() => {
         vi.advanceTimersByTime(199);
       });
-      expect(screen.getByRole("dialog")).toBeInTheDocument();
+      expect(screen.getByRole("dialog", { hidden: true })).toBeInTheDocument();
 
       // The timer is a fallback for environments that do not emit transitionend.
       act(() => {
@@ -177,9 +177,53 @@ describe("ConfirmDialog", () => {
         />,
       );
 
-      const dialog = screen.getByRole("dialog");
+      const dialog = screen.getByRole("dialog", { hidden: true });
       fireEvent.transitionEnd(dialog, { propertyName: "opacity" });
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("makes exiting content inert and restores focus immediately", () => {
+      const trigger = document.createElement("button");
+      trigger.textContent = "打开弹窗";
+      document.body.appendChild(trigger);
+      trigger.focus();
+
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+      const props = {
+        title: "删除任务",
+        message: "确定要删除这个任务吗？此操作不可撤销。",
+        onConfirm,
+        onCancel,
+      };
+      const { rerender } = render(<ConfirmDialog isOpen {...props} />);
+      const confirmButton = screen.getByText("确认");
+      const cancelButton = screen.getByText("取消");
+      const backdrop = screen.getByRole("presentation");
+
+      fireEvent.click(cancelButton);
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      rerender(<ConfirmDialog isOpen={false} {...props} />);
+
+      expect(trigger).toHaveFocus();
+      expect(backdrop).toHaveAttribute("aria-hidden", "true");
+      expect(backdrop).toHaveAttribute("inert");
+      expect(backdrop.className).toContain("pointer-events-none");
+      expect(confirmButton).toBeDisabled();
+      expect(cancelButton).toBeDisabled();
+
+      fireEvent.click(confirmButton);
+      fireEvent.keyDown(document, { key: "Escape" });
+      fireEvent.click(backdrop);
+
+      expect(onConfirm).not.toHaveBeenCalled();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+
+      rerender(<ConfirmDialog isOpen {...props} />);
+      expect(confirmButton).toHaveFocus();
+      expect(confirmButton).toBeEnabled();
+      expect(cancelButton).toBeEnabled();
+      trigger.remove();
     });
 
     it("animates in after a newly keyed dialog mounts", () => {

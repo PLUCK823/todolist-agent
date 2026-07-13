@@ -107,23 +107,36 @@ function ConfirmDialogContent({
   onTransitionEnd: (event: React.TransitionEvent<HTMLDivElement>) => void;
 }) {
   const animatedIn = phase === "entered";
+  const interactive = phase !== "exiting";
+  const [restoreFocusTo] = useState<HTMLElement | null>(() => {
+    const activeElement = document.activeElement;
+    return activeElement instanceof HTMLElement && activeElement !== document.body
+      ? activeElement
+      : null;
+  });
 
   // Focus trap: focus the confirm button when the dialog opens
   const confirmRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (confirmRef.current) {
-      confirmRef.current.focus();
+    return () => restoreFocusTo?.focus();
+  }, [restoreFocusTo]);
+
+  useEffect(() => {
+    if (phase === "exiting") {
+      restoreFocusTo?.focus();
+    } else {
+      confirmRef.current?.focus();
     }
-  }, []);
+  }, [phase, restoreFocusTo]);
 
   // Close on Escape
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (interactive && e.key === "Escape") {
         onCancel();
       }
     },
-    [onCancel],
+    [interactive, onCancel],
   );
 
   useEffect(() => {
@@ -137,8 +150,10 @@ function ConfirmDialogContent({
   }, [handleKeyDown]);
 
   const handleBackdropClick = useCallback(() => {
-    onCancel();
-  }, [onCancel]);
+    if (interactive) {
+      onCancel();
+    }
+  }, [interactive, onCancel]);
 
   const handleDialogClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -146,7 +161,7 @@ function ConfirmDialogContent({
 
   const overlayStyle: React.CSSProperties = {
     opacity: animatedIn ? 1 : 0,
-    transition: "opacity 200ms ease-out",
+    transition: `opacity ${ANIMATION_DURATION}ms ease-out`,
   };
 
   const dialogStyle: React.CSSProperties = {
@@ -154,17 +169,19 @@ function ConfirmDialogContent({
     transform: animatedIn
       ? "translateY(0) scale(1)"
       : "translateY(8px) scale(0.97)",
-    transition: "opacity 200ms ease-out, transform 200ms ease-out",
+    transition: `opacity ${ANIMATION_DURATION}ms ease-out, transform ${ANIMATION_DURATION}ms ease-out`,
   };
 
   const buttonClass = variantButtonClasses[variant];
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-black/50 ${interactive ? "" : "pointer-events-none"}`}
       style={overlayStyle}
       onClick={handleBackdropClick}
       role="presentation"
+      aria-hidden={interactive ? undefined : true}
+      inert={interactive ? undefined : true}
     >
       <div
         className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden"
@@ -193,7 +210,8 @@ function ConfirmDialogContent({
         <div className="flex justify-end gap-3 px-6 pb-6">
           <button
             type="button"
-            onClick={onCancel}
+            onClick={interactive ? onCancel : undefined}
+            disabled={!interactive}
             className="px-4 py-2 text-sm font-medium text-[#6b7280] bg-white border border-[#e5e7eb] rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#7165ea] focus:ring-offset-2 transition-colors cursor-pointer"
           >
             {cancelLabel}
@@ -201,7 +219,8 @@ function ConfirmDialogContent({
           <button
             ref={confirmRef}
             type="button"
-            onClick={onConfirm}
+            onClick={interactive ? onConfirm : undefined}
+            disabled={!interactive}
             className={`px-4 py-2 text-sm font-medium text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 transition-colors cursor-pointer ${buttonClass}`}
           >
             {confirmLabel}
