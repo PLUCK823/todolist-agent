@@ -58,21 +58,21 @@
 
 ## 基线逐文件签核
 
-“实现代理已审阅”只表示本节点执行者已逐张检查构图、尺寸和状态，不代表用户批准；全部基线仍需主代理完成最终视觉终验。
+实现代理已逐张检查构图、尺寸和状态。主代理于 2026-07-14 使用两张原始尺寸 contact sheet 复核全部 14 个文件，逐项核对页面构图、导航与 Agent 宽度、按钮顺序、520px/630px 浮层量尺以及 Agent 运行/失败状态，结果全部 PASS。该签核代表仓库交付门禁通过，不冒充额外的用户审批。
 
 | 文件 | 状态 | 原型参照 | 实现代理审阅结果 | 日期 |
 |---|---|---|---|---|
-| `tasks-agent-expanded-chromium.png` | 实现代理已审阅，待主代理终验 | V6 tasks + agentExpanded | 68px 导航、340px Agent、操作顺序符合 | 2026-07-14 |
-| `tasks-agent-collapsed-chromium.png` | 实现代理已审阅，待主代理终验 | V6 tasks + agentCollapsed | 深色列移除，✦ 位于新建任务右侧 | 2026-07-14 |
-| `upcoming-chromium.png` | 实现代理已审阅，待主代理终验 | V6 upcoming | 七日条与空日状态完整 | 2026-07-14 |
-| `assistant-chromium.png` | 实现代理已审阅，待主代理终验 | V6 assistant workspace | 会话、工作区、检查器三栏完整 | 2026-07-14 |
-| `profile-chromium.png` | 实现代理已审阅，待主代理终验 | V6 profile | 身份、账户、统计与 Agent 同屏 | 2026-07-14 |
-| `login-chromium.png` | 实现代理已审阅，待主代理终验 | V6 auth login | 品牌叙事与登录表单比例符合 | 2026-07-14 |
-| `register-chromium.png` | 实现代理已审阅，待主代理终验 | V6 auth register | 注册字段与主按钮顺序正确 | 2026-07-14 |
-| `overlay-task-create-chromium.png` | 实现代理已审阅，待主代理终验 | V6 `.modal` | 520px / 18px，字段与页脚完整 | 2026-07-14 |
-| `overlay-task-delete-chromium.png` | 实现代理已审阅，待主代理终验 | V6 danger modal | 520px / 18px，危险操作顺序正确 | 2026-07-14 |
-| `overlay-settings-chromium.png` | 实现代理已审阅，待主代理终验 | V6 settings modal | 设置项与页脚操作完整 | 2026-07-14 |
-| `overlay-avatar-chromium.png` | 实现代理已审阅，待主代理终验 | V6 avatar modal | 预设、上传与保存操作完整 | 2026-07-14 |
-| `overlay-quick-ask-chromium.png` | 实现代理已审阅，待主代理终验 | V6 `.command` | 630px / 18px，输入与发送操作完整 | 2026-07-14 |
-| `agent-running-chromium.png` | 实现代理已审阅，待主代理终验 | V6 Agent trace running | 运行步骤、状态点与输入区可见 | 2026-07-14 |
-| `agent-failure-chromium.png` | 实现代理已审阅，待主代理终验 | V6 Agent trace failed | 失败步骤与错误文本可见，无危险重放 | 2026-07-14 |
+| `tasks-agent-expanded-chromium.png` | 主代理视觉终验通过 | V6 tasks + agentExpanded | 68px 导航、340px Agent、操作顺序符合 | 2026-07-14 |
+| `tasks-agent-collapsed-chromium.png` | 主代理视觉终验通过 | V6 tasks + agentCollapsed | 深色列移除，✦ 位于新建任务右侧 | 2026-07-14 |
+| `upcoming-chromium.png` | 主代理视觉终验通过 | V6 upcoming | 七日条与空日状态完整 | 2026-07-14 |
+| `assistant-chromium.png` | 主代理视觉终验通过 | V6 assistant workspace | 会话、工作区、检查器三栏完整 | 2026-07-14 |
+| `profile-chromium.png` | 主代理视觉终验通过 | V6 profile | 身份、账户、统计与 Agent 同屏 | 2026-07-14 |
+| `login-chromium.png` | 主代理视觉终验通过 | V6 auth login | 品牌叙事与登录表单比例符合 | 2026-07-14 |
+| `register-chromium.png` | 主代理视觉终验通过 | V6 auth register | 注册字段与主按钮顺序正确 | 2026-07-14 |
+| `overlay-task-create-chromium.png` | 主代理视觉终验通过 | V6 `.modal` | 520px / 18px，字段与页脚完整 | 2026-07-14 |
+| `overlay-task-delete-chromium.png` | 主代理视觉终验通过 | V6 danger modal | 520px / 18px，危险操作顺序正确 | 2026-07-14 |
+| `overlay-settings-chromium.png` | 主代理视觉终验通过 | V6 settings modal | 设置项与页脚操作完整 | 2026-07-14 |
+| `overlay-avatar-chromium.png` | 主代理视觉终验通过 | V6 avatar modal | 预设、上传与保存操作完整 | 2026-07-14 |
+| `overlay-quick-ask-chromium.png` | 主代理视觉终验通过 | V6 `.command` | 630px / 18px，输入与发送操作完整 | 2026-07-14 |
+| `agent-running-chromium.png` | 主代理视觉终验通过 | V6 Agent trace running | 运行步骤、状态点与输入区可见 | 2026-07-14 |
+| `agent-failure-chromium.png` | 主代理视觉终验通过 | V6 Agent trace failed | 失败步骤与错误文本可见，无危险重放 | 2026-07-14 |
