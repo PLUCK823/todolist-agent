@@ -1,10 +1,11 @@
 import type { Todo, CreateTodoDTO, UpdateTodoDTO, ApiResponse, PaginatedData } from '../features/todos/todo.types'
+import { agentEventScenarios } from './agentFixtures'
 
 export { agentEventScenarios, agentMockDelays } from './agentFixtures'
 
-// In-memory seed data
-let nextId = 5
-let todos: Todo[] = [
+// In-memory seed data. Each browser worker imports its own copy, so E2E pages
+// can reset this state without sharing data across Playwright workers.
+export const defaultTodos: Todo[] = [
   {
     id: 1,
     title: '完成项目文档',
@@ -47,50 +48,54 @@ let todos: Todo[] = [
   },
 ]
 
+let nextId = 5
+let todos: Todo[] = defaultTodos.map((todo) => ({ ...todo }))
+
+interface NextTodoFailure {
+  method?: string
+  path?: string
+  status: number
+  message: string
+}
+
+let nextTodoFailure: NextTodoFailure | null = null
+const E2E_TODOS_KEY = 'todolist:e2e:todos'
+const E2E_TODO_FAILURE_KEY = 'todolist:e2e:todo-failure'
+const E2E_AGENT_SCENARIO_KEY = 'todolist:e2e:agent-scenario'
+
+function readStorage(key: string) {
+  try { return globalThis.localStorage?.getItem(key) ?? null } catch { return null }
+}
+
+function writeStorage(key: string, value: unknown) {
+  try { globalThis.localStorage?.setItem(key, JSON.stringify(value)) } catch { /* Storage is optional outside browsers. */ }
+}
+
+function removeStorage(key: string) {
+  try { globalThis.localStorage?.removeItem(key) } catch { /* Storage is optional outside browsers. */ }
+}
+
+function hydrateE2ETodoState() {
+  try {
+    const storedTodos = JSON.parse(readStorage(E2E_TODOS_KEY) ?? 'null') as Todo[] | null
+    if (Array.isArray(storedTodos)) {
+      todos = storedTodos.map((todo) => ({ ...todo }))
+      nextId = Math.max(0, ...todos.map((todo) => todo.id)) + 1
+    }
+    const storedFailure = JSON.parse(readStorage(E2E_TODO_FAILURE_KEY) ?? 'null') as NextTodoFailure | null
+    if (storedFailure) nextTodoFailure = storedFailure
+  } catch {
+    removeStorage(E2E_TODOS_KEY)
+    removeStorage(E2E_TODO_FAILURE_KEY)
+  }
+}
+
 export function resetTodos(): void {
-  nextId = 5
-  todos = [
-    {
-      id: 1,
-      title: '完成项目文档',
-      description: '编写项目的 README 和 API 文档',
-      priority: 'high',
-      completed: false,
-      due_date: '2026-07-15T00:00:00Z',
-      created_at: '2026-07-10T08:00:00Z',
-      updated_at: '2026-07-10T08:00:00Z',
-    },
-    {
-      id: 2,
-      title: '购买 groceries',
-      description: '牛奶、面包、鸡蛋、水果',
-      priority: 'medium',
-      completed: true,
-      due_date: '2026-07-13T00:00:00Z',
-      created_at: '2026-07-11T10:00:00Z',
-      updated_at: '2026-07-12T09:30:00Z',
-    },
-    {
-      id: 3,
-      title: '健身 30 分钟',
-      description: '',
-      priority: 'low',
-      completed: false,
-      due_date: null,
-      created_at: '2026-07-12T07:00:00Z',
-      updated_at: '2026-07-12T07:00:00Z',
-    },
-    {
-      id: 4,
-      title: '阅读《深入浅出 Golang》第三章',
-      description: '关于并发编程的章节',
-      priority: 'medium',
-      completed: false,
-      due_date: '2026-07-20T00:00:00Z',
-      created_at: '2026-07-09T18:00:00Z',
-      updated_at: '2026-07-09T18:00:00Z',
-    },
-  ]
+  nextId = Math.max(0, ...defaultTodos.map((todo) => todo.id)) + 1
+  todos = defaultTodos.map((todo) => ({ ...todo }))
+  nextTodoFailure = null
+  removeStorage(E2E_TODOS_KEY)
+  removeStorage(E2E_TODO_FAILURE_KEY)
 }
 
 export function getTodos(): Todo[] {
@@ -105,9 +110,109 @@ function notFound(): ApiResponse<null> {
   return { code: 40401, message: '待办不存在', data: null }
 }
 
-import { http, HttpResponse } from 'msw'
+import { http, HttpResponse, ws } from 'msw'
+
+function consumeTodoFailure(request: Request) {
+  hydrateE2ETodoState()
+  if (!nextTodoFailure) return undefined
+  const url = new URL(request.url)
+  if (nextTodoFailure.method && nextTodoFailure.method !== request.method.toUpperCase()) return undefined
+  if (nextTodoFailure.path && !url.pathname.includes(nextTodoFailure.path)) return undefined
+  const failure = nextTodoFailure
+  nextTodoFailure = null
+  removeStorage(E2E_TODO_FAILURE_KEY)
+  return HttpResponse.json(
+    { code: failure.status * 100 + 1, message: failure.message, data: null },
+    { status: failure.status },
+  )
+}
+
+const agentStream = ws.link('/api/agent/stream')
+
+const agentStreamHandler = agentStream.addEventListener('connection', ({ client }) => {
+  let started = false
+  let waitingForConfirmation = false
+  client.addEventListener('message', (message) => {
+    let frame: { type?: string; approved?: boolean }
+    try { frame = JSON.parse(String(message.data)) as { type?: string; approved?: boolean } } catch { return }
+    const config = (() => {
+      try {
+        return JSON.parse(readStorage(E2E_AGENT_SCENARIO_KEY) ?? 'null') as {
+          name?: keyof typeof agentEventScenarios
+          timeScale?: number
+        } | null
+      } catch { return null }
+    })()
+    const name = config?.name ?? 'success'
+    const timeScale = config?.timeScale ?? 0
+    const scenario = agentEventScenarios[name] ?? agentEventScenarios.success
+    const send = (item: (typeof scenario.events)[number]) => {
+      const delay = Math.max(0, Math.round(item.atMs * timeScale))
+      setTimeout(() => client.send(JSON.stringify(item.event)), delay)
+    }
+
+    if (!started) {
+      started = true
+      if (name === 'confirmationRequired') {
+        waitingForConfirmation = true
+        scenario.events
+          .filter(({ event }) => event.type === 'step_started' || event.type === 'step_completed' || event.type === 'confirmation_required')
+          .forEach(send)
+      } else {
+        scenario.events.forEach(send)
+      }
+      return
+    }
+
+    if (waitingForConfirmation && frame.type === 'confirmation_response') {
+      waitingForConfirmation = false
+      if (frame.approved) {
+        scenario.events
+          .filter(({ event }) => event.type === 'action_completed' || event.type === 'reply' || event.type === 'done')
+          .forEach(send)
+      } else {
+        client.send(JSON.stringify({ type: 'reply', content: '已取消删除操作。' }))
+        client.send(JSON.stringify({ type: 'done' }))
+      }
+    }
+  })
+})
 
 export const handlers = [
+  // Test controls are available only when the browser MSW worker is enabled.
+  http.post('/api/__e2e__/todos/seed', async ({ request }) => {
+    const body = await request.json() as { todos?: Todo[] }
+    if (!Array.isArray(body.todos)) {
+      return HttpResponse.json({ message: 'todos must be an array' }, { status: 400 })
+    }
+    todos = body.todos.map((todo) => ({ ...todo }))
+    nextId = Math.max(0, ...todos.map((todo) => todo.id)) + 1
+    nextTodoFailure = null
+    writeStorage(E2E_TODOS_KEY, todos)
+    removeStorage(E2E_TODO_FAILURE_KEY)
+    return HttpResponse.json({ seeded: todos.length })
+  }),
+  http.post('/api/__e2e__/todos/fail-next', async ({ request }) => {
+    const body = await request.json() as Partial<NextTodoFailure>
+    nextTodoFailure = {
+      method: body.method?.toUpperCase(),
+      path: body.path,
+      status: body.status ?? 500,
+      message: body.message ?? '模拟 Todo API 失败',
+    }
+    writeStorage(E2E_TODO_FAILURE_KEY, nextTodoFailure)
+    return HttpResponse.json({ armed: true })
+  }),
+  http.post('/api/__e2e__/agent/scenario', async ({ request }) => {
+    const body = await request.json() as { name?: keyof typeof agentEventScenarios; timeScale?: number }
+    if (!body.name || !agentEventScenarios[body.name]) {
+      return HttpResponse.json({ message: 'unknown Agent scenario' }, { status: 400 })
+    }
+    writeStorage(E2E_AGENT_SCENARIO_KEY, { name: body.name, timeScale: body.timeScale ?? 0 })
+    return HttpResponse.json({ armed: true })
+  }),
+  http.all(/\/api\/todos(?:\/.*)?$/, ({ request }) => consumeTodoFailure(request)),
+
   // 1. GET /api/todos - list with filters
   http.get('/api/todos', ({ request }) => {
     const url = new URL(request.url)
@@ -259,7 +364,8 @@ export const handlers = [
     return HttpResponse.json(ok(todos[idx]))
   }),
 
-  // Agent WebSocket events use agentFixtures.ts; MSW only owns the HTTP history endpoint.
+  // Agent WebSocket events use the deterministic scenarios from agentFixtures.ts.
+  agentStreamHandler,
   http.delete('/api/agent/history', ({ request }) => {
     const sessionId = new URL(request.url).searchParams.get('session_id')
     if (!sessionId) {
