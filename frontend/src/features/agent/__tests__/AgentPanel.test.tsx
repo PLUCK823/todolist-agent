@@ -83,6 +83,21 @@ describe('AgentStepTimeline', () => {
     expect(onRetry).toHaveBeenCalledWith('failed')
   })
 
+  it('hides replay when the turn has already completed an action', () => {
+    render(<AgentStepTimeline
+      steps={[
+        { id: 'done', label: '创建任务', status: 'completed', action: 'create_todo', result: { id: 1 } },
+        { id: 'failed', label: '同步页面', status: 'failed', retryable: true, errorMessage: '同步失败' },
+      ]}
+      capabilities={{ supportsStepRetry: true }}
+      onRetry={vi.fn()}
+      onConfirm={vi.fn()}
+      onReject={vi.fn()}
+    />)
+
+    expect(screen.queryByRole('button', { name: '重试同步页面' })).not.toBeInTheDocument()
+  })
+
   it('preserves nested objects, arrays, booleans and null in an action card', () => {
     render(<AgentStepTimeline
       steps={[{

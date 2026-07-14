@@ -32,14 +32,13 @@ test('shows running and waiting time before a delayed tool completes', async ({ 
   await expect(page.getByText('好的，已创建高优先级任务。')).toBeVisible()
 })
 
-test('surfaces a tool timeout and allows a safe new request to succeed', async ({ page, useAgentScenario }) => {
+test('retries a retryable tool timeout from the panel and succeeds', async ({ page, useAgentScenario }) => {
   await useAgentScenario('timeout')
   await page.goto('/tasks')
   await sendFromPanel(page, '创建超时任务')
   await expect(page.getByRole('alert').filter({ hasText: 'Todo API 响应超时' })).toBeVisible()
-  await expect(page.getByRole('button', { name: /^重试/ })).toHaveCount(0)
   await useAgentScenario('success')
-  await sendFromPanel(page, '改为创建有效任务')
+  await page.getByRole('button', { name: '重试调用 Todo API' }).click()
   await expect(page.getByText('好的，已创建高优先级任务。')).toBeVisible()
 })
 
@@ -67,6 +66,18 @@ test('shares the same live session with the standalone Agent workspace', async (
   await expect(page.getByRole('log')).toContainText('独立工作区任务')
   await expect(page.getByRole('log')).toContainText('好的，已创建高优先级任务。')
   await expect(page.getByLabel('执行详情').filter({ has: page.getByRole('list', { name: 'Agent 执行步骤' }) })).toBeVisible()
+})
+
+test('recovers a retryable failure from the standalone Agent workspace', async ({ page, useAgentScenario }) => {
+  await useAgentScenario('timeout')
+  await page.goto('/assistant')
+  await page.getByLabel('智能助手消息').fill('独立页超时任务')
+  await page.getByRole('button', { name: '发送消息' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 响应超时' })).toBeVisible()
+  await useAgentScenario('success')
+  await page.getByRole('button', { name: '重试调用 Todo API' }).click()
+  await expect(page.getByRole('log')).toContainText('好的，已创建高优先级任务。')
+  await expect(page.locator('#current > header').getByText('任务已完成', { exact: true })).toBeVisible()
 })
 
 test('reports a disconnected stream and clears retained history', async ({ page, useAgentScenario }) => {

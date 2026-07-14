@@ -47,7 +47,20 @@ test('debounces search and clears a no-results state', async ({ page, seedTodos 
   await seedTodos([todo(1, 'Alpha 计划'), todo(2, 'Beta 复盘')])
   await page.goto('/tasks')
   const search = page.getByLabel('搜索任务')
+  await expect(page.getByRole('button', { name: '查看任务：Alpha 计划' })).toBeVisible()
+  const keywordRequests: string[] = []
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === '/api/todos' && url.searchParams.has('keyword')) {
+      keywordRequests.push(url.searchParams.get('keyword') ?? '')
+    }
+  })
+  await search.fill('B')
+  await search.fill('Be')
   await search.fill('Beta')
+  await page.waitForTimeout(200)
+  expect(keywordRequests).toEqual([])
+  await expect.poll(() => keywordRequests).toEqual(['Beta'])
   await expect(page.getByRole('button', { name: '查看任务：Beta 复盘' })).toBeVisible()
   await expect(page.getByText('Alpha 计划')).toHaveCount(0)
   await search.fill('不存在')

@@ -77,9 +77,14 @@ export default function AgentStepTimeline({ steps, capabilities, onRetry, onConf
   onReject(confirmationId: string): void
 }) {
   if (!steps.length) return null
+  const turnCapabilities = {
+    ...capabilities,
+    supportsStepRetry: capabilities.supportsStepRetry
+      && !steps.some((step) => step.status === 'completed' && Boolean(step.action)),
+  }
   return (
     <ol className="agent-timeline" aria-label="Agent 执行步骤">
-      {steps.map((step) => <AgentStepItem key={step.id} step={step} capabilities={capabilities} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
+      {steps.map((step) => <AgentStepItem key={step.id} step={step} capabilities={turnCapabilities} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
     </ol>
   )
 }

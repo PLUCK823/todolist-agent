@@ -488,23 +488,59 @@ describe('useAgentSession', () => {
     expect(client.controls).toEqual([])
   })
 
-  it('does not replay a business request when safe step retry is unsupported', () => {
+  it('replays a retryable failed turn when no action has completed', () => {
     const client = new ControlledClient()
-    const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
+    let messageId = 0
+    const { result } = renderHook(() => useAgentSession({
+      client,
+      sessionIdFactory: () => 's',
+      messageIdFactory: () => `message-${++messageId}`,
+    }))
     act(() => result.current.send('创建任务'))
     act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'step-1', label: '调用' }))
     act(() => client.handlers[0].onEvent({
       type: 'step_failed', step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
     }))
-    act(() => {
-      result.current.retry('missing')
-      result.current.retry('step-1')
-    })
-    expect(client.requests).toHaveLength(1)
-    expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(1)
+    act(() => result.current.retry('step-1'))
+
+    expect(client.requests).toEqual([
+      { message: '创建任务', session_id: 's' },
+      { message: '创建任务', session_id: 's' },
+    ])
+    expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(2)
     expect(result.current.sessionId).toBe('s')
-    expect(result.current.status).toBe('failed')
-    expect(result.current.capabilities.supportsStepRetry).toBe(false)
+    expect(result.current.status).toBe('connecting')
+    expect(result.current.capabilities.supportsStepRetry).toBe(true)
+  })
+
+  it('refuses replay for missing, non-retryable or already-mutated steps', () => {
+    const cases = [
+      { failedId: 'failed', requestedId: 'missing', retryable: true, completedAction: false },
+      { failedId: 'failed', requestedId: 'failed', retryable: false, completedAction: false },
+      { failedId: 'failed', requestedId: 'failed', retryable: true, completedAction: true },
+    ]
+
+    for (const scenario of cases) {
+      const client = new ControlledClient()
+      const { result, unmount } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
+      act(() => result.current.send('创建任务'))
+      act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: scenario.failedId, label: '调用' }))
+      if (scenario.completedAction) {
+        act(() => client.handlers[0].onEvent({
+          type: 'step_started', step_id: 'mutated', label: '创建', tool: 'create_todo',
+        }))
+        act(() => client.handlers[0].onEvent({
+          type: 'action_completed', step_id: 'mutated', action: 'create_todo', result: { id: 1 }, duration_ms: 1,
+        }))
+      }
+      act(() => client.handlers[0].onEvent({
+        type: 'step_failed', step_id: scenario.failedId, error_code: 'TIMEOUT', message: '超时', retryable: scenario.retryable, duration_ms: 5000,
+      }))
+      act(() => result.current.retry(scenario.requestedId))
+
+      expect(client.requests).toHaveLength(1)
+      unmount()
+    }
   })
 
   it('cancels on unmount and clear deletes server history before resetting local state', async () => {

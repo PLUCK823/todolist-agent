@@ -10,7 +10,7 @@ export default defineConfig({
   outputDir: './test-results/artifacts',
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,
   reporter: process.env.CI ? [['line'], ['html', { open: 'never' }]] : 'line',
   expect: { timeout: 15_000 },
   use: {

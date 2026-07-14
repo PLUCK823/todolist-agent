@@ -24,7 +24,7 @@ const activeStatuses = new Set<AgentSessionState['status']>([
   'connecting', 'running', 'waiting_confirmation',
 ])
 
-export const agentCapabilities = { supportsStepRetry: false } as const
+export const agentCapabilities = { supportsStepRetry: true } as const
 
 export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSessionValue {
   const client = options.client ?? agentStreamClient
@@ -143,10 +143,18 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const send = useCallback((message: string) => startRequest(message), [startRequest])
 
   const retry = useCallback((stepId: string) => {
-    // The target protocol has no idempotent retry_step frame yet. Replaying the
-    // user's message could duplicate mutations, so Task 8 must hide this action.
-    void stepId
-  }, [])
+    const current = stateRef.current
+    const failedStep = current.steps.find((step) => step.id === stepId)
+    const alreadyMutated = current.steps.some((step) => step.status === 'completed' && Boolean(step.action))
+    if (
+      current.status !== 'failed'
+      || failedStep?.status !== 'failed'
+      || !failedStep.retryable
+      || alreadyMutated
+      || !current.lastRequest
+    ) return
+    startRequest(current.lastRequest)
+  }, [startRequest])
 
   const resolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
     if (clearingRef.current) return
