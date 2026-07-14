@@ -1,7 +1,7 @@
 import { agentEventScenarios, type AgentEventScenario } from '../../src/mocks/agentFixtures'
 import { expect, postE2EControl, test as apiTest } from './api.fixture'
 
-export type AgentScenarioName = 'success' | 'timeout' | 'confirmationRequired'
+export type AgentScenarioName = 'success' | 'timeout' | 'validationError' | 'confirmationRequired' | 'disconnect'
 
 export interface AgentScenarioOptions {
   timeScale?: number
@@ -19,10 +19,7 @@ export const agentScenarios = {
 
 export const test = apiTest.extend<AgentFixtures>({
   useAgentScenario: async ({ page }, provide) => {
-    let installed = false
     await provide(async (name, options) => {
-      if (installed) throw new Error('Only one Agent scenario can be installed per test page')
-      installed = true
       await postE2EControl(page, '/api/__e2e__/agent/scenario', {
         name,
         timeScale: options?.timeScale ?? 0,

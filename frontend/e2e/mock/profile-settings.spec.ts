@@ -1,0 +1,71 @@
+import { expect, test } from '../fixtures/agent.fixture'
+
+test.beforeEach(async ({ login }) => { await login() })
+
+test('saves display name and timezone and reflects them in the account UI', async ({ page }) => {
+  await page.goto('/profile')
+  await page.getByLabel('显示名称').fill('更新后的用户')
+  await page.getByLabel('时区').fill('Asia/Tokyo (UTC+9)')
+  await page.getByRole('button', { name: '保存修改' }).click()
+  await expect(page.getByText('个人资料已保存')).toBeVisible()
+  await page.reload()
+  await expect(page.getByLabel('显示名称')).toHaveValue('更新后的用户')
+  await expect(page.getByLabel('时区')).toHaveValue('Asia/Tokyo (UTC+9)')
+  await page.getByRole('button', { name: '展开导航' }).click()
+  await expect(page.getByRole('link', { name: '用户资料' }).getByText('更新后的用户', { exact: true })).toBeVisible()
+})
+
+test('chooses and persists a preset avatar', async ({ page }) => {
+  await page.goto('/profile')
+  await page.getByRole('button', { name: '更换头像' }).click()
+  const dialog = page.getByRole('dialog', { name: '更换头像' })
+  await dialog.getByText('星紫', { exact: true }).click()
+  await expect(dialog.getByRole('radio', { name: '星紫' })).toBeChecked()
+  await dialog.getByRole('button', { name: '保存头像' }).click()
+  await expect(page.getByText('头像已更新')).toBeVisible()
+  await page.reload()
+  await expect(page.getByLabel('Plucky HZ的头像').first()).toContainText('✦')
+})
+
+test('rejects invalid avatar files and previews a valid PNG', async ({ page }) => {
+  await page.goto('/profile')
+  await page.getByRole('button', { name: '更换头像' }).click()
+  const dialog = page.getByRole('dialog', { name: '更换头像' })
+  const upload = dialog.getByLabel('上传头像')
+  await upload.setInputFiles({ name: 'avatar.txt', mimeType: 'text/plain', buffer: Buffer.from('not an image') })
+  await expect(dialog.getByRole('alert')).toHaveText('仅支持 PNG 或 JPEG 图片')
+
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+3KzPAAAAAElFTkSuQmCC', 'base64')
+  await upload.setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: png })
+  await expect(dialog.getByRole('img', { name: '头像预览' })).toBeVisible()
+  await dialog.getByRole('button', { name: '保存头像' }).click()
+  await expect(page.getByText('头像已更新')).toBeVisible()
+  await expect(page.getByRole('img', { name: 'Plucky HZ的头像' }).first()).toBeVisible()
+})
+
+test('persists theme, motion and Agent startup preferences', async ({ page }) => {
+  await page.goto('/tasks')
+  await page.getByRole('button', { name: '设置' }).click()
+  const dialog = page.getByRole('dialog', { name: '设置' })
+  await dialog.getByLabel('主题').selectOption('dark')
+  await dialog.getByLabel('动态效果').selectOption('reduce')
+  await dialog.getByLabel('启动时展开智能助手').uncheck()
+  await dialog.getByRole('button', { name: '保存设置' }).click()
+  await expect(page.getByText('设置已保存')).toBeVisible()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
+  await expect(page.locator('html')).toHaveAttribute('data-reduced-motion', 'true')
+  await page.reload()
+  await expect(page.getByTestId('agent-column')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '展开智能助手' })).toBeVisible()
+})
+
+test('keeps settings changes local until Save and supports cancel', async ({ page }) => {
+  await page.goto('/tasks')
+  await page.getByRole('button', { name: '设置' }).click()
+  const dialog = page.getByRole('dialog', { name: '设置' })
+  await dialog.getByLabel('主题').selectOption('dark')
+  await dialog.getByRole('button', { name: '取消' }).click()
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme', 'dark')
+  await page.getByRole('button', { name: '设置' }).click()
+  await expect(dialog.getByLabel('主题')).toHaveValue('system')
+})

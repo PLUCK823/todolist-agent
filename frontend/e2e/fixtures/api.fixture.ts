@@ -6,18 +6,30 @@ import type { Page } from '@playwright/test'
 export interface FailNextTodoRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   path?: string
+  query?: string
+  times?: number
   status?: number
   message?: string
+}
+
+export interface DelayNextTodoRequestOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  path?: string
+  query?: string
+  times?: number
+  delayMs?: number
 }
 
 export interface ApiFixtures {
   seedTodos: (todos?: Todo[]) => Promise<void>
   failNextTodoRequest: (options?: FailNextTodoRequestOptions) => Promise<void>
+  delayNextTodoRequest: (options?: DelayNextTodoRequestOptions) => Promise<void>
   _apiState: void
 }
 
 async function ensureMockPage(page: Page) {
-  if (page.url() === 'about:blank') await page.goto('/login')
+  if (page.url() !== 'about:blank') return
+  await page.goto('/login')
   await page.getByRole('button', { name: '登录' }).waitFor()
 }
 
@@ -41,6 +53,10 @@ export const test = appTest.extend<ApiFixtures>({
 
   failNextTodoRequest: async ({ page }, provide) => {
     await provide((options = {}) => postE2EControl(page, '/api/__e2e__/todos/fail-next', options))
+  },
+
+  delayNextTodoRequest: async ({ page }, provide) => {
+    await provide((options = {}) => postE2EControl(page, '/api/__e2e__/todos/delay-next', options))
   },
 
   _apiState: [async ({ page }, provide) => {

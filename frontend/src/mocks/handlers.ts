@@ -54,13 +54,25 @@ let todos: Todo[] = defaultTodos.map((todo) => ({ ...todo }))
 interface NextTodoFailure {
   method?: string
   path?: string
+  query?: string
+  remaining: number
   status: number
   message: string
 }
 
+interface NextTodoDelay {
+  method?: string
+  path?: string
+  query?: string
+  remaining: number
+  delayMs: number
+}
+
 let nextTodoFailure: NextTodoFailure | null = null
+let nextTodoDelay: NextTodoDelay | null = null
 const E2E_TODOS_KEY = 'todolist:e2e:todos'
 const E2E_TODO_FAILURE_KEY = 'todolist:e2e:todo-failure'
+const E2E_TODO_DELAY_KEY = 'todolist:e2e:todo-delay'
 const E2E_AGENT_SCENARIO_KEY = 'todolist:e2e:agent-scenario'
 
 function readStorage(key: string) {
@@ -84,9 +96,12 @@ function hydrateE2ETodoState() {
     }
     const storedFailure = JSON.parse(readStorage(E2E_TODO_FAILURE_KEY) ?? 'null') as NextTodoFailure | null
     if (storedFailure) nextTodoFailure = storedFailure
+    const storedDelay = JSON.parse(readStorage(E2E_TODO_DELAY_KEY) ?? 'null') as NextTodoDelay | null
+    if (storedDelay) nextTodoDelay = storedDelay
   } catch {
     removeStorage(E2E_TODOS_KEY)
     removeStorage(E2E_TODO_FAILURE_KEY)
+    removeStorage(E2E_TODO_DELAY_KEY)
   }
 }
 
@@ -98,8 +113,10 @@ export function resetTodos(): void {
   nextId = Math.max(0, ...defaultTodos.map((todo) => todo.id)) + 1
   todos = defaultTodos.map((todo) => ({ ...todo }))
   nextTodoFailure = null
+  nextTodoDelay = null
   removeStorage(E2E_TODOS_KEY)
   removeStorage(E2E_TODO_FAILURE_KEY)
+  removeStorage(E2E_TODO_DELAY_KEY)
 }
 
 export function getTodos(): Todo[] {
@@ -116,15 +133,35 @@ function notFound(): ApiResponse<null> {
 
 import { http, HttpResponse, ws } from 'msw'
 
-function consumeTodoFailure(request: Request) {
+async function consumeTodoControl(request: Request) {
   hydrateE2ETodoState()
-  if (!nextTodoFailure) return undefined
   const url = new URL(request.url)
+  if (nextTodoDelay
+    && (!nextTodoDelay.method || nextTodoDelay.method === request.method.toUpperCase())
+    && (!nextTodoDelay.path || url.pathname.includes(nextTodoDelay.path))
+    && (!nextTodoDelay.query || url.search.includes(nextTodoDelay.query))) {
+    const delay = nextTodoDelay
+    delay.remaining -= 1
+    if (delay.remaining <= 0) {
+      nextTodoDelay = null
+      removeStorage(E2E_TODO_DELAY_KEY)
+    } else {
+      writeStorage(E2E_TODO_DELAY_KEY, delay)
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay.delayMs))
+  }
+  if (!nextTodoFailure) return undefined
   if (nextTodoFailure.method && nextTodoFailure.method !== request.method.toUpperCase()) return undefined
   if (nextTodoFailure.path && !url.pathname.includes(nextTodoFailure.path)) return undefined
+  if (nextTodoFailure.query && !url.search.includes(nextTodoFailure.query)) return undefined
   const failure = nextTodoFailure
-  nextTodoFailure = null
-  removeStorage(E2E_TODO_FAILURE_KEY)
+  failure.remaining -= 1
+  if (failure.remaining <= 0) {
+    nextTodoFailure = null
+    removeStorage(E2E_TODO_FAILURE_KEY)
+  } else {
+    writeStorage(E2E_TODO_FAILURE_KEY, failure)
+  }
   return HttpResponse.json(
     { code: failure.status * 100 + 1, message: failure.message, data: null },
     { status: failure.status },
@@ -142,17 +179,49 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     const config = (() => {
       try {
         return JSON.parse(readStorage(E2E_AGENT_SCENARIO_KEY) ?? 'null') as {
-          name?: keyof typeof agentEventScenarios
+          name?: keyof typeof agentEventScenarios | 'disconnect'
           timeScale?: number
         } | null
       } catch { return null }
     })()
     const name = config?.name ?? 'success'
     const timeScale = config?.timeScale ?? 0
+    if (name === 'disconnect') {
+      setTimeout(() => client.close(1011, 'mock_disconnect'), Math.max(0, Math.round(50 * timeScale)))
+      return
+    }
     const scenario = agentEventScenarios[name] ?? agentEventScenarios.success
+    const applyAction = (event: (typeof scenario.events)[number]['event']) => {
+      if (event.type !== 'action_completed') return
+      if (event.action === 'create_todo') {
+        const result = event.result as { title?: unknown; priority?: unknown }
+        const now = new Date().toISOString()
+        todos.unshift({
+          id: nextId++,
+          title: typeof result.title === 'string' ? result.title : 'Agent 创建的任务',
+          description: '',
+          priority: result.priority === 'high' || result.priority === 'low' ? result.priority : 'medium',
+          completed: false,
+          due_date: null,
+          created_at: now,
+          updated_at: now,
+        })
+        persistTodos()
+      }
+      if (event.action === 'delete_todo') {
+        const result = event.result as { id?: unknown }
+        if (typeof result.id === 'number') {
+          todos = todos.filter((todo) => todo.id !== result.id)
+          persistTodos()
+        }
+      }
+    }
     const send = (item: (typeof scenario.events)[number], relativeToMs = 0) => {
       const delay = Math.max(0, Math.round((item.atMs - relativeToMs) * timeScale))
-      setTimeout(() => client.send(JSON.stringify(item.event)), delay)
+      setTimeout(() => {
+        applyAction(item.event)
+        client.send(JSON.stringify(item.event))
+      }, delay)
     }
 
     if (!started) {
@@ -193,30 +262,46 @@ export const handlers = [
     todos = body.todos.map((todo) => ({ ...todo }))
     nextId = Math.max(0, ...todos.map((todo) => todo.id)) + 1
     nextTodoFailure = null
+    nextTodoDelay = null
     writeStorage(E2E_TODOS_KEY, todos)
     removeStorage(E2E_TODO_FAILURE_KEY)
+    removeStorage(E2E_TODO_DELAY_KEY)
     return HttpResponse.json({ seeded: todos.length })
   }),
   http.post('/api/__e2e__/todos/fail-next', async ({ request }) => {
-    const body = await request.json() as Partial<NextTodoFailure>
+    const body = await request.json() as Partial<NextTodoFailure> & { times?: number }
     nextTodoFailure = {
       method: body.method?.toUpperCase(),
       path: body.path,
+      query: body.query,
+      remaining: Math.max(1, Math.min(10, body.times ?? 1)),
       status: body.status ?? 500,
       message: body.message ?? '模拟 Todo API 失败',
     }
     writeStorage(E2E_TODO_FAILURE_KEY, nextTodoFailure)
     return HttpResponse.json({ armed: true })
   }),
+  http.post('/api/__e2e__/todos/delay-next', async ({ request }) => {
+    const body = await request.json() as Partial<NextTodoDelay> & { times?: number }
+    nextTodoDelay = {
+      method: body.method?.toUpperCase(),
+      path: body.path,
+      query: body.query,
+      remaining: Math.max(1, Math.min(10, body.times ?? 1)),
+      delayMs: Math.max(0, Math.min(10_000, body.delayMs ?? 250)),
+    }
+    writeStorage(E2E_TODO_DELAY_KEY, nextTodoDelay)
+    return HttpResponse.json({ armed: true })
+  }),
   http.post('/api/__e2e__/agent/scenario', async ({ request }) => {
-    const body = await request.json() as { name?: keyof typeof agentEventScenarios; timeScale?: number }
-    if (!body.name || !agentEventScenarios[body.name]) {
+    const body = await request.json() as { name?: keyof typeof agentEventScenarios | 'disconnect'; timeScale?: number }
+    if (!body.name || (body.name !== 'disconnect' && !agentEventScenarios[body.name])) {
       return HttpResponse.json({ message: 'unknown Agent scenario' }, { status: 400 })
     }
     writeStorage(E2E_AGENT_SCENARIO_KEY, { name: body.name, timeScale: body.timeScale ?? 0 })
     return HttpResponse.json({ armed: true })
   }),
-  http.all(/\/api\/todos(?:\/.*)?$/, ({ request }) => consumeTodoFailure(request)),
+  http.all(/\/api\/todos(?:\/.*)?$/, ({ request }) => consumeTodoControl(request)),
 
   // 1. GET /api/todos - list with filters
   http.get('/api/todos', ({ request }) => {
