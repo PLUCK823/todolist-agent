@@ -118,6 +118,41 @@ async def test_agent_creates_session_when_none_provided():
 
 
 @pytest.mark.asyncio
+async def test_deterministic_e2e_provider_creates_requested_high_priority_todo(httpx_mock, monkeypatch):
+    """The opt-in E2E provider must exercise the real tool loop without a network LLM."""
+    from app.agent import process_message
+
+    monkeypatch.setenv("LLM_PROVIDER", "fake")
+    httpx_mock.add_response(
+        url="http://localhost:8080/api/todos",
+        method="POST",
+        json={
+            "code": 0,
+            "message": "ok",
+            "data": {
+                "id": 99,
+                "title": "真实联调任务",
+                "description": "",
+                "priority": "high",
+                "completed": False,
+                "due_date": None,
+                "created_at": "2026-07-13T10:30:00Z",
+                "updated_at": "2026-07-13T10:30:00Z",
+            },
+        },
+        status_code=201,
+    )
+
+    reply, actions, _ = await process_message(None, "创建高优先级任务：真实联调任务")
+
+    assert reply == "已创建高优先级任务「真实联调任务」。"
+    assert actions[0]["type"] == "create_todo"
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.read().decode() == '{"title":"真实联调任务","priority":"high"}'
+
+
+@pytest.mark.asyncio
 async def test_agent_reuses_session():
     """Messages in the same session accumulate history."""
     from app.agent import process_message, _conversations

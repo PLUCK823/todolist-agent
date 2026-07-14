@@ -7,6 +7,7 @@ import copy
 import inspect
 import logging
 import os
+import re
 import secrets
 import time
 import uuid
@@ -98,6 +99,9 @@ class ProcessResult:
 
 
 def _build_llm():
+    if os.getenv("LLM_PROVIDER", "openai").lower() in {"fake", "e2e"}:
+        return _DeterministicE2ELLM()
+
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
@@ -105,6 +109,44 @@ def _build_llm():
         temperature=0.2,
         base_url=os.getenv("OPENAI_BASE_URL", None),
     )
+
+
+class _DeterministicE2ELLM:
+    """Small opt-in model used only by the real-stack E2E environment.
+
+    It still drives the production agent loop and real Todo tools; only the
+    external model boundary is deterministic and credential-free.
+    """
+
+    def bind_tools(self, _tools: list[BaseTool]) -> "_DeterministicE2ELLM":
+        return self
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+        last_human_index = max(
+            (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
+            default=-1,
+        )
+        prompt = str(messages[last_human_index].content) if last_human_index >= 0 else ""
+        if any(isinstance(message, ToolMessage) for message in messages[last_human_index + 1:]):
+            title = self._create_title(prompt)
+            return AIMessage(content=f"已创建高优先级任务「{title}」。")
+
+        title = self._create_title(prompt)
+        return AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "create_todo",
+                "args": {"title": title, "priority": "high"},
+                "id": "e2e-create-todo",
+                "type": "tool_call",
+            }],
+        )
+
+    @staticmethod
+    def _create_title(prompt: str) -> str:
+        match = re.search(r"(?:任务|待办)\s*[：:]\s*(.+)$", prompt.strip())
+        title = match.group(1).strip(" \t\r\n。.!！?？\"'「」") if match else prompt.strip()
+        return title or "真实联调任务"
 
 
 _compiled_graph = None
