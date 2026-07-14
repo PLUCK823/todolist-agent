@@ -3,7 +3,7 @@ import type {
   AgentFailure,
   AgentHandlers,
   AgentHistoryApi,
-  AgentMessageRequest,
+  AgentClientRequest,
   AgentStreamClient,
 } from './agent.types'
 import { parseAgentEvent } from './agent.schema'
@@ -52,7 +52,7 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
   const retryBaseDelayMs = options.retryBaseDelayMs ?? 250
 
   return {
-    send(input: AgentMessageRequest, handlers: AgentHandlers): () => void {
+    send(input: AgentClientRequest, handlers: AgentHandlers): () => void {
       let socket: WebSocket | undefined
       let connectionTimer: ReturnType<typeof setTimeout> | undefined
       let retryTimer: ReturnType<typeof setTimeout> | undefined

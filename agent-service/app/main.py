@@ -23,14 +23,17 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from .agent import (
+    AgentExecutionError,
     ProcessResult,
     complete_turn,
     delete_history,
     get_history,
     process_message,
+    InvalidRetryStep,
+    retry_failed_step,
     resolve_confirmation,
 )
-from .schemas import ChatRequest, ConfirmationResponse
+from .schemas import ChatRequest, ConfirmationResponse, RetryStepRequest
 
 logger = logging.getLogger(__name__)
 
@@ -212,7 +215,10 @@ async def stream(ws: WebSocket):
         except json.JSONDecodeError:
             parsed = raw
         payload = parsed if isinstance(parsed, dict) else {"message": raw}
-        request = ChatRequest.model_validate(payload)
+        if payload.get("type") == "retry_step":
+            request = RetryStepRequest.model_validate(payload)
+        else:
+            request = ChatRequest.model_validate(payload)
     except (ValidationError, TypeError, ValueError) as exc:
         await writer.send_json(
             {
@@ -226,6 +232,36 @@ async def stream(ws: WebSocket):
         )
         await writer.send_json({"type": "done"})
         await ws.close(code=1008)
+        return
+
+    if isinstance(request, RetryStepRequest):
+        try:
+            await retry_failed_step(
+                request.session_id,
+                request.step_id,
+                request.retry_token,
+                writer.send_json,
+            )
+        except InvalidRetryStep as exc:
+            await writer.send_json(
+                {
+                    "type": "step_failed",
+                    "step_id": request.step_id,
+                    "error_code": "INVALID_RETRY_STEP",
+                    "message": str(exc),
+                    "retryable": False,
+                    "duration_ms": 0,
+                }
+            )
+            await writer.send_json({"type": "done"})
+            await ws.close(code=1008)
+            return
+        except AgentExecutionError:
+            await writer.send_json({"type": "done"})
+            await ws.close(code=1011)
+            return
+        await writer.send_json({"type": "done"})
+        await ws.close()
         return
 
     # Fix the ID before processing so confirmation tokens can be bound to the

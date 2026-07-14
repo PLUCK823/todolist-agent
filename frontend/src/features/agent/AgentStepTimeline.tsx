@@ -69,7 +69,7 @@ function AgentStepItem({ step, retryAllowed, onRetry, onConfirm, onReject }: {
   )
 }
 
-export default function AgentStepTimeline({ steps, capabilities, canRetry, onRetry, onConfirm, onReject }: {
+export default function AgentStepTimeline({ steps, canRetry, onRetry, onConfirm, onReject }: {
   steps: AgentStep[]
   capabilities: AgentCapabilities
   canRetry?(stepId: string): boolean
@@ -80,7 +80,7 @@ export default function AgentStepTimeline({ steps, capabilities, canRetry, onRet
   if (!steps.length) return null
   return (
     <ol className="agent-timeline" aria-label="Agent 执行步骤">
-      {steps.map((step) => <AgentStepItem key={step.id} step={step} retryAllowed={capabilities.supportsStepRetry || canRetry?.(step.id) === true} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
+      {steps.map((step) => <AgentStepItem key={step.id} step={step} retryAllowed={canRetry?.(step.id) === true} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
     </ol>
   )
 }

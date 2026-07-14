@@ -24,16 +24,16 @@ const activeStatuses = new Set<AgentSessionState['status']>([
   'connecting', 'running', 'waiting_confirmation',
 ])
 
-export const agentCapabilities = { supportsStepRetry: false } as const
 const readOnlyRetryTools = new Set(['list_todos', 'get_todo'])
 
-export function canRetryReadOnlyTurn(state: AgentSessionState, stepId: string): boolean {
+export function canRetryServerStep(state: AgentSessionState, stepId: string): boolean {
   const failedStep = state.steps.find((step) => step.id === stepId)
   const toolSteps = state.steps.filter((step) => typeof step.tool === 'string')
   return state.status === 'failed'
-    && Boolean(state.lastRequest)
+    && Boolean(state.sessionId)
     && failedStep?.status === 'failed'
     && failedStep.retryable === true
+    && typeof failedStep.retryToken === 'string'
     && typeof failedStep.tool === 'string'
     && readOnlyRetryTools.has(failedStep.tool)
     && toolSteps.length > 0
@@ -158,14 +158,48 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const send = useCallback((message: string) => startRequest(message), [startRequest])
 
   const canRetry = useCallback((stepId: string) => (
-    canRetryReadOnlyTurn(stateRef.current, stepId)
+    canRetryServerStep(stateRef.current, stepId)
   ), [])
 
   const retry = useCallback((stepId: string) => {
     const current = stateRef.current
-    if (!canRetryReadOnlyTurn(current, stepId) || !current.lastRequest) return
-    startRequest(current.lastRequest)
-  }, [startRequest])
+    const step = current.steps.find((candidate) => candidate.id === stepId)
+    if (!canRetryServerStep(current, stepId) || !current.sessionId || !step?.retryToken) return
+    const generation = ++generationRef.current
+    closeStream()
+    dispatch({ type: 'retry_started', stepId })
+    const isCurrent = () => mountedRef.current && generationRef.current === generation
+    try {
+      const cancelRequest = client.send(
+        {
+          type: 'retry_step',
+          session_id: current.sessionId,
+          step_id: stepId,
+          retry_token: step.retryToken,
+        },
+        {
+          onOpen: () => { if (isCurrent()) dispatch({ type: 'connected' }) },
+          onEvent: (event) => {
+            if (!isCurrent()) return
+            dispatch(event)
+            if (event.type === 'done') invalidateRequest(generation)
+          },
+          onFailure: (failure) => {
+            if (!isCurrent()) return
+            dispatch({ type: 'client_failed', failure })
+            invalidateRequest(generation)
+          },
+        },
+      )
+      if (isCurrent()) cancelRef.current = cancelRequest
+      else cancelRequest()
+    } catch (error) {
+      if (isCurrent()) {
+        dispatchSynchronousFailure(error)
+        invalidateRequest(generation)
+      }
+    }
+  }, [client, closeStream, dispatch, dispatchSynchronousFailure, invalidateRequest])
 
   const resolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
     if (clearingRef.current) return
@@ -253,7 +287,9 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     messages: state.messages,
     steps: state.steps,
     status: state.status,
-    capabilities: agentCapabilities,
+    capabilities: {
+      supportsStepRetry: state.steps.some((step) => typeof step.retryToken === 'string'),
+    },
     canSend: !isClearing && !activeStatuses.has(state.status),
     isClearing,
     send,

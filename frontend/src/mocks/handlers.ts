@@ -169,13 +169,20 @@ async function consumeTodoControl(request: Request) {
 }
 
 const agentStream = ws.link('/api/agent/stream')
+const mockReadOnlyRetryTools = new Set(['list_todos', 'get_todo'])
+const pendingAgentRetries = new Map<string, {
+  sessionId: string
+  stepId: string
+  tool: string
+  args: Record<string, unknown>
+}>()
 
 const agentStreamHandler = agentStream.addEventListener('connection', ({ client }) => {
   let started = false
   let waitingForConfirmation = false
   client.addEventListener('message', (message) => {
-    let frame: { type?: string; approved?: boolean }
-    try { frame = JSON.parse(String(message.data)) as { type?: string; approved?: boolean } } catch { return }
+    let frame: Record<string, unknown>
+    try { frame = JSON.parse(String(message.data)) as Record<string, unknown> } catch { return }
     const config = (() => {
       try {
         return JSON.parse(readStorage(E2E_AGENT_SCENARIO_KEY) ?? 'null') as {
@@ -186,6 +193,37 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     })()
     const name = config?.name ?? 'success'
     const timeScale = config?.timeScale ?? 0
+    if (!started && frame.type === 'retry_step') {
+      started = true
+      const allowedKeys = new Set(['type', 'session_id', 'step_id', 'retry_token'])
+      const token = typeof frame.retry_token === 'string' ? frame.retry_token : ''
+      const pending = pendingAgentRetries.get(token)
+      const valid = Object.keys(frame).every((key) => allowedKeys.has(key))
+        && pending !== undefined
+        && pending.sessionId === frame.session_id
+        && pending.stepId === frame.step_id
+        && mockReadOnlyRetryTools.has(pending.tool)
+      if (!valid || !pending) {
+        client.send(JSON.stringify({
+          type: 'step_failed', step_id: typeof frame.step_id === 'string' ? frame.step_id : 'retry',
+          error_code: 'INVALID_RETRY_STEP', message: '重试步骤不存在、已使用或不属于当前会话',
+          retryable: false, duration_ms: 0,
+        }))
+        client.send(JSON.stringify({ type: 'done' }))
+        return
+      }
+      pendingAgentRetries.delete(token)
+      const retryScenario = agentEventScenarios.readOnlySuccess
+      retryScenario.events
+        .filter(({ event }) => ['step_started', 'action_completed', 'reply', 'done'].includes(event.type))
+        .filter(({ event }) => event.type !== 'step_started' || event.step_id === pending.stepId)
+        .forEach(({ event }, index) => setTimeout(() => {
+          client.send(JSON.stringify(event.type === 'step_started'
+            ? { ...event, tool: pending.tool, args: pending.args }
+            : event))
+        }, index))
+      return
+    }
     if (name === 'disconnect') {
       setTimeout(() => client.close(1011, 'mock_disconnect'), Math.max(0, Math.round(50 * timeScale)))
       return
@@ -219,6 +257,22 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     const send = (item: (typeof scenario.events)[number], relativeToMs = 0) => {
       const delay = Math.max(0, Math.round((item.atMs - relativeToMs) * timeScale))
       setTimeout(() => {
+        if (item.event.type === 'step_failed' && item.event.retry_token) {
+          const failedEvent = item.event
+          const retryToken = failedEvent.retry_token as string
+          const requestSession = typeof frame.session_id === 'string' ? frame.session_id : ''
+          const startedEvent = scenario.events.find(({ event }) => (
+            event.type === 'step_started' && event.step_id === failedEvent.step_id
+          ))?.event
+          if (startedEvent?.type === 'step_started' && startedEvent.tool && mockReadOnlyRetryTools.has(startedEvent.tool)) {
+            pendingAgentRetries.set(retryToken, {
+              sessionId: requestSession,
+              stepId: failedEvent.step_id,
+              tool: startedEvent.tool,
+              args: startedEvent.args ?? {},
+            })
+          }
+        }
         applyAction(item.event)
         client.send(JSON.stringify(item.event))
       }, delay)

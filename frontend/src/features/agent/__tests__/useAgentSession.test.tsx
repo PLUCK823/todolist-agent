@@ -7,7 +7,7 @@ import type {
   AgentControlSender,
   AgentEvent,
   AgentHandlers,
-  AgentMessageRequest,
+  AgentClientRequest,
   AgentStreamClient,
 } from '../agent.types'
 import { useAgentSession } from '../useAgentSession'
@@ -66,7 +66,7 @@ describe('agent event contract', () => {
     const events: AgentEvent[] = [
       { type: 'step_started', step_id: 's', label: '理解请求' },
       { type: 'step_completed', step_id: 's', duration_ms: 12 },
-      { type: 'step_failed', step_id: 's', error_code: 'X', message: '失败', retryable: true, duration_ms: 12 },
+      { type: 'step_failed', step_id: 's', error_code: 'X', message: '失败', retryable: true, retry_token: 'r'.repeat(32), duration_ms: 12 },
       { type: 'confirmation_required', step_id: 's', message: '确认？', confirmation_id: 'c' },
       { type: 'action_completed', step_id: 's', action: 'create_todo', result: { id: 1 }, duration_ms: 12 },
       { type: 'reply', content: '完成' },
@@ -340,14 +340,14 @@ describe('createAgentStreamClient', () => {
 })
 
 class ControlledClient implements AgentStreamClient {
-  requests: AgentMessageRequest[] = []
+  requests: AgentClientRequest[] = []
   handlers: AgentHandlers[] = []
   controls: AgentClientControl[] = []
   cancels = 0
   exposeControl = true
   controlAccepted = true
 
-  send(input: AgentMessageRequest, handlers: AgentHandlers) {
+  send(input: AgentClientRequest, handlers: AgentHandlers) {
     this.requests.push(input)
     this.handlers.push(handlers)
     if (this.exposeControl) {
@@ -488,7 +488,7 @@ describe('useAgentSession', () => {
     expect(client.controls).toEqual([])
   })
 
-  it('replays only a retryable read-only failed turn when no action has completed', () => {
+  it('sends an opaque retry_step frame without replaying the user message', () => {
     const client = new ControlledClient()
     let messageId = 0
     const { result } = renderHook(() => useAgentSession({
@@ -499,19 +499,23 @@ describe('useAgentSession', () => {
     act(() => result.current.send('列出未完成任务'))
     act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'step-1', label: '查询任务', tool: 'list_todos' }))
     act(() => client.handlers[0].onEvent({
-      type: 'step_failed', step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
+      type: 'step_failed', step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true,
+      retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 5000,
     }))
     expect(result.current.canRetry('step-1')).toBe(true)
     act(() => result.current.retry('step-1'))
 
     expect(client.requests).toEqual([
       { message: '列出未完成任务', session_id: 's' },
-      { message: '列出未完成任务', session_id: 's' },
+      {
+        type: 'retry_step', session_id: 's', step_id: 'step-1',
+        retry_token: 'opaque-server-token-that-is-long-enough',
+      },
     ])
-    expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(2)
+    expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(1)
     expect(result.current.sessionId).toBe('s')
     expect(result.current.status).toBe('connecting')
-    expect(result.current.capabilities.supportsStepRetry).toBe(false)
+    expect(result.current.capabilities.supportsStepRetry).toBe(true)
   })
 
   it.each(['create_todo', 'update_todo', 'delete_todo', 'unknown_tool'])('never replays the write or unknown tool %s', (tool) => {
@@ -528,11 +532,10 @@ describe('useAgentSession', () => {
     expect(client.requests).toHaveLength(1)
   })
 
-  it('refuses a read-only failed step when any other step makes the turn mixed or unsafe', () => {
+  it('refuses a retryable read-only failure when the server did not issue a token', () => {
     const client = new ControlledClient()
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('查询后创建任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'write', label: '创建', tool: 'create_todo' }))
     act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'read', label: '查询', tool: 'list_todos' }))
     act(() => client.handlers[0].onEvent({
       type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,

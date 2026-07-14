@@ -110,6 +110,7 @@ export const agentEventScenarios = {
           error_code: 'TOOL_TIMEOUT',
           message: 'Todo API 查询超时',
           retryable: true,
+          retry_token: 'mock-readonly-retry-token-list-0001',
           duration_ms: 5000,
         },
       },
@@ -132,7 +133,10 @@ export const agentEventScenarios = {
       },
       {
         atMs: createFinishedAt,
-        event: { type: 'step_completed', step_id: 'list-1', duration_ms: agentMockDelays.waitForTodoApi },
+        event: {
+          type: 'action_completed', step_id: 'list-1', action: 'list_todos',
+          result: { items: [], total: 4 }, duration_ms: agentMockDelays.waitForTodoApi,
+        },
       },
       { atMs: replyAt, event: { type: 'reply', content: '已查询到 4 项任务。' } },
       { atMs: replyAt, event: { type: 'done' } },

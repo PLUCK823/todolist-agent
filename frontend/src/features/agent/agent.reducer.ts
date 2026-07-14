@@ -68,6 +68,14 @@ export function reduceAgent(
       }
     case 'connected':
       return { ...state, status: 'running' }
+    case 'retry_started':
+      return {
+        ...state,
+        status: 'connecting',
+        steps: state.steps.map((step) => step.id === action.stepId
+          ? { ...step, status: 'waiting', errorCode: undefined, errorMessage: undefined }
+          : step),
+      }
     case 'step_started': {
       const step: AgentStep = {
         id: action.step_id,
@@ -94,6 +102,7 @@ export function reduceAgent(
         errorCode: action.error_code,
         errorMessage: action.message,
         retryable: action.retryable,
+        retryToken: action.retry_token,
         durationMs: action.duration_ms,
       }))
       return failed === state ? state : { ...failed, status: 'failed' }

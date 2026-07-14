@@ -65,22 +65,19 @@ describe('AgentStepTimeline', () => {
     expect(onReject).toHaveBeenCalledWith('confirmation-1')
   })
 
-  it('renders waiting and invokes retry only when the capability explicitly allows it', async () => {
-    const user = userEvent.setup()
-    const onRetry = vi.fn()
+  it('never exposes retry from a global capability without a server-issued step token', () => {
     render(<AgentStepTimeline
       steps={[
         { id: 'wait', label: '等待 Todo API', status: 'waiting' },
         { id: 'failed', label: '同步任务', status: 'failed', retryable: true, errorMessage: '接口超时' },
       ]}
       capabilities={{ supportsStepRetry: true }}
-      onRetry={onRetry}
+      onRetry={vi.fn()}
       onConfirm={vi.fn()}
       onReject={vi.fn()}
     />)
     expect(screen.getByText('等待中')).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '重试同步任务' }))
-    expect(onRetry).toHaveBeenCalledWith('failed')
+    expect(screen.queryByRole('button', { name: '重试同步任务' })).not.toBeInTheDocument()
   })
 
   it('offers read-only turn replay independently from unsupported step retry', async () => {

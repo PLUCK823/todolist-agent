@@ -55,6 +55,49 @@ test('never offers replay for create or delete timeouts', async ({ page, useAgen
   await expect(page.getByRole('button', { name: '重试删除待办' })).toHaveCount(0)
 })
 
+test('server-bound retry cannot be switched into a write scenario', async ({ page, seedTodos, useAgentScenario }) => {
+  await seedTodos([])
+  await useAgentScenario('readOnlyTimeout')
+  await page.goto('/tasks')
+  await sendFromPanel(page, '查询任务')
+  await expect(page.getByRole('button', { name: '重试查询 Todo 列表' })).toBeVisible()
+
+  await useAgentScenario('success')
+  await page.getByRole('button', { name: '重试查询 Todo 列表' }).click()
+  await expect(page.getByText('已查询到 4 项任务。')).toBeVisible()
+  await expect(page.getByText('完成前端原型')).toHaveCount(0)
+})
+
+test('forged retry tool and args are rejected without creating a Todo', async ({ page, seedTodos, useAgentScenario }) => {
+  await seedTodos([])
+  await useAgentScenario('readOnlyTimeout')
+  await page.goto('/login')
+  const result = await page.evaluate(() => new Promise<{ errorCode: string; total: number }>((resolve, reject) => {
+    const first = new WebSocket('/api/agent/stream')
+    first.onerror = () => reject(new Error('initial mock socket failed'))
+    first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: 'adversarial' }))
+    first.onmessage = (message) => {
+      const event = JSON.parse(String(message.data)) as { type: string; step_id?: string; retry_token?: string }
+      if (event.type !== 'step_failed' || !event.retry_token || !event.step_id) return
+      first.close()
+      const retry = new WebSocket('/api/agent/stream')
+      retry.onerror = () => reject(new Error('retry mock socket failed'))
+      retry.onopen = () => retry.send(JSON.stringify({
+        type: 'retry_step', session_id: 'adversarial', step_id: event.step_id,
+        retry_token: event.retry_token, tool: 'create_todo', args: { title: '攻击写入' },
+      }))
+      retry.onmessage = async (retryMessage) => {
+        const retryEvent = JSON.parse(String(retryMessage.data)) as { type: string; error_code?: string }
+        if (retryEvent.type !== 'step_failed') return
+        const todos = await fetch('/api/todos').then((response) => response.json()) as { data: { total: number } }
+        resolve({ errorCode: retryEvent.error_code ?? '', total: todos.data.total })
+      }
+    }
+  }))
+
+  expect(result).toEqual({ errorCode: 'INVALID_RETRY_STEP', total: 0 })
+})
+
 test('rejects and approves destructive Agent confirmations', async ({ page, useAgentScenario }) => {
   await useAgentScenario('confirmationRequired')
   await page.goto('/tasks')

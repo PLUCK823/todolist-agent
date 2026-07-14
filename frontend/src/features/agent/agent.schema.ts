@@ -110,14 +110,18 @@ export function parseAgentEvent(value: unknown): AgentEvent {
       exactKeys(event, ['type', 'step_id', 'duration_ms'])
       return { type: 'step_completed', step_id: stringField(event, 'step_id'), duration_ms: durationField(event) }
     case 'step_failed':
-      exactKeys(event, ['type', 'step_id', 'error_code', 'message', 'retryable', 'duration_ms'])
+      exactKeys(event, ['type', 'step_id', 'error_code', 'message', 'retryable', 'retry_token', 'duration_ms'])
       if (typeof event.retryable !== 'boolean') throw new AgentContractError('Invalid retryable')
+      if (event.retry_token !== undefined && (!event.retryable || stringField(event, 'retry_token').length < 32)) {
+        throw new AgentContractError('Invalid retry_token')
+      }
       return {
         type: 'step_failed',
         step_id: stringField(event, 'step_id'),
         error_code: stringField(event, 'error_code'),
         message: stringField(event, 'message'),
         retryable: event.retryable,
+        ...(event.retry_token !== undefined && { retry_token: stringField(event, 'retry_token') }),
         duration_ms: durationField(event),
       }
     case 'confirmation_required':

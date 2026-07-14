@@ -7,6 +7,7 @@ import copy
 import inspect
 import logging
 import os
+import secrets
 import time
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ MAX_SESSIONS = int(os.getenv("AGENT_MAX_SESSIONS", "1000"))
 MAX_MESSAGES_PER_SESSION = int(os.getenv("AGENT_MAX_MESSAGES_PER_SESSION", "200"))
 MAX_TOOL_ROUNDS = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "8"))
 MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "32"))
+READ_ONLY_RETRY_TOOLS = frozenset({"list_todos", "get_todo"})
 
 _tool_defs: list[BaseTool] = [
     langchain_tool(create_todo),
@@ -73,6 +75,10 @@ class SessionDeletedError(AgentExecutionError):
 
 class AgentCapacityExceeded(AgentExecutionError):
     pass
+
+
+class InvalidRetryStep(RuntimeError):
+    """A retry identity is missing, consumed, stale, or bound elsewhere."""
 
 
 @dataclass(frozen=True)
@@ -146,6 +152,49 @@ class _PendingEntry:
 _pending_confirmations: dict[str, _PendingEntry] = {}
 
 
+@dataclass(frozen=True)
+class _PendingRetry:
+    session_id: str
+    step_id: str
+    tool: str
+    args: dict[str, Any]
+    turn_id: str
+    generation: int
+
+
+_pending_retries: dict[str, _PendingRetry] = {}
+
+
+def _clear_retries_for_session(
+    session_id: str, *, turn_id: str | None = None
+) -> None:
+    for token, retry in list(_pending_retries.items()):
+        if retry.session_id == session_id and (
+            turn_id is None or retry.turn_id == turn_id
+        ):
+            _pending_retries.pop(token, None)
+
+
+def _register_retry(
+    session_id: str,
+    generation: int,
+    state: dict[str, Any],
+    step_id: str,
+    tool: str,
+    args: dict[str, Any],
+) -> str:
+    token = secrets.token_urlsafe(32)
+    _pending_retries[token] = _PendingRetry(
+        session_id=session_id,
+        step_id=step_id,
+        tool=tool,
+        args=copy.deepcopy(args),
+        turn_id=state["turn_id"],
+        generation=generation,
+    )
+    return token
+
+
 def _clear_pending_for_session(session_id: str) -> None:
     for confirmation_id, entry in list(_pending_confirmations.items()):
         if entry.binding.session_id == session_id:
@@ -157,6 +206,7 @@ def _clear_pending_for_session(session_id: str) -> None:
 def _evict_session(session_id: str) -> None:
     _conversations.pop(session_id, None)
     _clear_pending_for_session(session_id)
+    _clear_retries_for_session(session_id)
     slot = _session_slots.get(session_id)
     if slot is None or slot.refs == 0:
         _session_slots.pop(session_id, None)
@@ -313,6 +363,74 @@ def resolve_confirmation(session_id: str, confirmation_id: str, approved: bool) 
         return False
     entry.future.set_result(approved)
     return True
+
+
+async def retry_failed_step(
+    session_id: str,
+    step_id: str,
+    retry_token: str,
+    on_event: Optional[AgentEventSink] = None,
+) -> dict[str, Any]:
+    """Execute one exact server-recorded read-only call without invoking the LLM."""
+    slot = _session_slots.get(session_id)
+    if slot is None:
+        raise InvalidRetryStep("retry step does not exist or is no longer available")
+    async with slot.lock:
+        pending = _pending_retries.get(retry_token)
+        if (
+            pending is None
+            or pending.session_id != session_id
+            or pending.step_id != step_id
+            or pending.generation != slot.epoch
+            or pending.tool not in READ_ONLY_RETRY_TOOLS
+            or session_id not in _conversations
+        ):
+            raise InvalidRetryStep("retry step does not exist or is no longer available")
+        if _pending_retries.pop(retry_token, None) is not pending:
+            raise InvalidRetryStep("retry step does not exist or is no longer available")
+        tool = _tools_by_name.get(pending.tool)
+        if tool is None:
+            raise InvalidRetryStep("retry tool is no longer available")
+        started = time.monotonic()
+        await _emit(
+            on_event,
+            {
+                "type": "step_started",
+                "step_id": step_id,
+                "label": "重试 Todo API 查询",
+                "tool": pending.tool,
+                "args": copy.deepcopy(pending.args),
+                "started_at": _now_iso(),
+            },
+        )
+        try:
+            result = await tool.ainvoke(copy.deepcopy(pending.args))
+        except Exception as exc:
+            error_code, _ = _failure_metadata(exc)
+            await _emit(
+                on_event,
+                {
+                    "type": "step_failed",
+                    "step_id": step_id,
+                    "error_code": error_code,
+                    "message": str(exc),
+                    "retryable": False,
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                },
+            )
+            raise AgentExecutionError(
+                str(exc), phase=step_id, event_emitted=on_event is not None
+            ) from exc
+        event = {
+            "type": "action_completed",
+            "step_id": step_id,
+            "action": pending.tool,
+            "result": result,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        }
+        await _emit(on_event, event)
+        await _emit(on_event, {"type": "reply", "content": "已重新执行查询。"})
+        return result
 
 
 def _now_iso() -> str:
@@ -569,6 +687,7 @@ async def process_message(
                     )
                 state["error_code"] = None
             else:
+                _clear_retries_for_session(session_id)
                 state = _new_incomplete(message, committed)
 
             # Forward-compatible defaults for journals created by older workers.
@@ -679,6 +798,18 @@ async def process_message(
                     )
                 response = state.get("response")
                 assert response is not None
+                round_is_read_only = bool(response.tool_calls) and all(
+                    str(call["name"]) in READ_ONLY_RETRY_TOOLS
+                    for call in response.tool_calls
+                )
+                turn_is_read_only = round_is_read_only and all(
+                    action.get("type") in READ_ONLY_RETRY_TOOLS
+                    for action in state["actions"]
+                )
+                if not turn_is_read_only:
+                    _clear_retries_for_session(
+                        session_id, turn_id=state["turn_id"]
+                    )
                 tool_messages: list[ToolMessage] = []
                 for tool_call in response.tool_calls:
                     call_id = str(tool_call["id"])
@@ -854,6 +985,11 @@ async def process_message(
                                 result = await tool.ainvoke(args)
                             except Exception as exc:
                                 error_code, retryable = _failure_metadata(exc)
+                                retryable = (
+                                    retryable
+                                    and turn_is_read_only
+                                    and name in READ_ONLY_RETRY_TOOLS
+                                )
                                 action = {"type": name, "args": args, "error": str(exc)}
                                 tool_message = ToolMessage(
                                     content=f"Error: {exc}", tool_call_id=call_id
@@ -868,6 +1004,15 @@ async def process_message(
                                         (time.monotonic() - started) * 1000
                                     ),
                                 }
+                                if retryable:
+                                    event["retry_token"] = _register_retry(
+                                        session_id,
+                                        generation,
+                                        state,
+                                        step_id,
+                                        name,
+                                        args,
+                                    )
                             else:
                                 action = {"type": name, "args": args, "result": result}
                                 tool_message = ToolMessage(

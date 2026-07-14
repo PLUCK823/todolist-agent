@@ -296,7 +296,7 @@ WS /api/agent/stream
 { "type": "action_completed", "step_id": "create_todo", "action": "create_todo", "result": { "id": 1, "title": "买牛奶" }, "duration_ms": 1380 }
 
 // 步骤失败；timeout 可建议人工重试，当前客户端不会自动重放步骤或整轮
-{ "type": "step_failed", "step_id": "create_todo", "error_code": "TOOL_TIMEOUT", "message": "Todo API 响应超时", "retryable": true, "duration_ms": 5000 }
+{ "type": "step_failed", "step_id": "list_todos-a1b2c3d4", "error_code": "TOOL_TIMEOUT", "message": "Todo API 响应超时", "retryable": true, "retry_token": "<opaque-server-token>", "duration_ms": 5000 }
 
 // 回复文本（可能分多次推送实现流式效果）
 { "type": "reply", "content": "好的，已为你创建" }
@@ -320,7 +320,17 @@ WS /api/agent/stream
 
 同一个 WebSocket 消息处理过程中可以顺序出现多次 `confirmation_required`；客户端应逐次使用各自的 ID 回复，因此一个会话可以安全完成多轮确认。客户端断开连接时，服务端会取消仍在运行的 Agent/后端请求并清理未决确认，不会继续尝试向已断开的连接写事件。
 
-前端应根据步骤事件展示等待、运行、完成和失败状态。后端接口超时对应 `step_failed(error_code="TOOL_TIMEOUT", retryable=true)`；这里的 `retryable` 表示协议可以建议人工重试，或在未来具备幂等键后安全重试。当前客户端以 `supportsStepRetry=false` 保护，不会自动重放单个步骤或整轮请求。Todo API 当前没有接收 action/turn 幂等键，提交成功但响应丢失时仍可能重复产生副作用；非 timeout 的 transient/permanent 工具错误继续返回 `retryable=false`。
+前端应根据步骤事件展示等待、运行、完成和失败状态。仅当 `list_todos` / `get_todo` 在整轮均为只读调用时超时，服务端才发送 `step_failed(retryable=true, retry_token=...)`。写工具、未知工具、混合读写轮次和没有服务端 token 的失败均不可重试，客户端也不得根据 `tool`、`args` 或自由文本自行推导重试能力。
+
+人工重试使用新的 WebSocket 连接，并把下列事件作为首帧发送：
+
+```json
+{ "type": "retry_step", "session_id": "session-uuid", "step_id": "list_todos-a1b2c3d4", "retry_token": "<opaque-server-token>" }
+```
+
+该 frame 严格禁止 `tool`、`args`、`message` 等额外字段。服务端根据 token 与会话内 pending retry record 恢复原始工具和完整参数，验证 session、step、generation、只读 allowlist 后原子消费 token，并直接执行同一次查询；此路径不会调用 LLM，也不会重新规划整轮请求。token 一次性使用，错误会话/step 不会消耗合法 token，成功或已开始的合法重试不能并发重复执行。无效、已使用或过期 token 返回 `step_failed(error_code="INVALID_RETRY_STEP", retryable=false)`。
+
+Todo 写接口当前没有 action/turn 幂等键，因此 create/update/complete/delete 即使超时也始终返回 `retryable=false` 且不签发 token，避免“服务端已写入但响应丢失”造成重复副作用。前端 `supportsStepRetry` 只在当前状态确实持有服务端签发的 token 时启用，按钮仍以对应步骤的 token 为准。
 
 Agent 会在每个工具完成后先记录该 turn 的 action journal，并在每次 WebSocket 事件写入前保存稳定的事件内容与 ID。如果写入失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重连；同一 Python worker、且该内存记录仍在 TTL/LRU 保留期内时，服务端会重放未确认事件并复用已记录的 tool-call ID，避免再次执行已经写入 journal 的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
 

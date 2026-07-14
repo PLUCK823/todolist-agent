@@ -90,6 +90,17 @@ class ConfirmationResponse(BaseModel):
     approved: bool
 
 
+class RetryStepRequest(BaseModel):
+    """Opaque identity for one server-recorded failed read-only tool call."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    type: Literal["retry_step"]
+    session_id: str = Field(min_length=1, max_length=128)
+    step_id: str = Field(min_length=1, max_length=128)
+    retry_token: str = Field(min_length=32, max_length=256)
+
+
 class PendingConfirmation(BaseModel):
     """Immutable identity binding for one pending destructive tool call."""
 

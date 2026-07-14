@@ -22,6 +22,9 @@ def _reset_agent():
     app.agent._session_generations.clear()
     app.agent._active_tasks.clear()
     app.agent._pending_confirmations.clear()
+    retries = getattr(app.agent, "_pending_retries", None)
+    if retries is not None:
+        retries.clear()
 
 
 @pytest.fixture
@@ -439,6 +442,71 @@ def test_websocket_rejects_unvalidated_confirmation_frame(client):
     resolve.assert_not_called()
     assert failure["type"] == "step_failed"
     assert failure["error_code"] == "INVALID_CLIENT_EVENT"
+
+
+def test_websocket_retry_step_rejects_client_supplied_tool_or_args(client):
+    """The retry frame contains identity only; clients cannot select an operation."""
+    retry = AsyncMock()
+    with (
+        patch("app.main.retry_failed_step", new=retry),
+        client.websocket_connect("/api/agent/stream") as ws,
+    ):
+        ws.send_json(
+            {
+                "type": "retry_step",
+                "session_id": "owner",
+                "step_id": "failed-read",
+                "retry_token": "opaque-token",
+                "tool": "create_todo",
+                "args": {"title": "攻击写入"},
+            }
+        )
+        failure = ws.receive_json()
+        done = ws.receive_json()
+
+    retry.assert_not_awaited()
+    assert failure["error_code"] == "INVALID_CLIENT_EVENT"
+    assert failure["retryable"] is False
+    assert done == {"type": "done"}
+
+
+def test_websocket_retry_step_routes_identity_without_replanning(client):
+    async def exact_retry(session_id, step_id, retry_token, on_event):
+        assert (session_id, step_id, retry_token) == (
+            "owner", "failed-read", "r" * 32
+        )
+        await on_event(
+            {
+                "type": "action_completed",
+                "step_id": step_id,
+                "action": "list_todos",
+                "result": {"items": [], "total": 0},
+                "duration_ms": 1,
+            }
+        )
+        await on_event({"type": "reply", "content": "已重新执行查询。"})
+
+    process = AsyncMock()
+    with (
+        patch("app.main.process_message", new=process),
+        patch("app.main.retry_failed_step", new=AsyncMock(side_effect=exact_retry)) as retry,
+        client.websocket_connect("/api/agent/stream") as ws,
+    ):
+        ws.send_json(
+            {
+                "type": "retry_step",
+                "session_id": "owner",
+                "step_id": "failed-read",
+                "retry_token": "r" * 32,
+            }
+        )
+        events = [ws.receive_json(), ws.receive_json(), ws.receive_json()]
+
+    process.assert_not_awaited()
+    retry.assert_awaited_once()
+    assert [event["type"] for event in events] == [
+        "action_completed", "reply", "done"
+    ]
 
 
 @pytest.mark.parametrize("raw", ["null", "123", '"hello"'])

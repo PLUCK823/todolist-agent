@@ -1,7 +1,7 @@
 export type AgentEvent =
   | { type: 'step_started'; step_id: string; label: string; tool?: string; args?: Record<string, unknown>; started_at?: string }
   | { type: 'step_completed'; step_id: string; duration_ms: number }
-  | { type: 'step_failed'; step_id: string; error_code: string; message: string; retryable: boolean; duration_ms: number }
+  | { type: 'step_failed'; step_id: string; error_code: string; message: string; retryable: boolean; retry_token?: string; duration_ms: number }
   | { type: 'confirmation_required'; step_id: string; message: string; confirmation_id: string }
   | { type: 'action_completed'; step_id: string; action: string; result: Record<string, unknown>; duration_ms: number }
   | { type: 'reply'; content: string }
@@ -14,13 +14,22 @@ export interface AgentMessageRequest {
   session_id?: string
 }
 
+export interface AgentRetryRequest {
+  type: 'retry_step'
+  session_id: string
+  step_id: string
+  retry_token: string
+}
+
+export type AgentClientRequest = AgentMessageRequest | AgentRetryRequest
+
 export type AgentClientControl = {
   type: 'confirmation_response'
   confirmation_id: string
   approved: boolean
 }
 
-export type AgentClientMessage = AgentMessageRequest | AgentClientControl
+export type AgentClientMessage = AgentClientRequest | AgentClientControl
 
 export type AgentControlSender = (control: AgentClientControl) => boolean
 
@@ -40,7 +49,7 @@ export interface AgentHandlers {
 }
 
 export interface AgentStreamClient {
-  send(input: AgentMessageRequest, handlers: AgentHandlers): () => void
+  send(input: AgentClientRequest, handlers: AgentHandlers): () => void
 }
 
 export type AgentSessionStatus =
@@ -69,6 +78,7 @@ export interface AgentStep {
   errorCode?: string
   errorMessage?: string
   retryable?: boolean
+  retryToken?: string
   confirmationId?: string
   confirmationMessage?: string
   action?: string
@@ -99,6 +109,9 @@ export type AgentReducerAction = AgentEvent | {
   createdAt: string
 } | {
   type: 'connected'
+} | {
+  type: 'retry_started'
+  stepId: string
 } | {
   type: 'confirmation_submitted'
 } | {

@@ -86,6 +86,9 @@ def _reset_agent():
     pending = getattr(app.agent, "_pending_confirmations", None)
     if pending is not None:
         pending.clear()
+    retries = getattr(app.agent, "_pending_retries", None)
+    if retries is not None:
+        retries.clear()
 
 
 # Also don't assert that all httpx mocks were consumed, because
@@ -516,6 +519,132 @@ async def test_backend_timeout_is_marked_retryable_for_manual_or_future_retry():
     failure = next(event for event in events if event["type"] == "step_failed")
     assert failure["error_code"] == "TOOL_TIMEOUT"
     assert failure["retryable"] is True
+
+
+@pytest.mark.asyncio
+async def test_read_only_retry_uses_server_bound_tool_and_args_once_without_llm():
+    """A retry token can only repeat the exact failed read recorded by the server."""
+    from app.agent import (
+        InvalidRetryStep,
+        _conversations,
+        _slot_for,
+        _tools_by_name,
+        process_message,
+        retry_failed_step,
+    )
+
+    events: list[dict[str, Any]] = []
+    retry_events: list[dict[str, Any]] = []
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("list_todos", {"completed": False}, "read")]),
+            _aim("查询暂时失败"),
+        ]
+    )
+    tool = StubTool(
+        side_effect=[TimeoutError("查询超时"), {"items": [{"id": 7}], "total": 1}]
+    )
+
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"list_todos": tool}),
+    ):
+        await process_message("secure-retry", "列出任务", events.append)
+        failure = next(event for event in events if event["type"] == "step_failed")
+        assert failure["retry_token"]
+        assert failure["retryable"] is True
+        _slot_for("attacker-session")
+        _conversations["attacker-session"] = {"messages": [], "incomplete": None}
+        with pytest.raises(InvalidRetryStep):
+            await retry_failed_step(
+                "attacker-session",
+                failure["step_id"],
+                failure["retry_token"],
+                retry_events.append,
+            )
+        await retry_failed_step(
+            "secure-retry",
+            failure["step_id"],
+            failure["retry_token"],
+            retry_events.append,
+        )
+        with pytest.raises(InvalidRetryStep):
+            await retry_failed_step(
+                "secure-retry",
+                failure["step_id"],
+                failure["retry_token"],
+                retry_events.append,
+            )
+
+    assert tool.ainvoke.await_args_list == [
+        (({"completed": False},), {}),
+        (({"completed": False},), {}),
+    ]
+    assert llm._call_count == 2
+    assert [event["type"] for event in retry_events] == [
+        "step_started",
+        "action_completed",
+        "reply",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["create_todo", "update_todo", "delete_todo"])
+async def test_write_timeout_never_issues_a_retry_token(tool_name):
+    from app.agent import _tools_by_name, process_message, resolve_confirmation
+
+    events: list[dict[str, Any]] = []
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc(tool_name, {"todo_id": 7}, "write")]),
+            _aim("写入失败"),
+        ]
+    )
+    tool = StubTool(side_effect=TimeoutError("写入超时"))
+    def record(event):
+        events.append(event)
+        if event["type"] == "confirmation_required":
+            assert resolve_confirmation(
+                f"unsafe-{tool_name}", event["confirmation_id"], True
+            )
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {tool_name: tool}),
+    ):
+        await process_message(f"unsafe-{tool_name}", "执行写操作", record)
+
+    failure = next(event for event in events if event["type"] == "step_failed")
+    assert failure["retryable"] is False
+    assert "retry_token" not in failure
+
+
+@pytest.mark.asyncio
+async def test_mixed_read_write_turn_never_issues_a_retry_token():
+    from app.agent import _tools_by_name, process_message
+
+    events: list[dict[str, Any]] = []
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(
+                tool_calls=[
+                    _tc("list_todos", {"completed": False}, "read"),
+                    _tc("create_todo", {"title": "攻击写入"}, "write"),
+                ]
+            ),
+            _aim("完成"),
+        ]
+    )
+    read = StubTool(side_effect=TimeoutError("查询超时"))
+    write = StubTool(result={"id": 99, "title": "攻击写入"})
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"list_todos": read, "create_todo": write}),
+    ):
+        await process_message("mixed-retry", "查询后写入", events.append)
+
+    failure = next(event for event in events if event["type"] == "step_failed")
+    assert failure["retryable"] is False
+    assert "retry_token" not in failure
 
 
 @pytest.mark.asyncio
