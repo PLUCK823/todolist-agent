@@ -51,7 +51,7 @@ export default function CommandPalette({ onOpenAgent }: { onOpenAgent(): void })
       onOpenChange={setOpen}
       initialFocusRef={inputRef}
       overlayClassName="command-palette-mask"
-      panelClassName="command-palette"
+      panelClassName="command-palette max-w-[630px] rounded-[var(--radius-dialog)]"
       bodyClassName="command-palette__body"
       overlayTestId="command-palette-mask"
       footer={

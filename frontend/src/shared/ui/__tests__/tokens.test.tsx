@@ -76,6 +76,15 @@ describe('V6 color tokens', () => {
     )
 
     expect(screen.getByRole('textbox', { name: '名称' })).toHaveClass('bg-[var(--control-bg)]')
-    expect(screen.getByRole('dialog', { name: '主题弹窗' })).toHaveClass('bg-[var(--surface)]')
+    expect(screen.getByRole('dialog', { name: '主题弹窗' })).toHaveClass(
+      'bg-[var(--surface)]',
+      'max-w-[520px]',
+      'rounded-[var(--radius-dialog)]',
+    )
+  })
+
+  it('defines the V6 18px dialog radius', () => {
+    expect(tokens).toMatch(/--radius-dialog:\s*18px;/)
+    expect(tokens).toMatch(/--radius-popover:\s*13px;/)
   })
 })

@@ -141,11 +141,11 @@ export function Dialog({
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
-        className={`max-h-[min(760px,calc(100vh-2rem))] w-full max-w-lg animate-[panel-enter_var(--motion-overlay)_both] overflow-auto rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] ${panelClassName}`}
+        className={`max-h-[min(760px,calc(100vh-2rem))] w-full max-w-[520px] animate-[panel-enter_var(--motion-overlay)_both] overflow-auto rounded-[var(--radius-dialog)] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-overlay)] focus:outline-none focus-visible:shadow-[var(--shadow-overlay),var(--focus-ring)] ${panelClassName}`}
       >
         <header className="flex items-start justify-between gap-5 border-b border-[var(--border)] px-6 pb-4 pt-5">
           <div>
-            <h2 id={titleId} className="m-0 text-lg font-bold tracking-[-.015em] text-[var(--text)]">
+            <h2 id={titleId} className="m-0 text-base font-bold tracking-[-.015em] text-[var(--text)]">
               {title}
             </h2>
             {description ? (

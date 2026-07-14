@@ -231,7 +231,7 @@ function ConfirmDialogContent({
     >
       <div
         ref={dialogRef}
-        className="mx-4 w-full max-w-md overflow-hidden rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-overlay)] focus:outline-none"
+        className="mx-4 w-full max-w-[520px] overflow-hidden rounded-[var(--radius-dialog)] border border-[var(--border)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--shadow-overlay)] focus:outline-none"
         style={dialogStyle}
         onTransitionEnd={onTransitionEnd}
         onClick={handleDialogClick}
@@ -245,7 +245,7 @@ function ConfirmDialogContent({
         <div className="p-6">
           <h2
             id={titleId}
-            className="mb-2 text-lg font-semibold text-[var(--text)]"
+            className="mb-2 text-base font-semibold text-[var(--text)]"
           >
             {title}
           </h2>

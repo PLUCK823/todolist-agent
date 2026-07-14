@@ -22,6 +22,16 @@ async function assertFocusTrapped(page: Page, dialog: Locator) {
   }
 }
 
+async function tabTo(page: Page, target: Locator, options: { reverse?: boolean; limit?: number } = {}) {
+  const key = options.reverse ? 'Shift+Tab' : 'Tab'
+  const limit = options.limit ?? 80
+  for (let index = 0; index < limit; index += 1) {
+    if (await target.evaluate((node) => node === document.activeElement)) return
+    await page.keyboard.press(key)
+  }
+  throw new Error(`Could not reach keyboard target after ${limit} ${key} presses`)
+}
+
 test.describe('WCAG 2.2 AA automated checks', () => {
   for (const [path, heading] of [
     ['/login', 'Agent TodoList'],
@@ -51,43 +61,53 @@ test.describe('WCAG 2.2 AA automated checks', () => {
     await openAuthenticated(page, login, '/tasks')
 
     await page.locator('header').getByRole('button', { name: '新建任务' }).click()
+    await expect(page.getByRole('dialog', { name: '新建任务' })).toBeVisible()
     await expectNoAxeViolations(page)
     await page.keyboard.press('Escape')
 
     await page.getByRole('button', { name: '查看任务：完成项目文档' }).click()
+    await expect(page.getByRole('dialog', { name: '任务详情' })).toBeVisible()
     await expectNoAxeViolations(page)
     await page.getByRole('button', { name: '编辑任务' }).click()
+    await expect(page.getByRole('dialog', { name: '编辑任务' })).toBeVisible()
     await expectNoAxeViolations(page)
     await page.keyboard.press('Escape')
 
     await page.getByRole('button', { name: '删除任务：完成项目文档' }).click()
+    await expect(page.getByRole('dialog', { name: '删除任务' })).toBeVisible()
     await expectNoAxeViolations(page)
   })
 
   test('status and priority filter popovers have no axe violations', async ({ page, login }) => {
     await openAuthenticated(page, login, '/tasks')
     await page.getByRole('button', { name: '全部状态' }).click()
+    await expect(page.getByRole('dialog', { name: '状态筛选' })).toBeVisible()
     await expectNoAxeViolations(page)
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: '优先级' }).click()
+    await expect(page.getByRole('dialog', { name: '优先级筛选' })).toBeVisible()
     await expectNoAxeViolations(page)
   })
 
   test('settings and quick ask dialogs have no axe violations', async ({ page, login }) => {
     await openAuthenticated(page, login, '/tasks')
     await page.getByRole('button', { name: '设置' }).click()
+    await expect(page.getByRole('dialog', { name: '设置' })).toBeVisible()
     await expectNoAxeViolations(page)
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: /快速询问/ }).click()
+    await expect(page.getByRole('dialog', { name: '快速询问' })).toBeVisible()
     await expectNoAxeViolations(page)
   })
 
   test('avatar and logout dialogs have no axe violations', async ({ page, login }) => {
     await openAuthenticated(page, login, '/profile')
     await page.getByRole('button', { name: '更换头像' }).click()
+    await expect(page.getByRole('dialog', { name: '更换头像' })).toBeVisible()
     await expectNoAxeViolations(page)
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: '退出登录' }).click()
+    await expect(page.getByRole('dialog', { name: '确认退出登录' })).toBeVisible()
     await expectNoAxeViolations(page)
   })
 })
@@ -97,23 +117,19 @@ test('completes the primary task controls with keyboard only', async ({ page, lo
   await openAuthenticated(page, login, '/tasks')
 
   const newTask = page.locator('header').getByRole('button', { name: '新建任务' })
-  await page.keyboard.press('Tab')
-  for (let index = 0; index < 30; index += 1) {
-    if (await newTask.evaluate((node) => node === document.activeElement)) break
-    await page.keyboard.press('Tab')
-  }
+  await tabTo(page, newTask)
   await expect(newTask).toBeFocused()
   await page.keyboard.press('Enter')
   const createDialog = page.getByRole('dialog', { name: '新建任务' })
   await expect(createDialog).toBeVisible()
   await assertFocusTrapped(page, createDialog)
-  await createDialog.getByLabel('任务标题').focus()
+  await tabTo(page, createDialog.getByLabel('任务标题'))
   await page.keyboard.type('键盘创建任务')
-  await createDialog.getByRole('button', { name: '创建任务' }).focus()
+  await tabTo(page, createDialog.getByRole('button', { name: '创建任务' }))
   await page.keyboard.press('Enter')
   await expect(page.getByRole('button', { name: '查看任务：键盘创建任务' })).toBeVisible()
 
-  await page.getByRole('button', { name: '全部状态' }).focus()
+  await tabTo(page, page.getByRole('button', { name: '全部状态' }))
   await page.keyboard.press('Space')
   const status = page.getByRole('dialog', { name: '状态筛选' })
   await expect(status).toBeVisible()
@@ -123,7 +139,7 @@ test('completes the primary task controls with keyboard only', async ({ page, lo
   await page.keyboard.press('Enter')
   await expect(status).toBeHidden()
 
-  await page.getByRole('button', { name: '收起智能助手' }).focus()
+  await tabTo(page, page.getByRole('button', { name: '收起智能助手' }))
   await page.keyboard.press('Enter')
   await expect(page.getByTestId('agent-column')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '展开智能助手' })).toBeFocused()
@@ -131,7 +147,7 @@ test('completes the primary task controls with keyboard only', async ({ page, lo
   await expect(page.getByTestId('agent-column')).toBeVisible()
 
   const quick = page.getByRole('button', { name: /快速询问/ })
-  await quick.focus()
+  await tabTo(page, quick)
   await page.keyboard.press('Enter')
   const quickDialog = page.getByRole('dialog', { name: '快速询问' })
   await expect(quickDialog).toBeVisible()
@@ -140,10 +156,10 @@ test('completes the primary task controls with keyboard only', async ({ page, lo
   await expect(quick).toBeFocused()
 })
 
-test('traps focus in and dismisses the logout confirmation with keyboard only', async ({ page, login }) => {
+test('traps focus, dismisses and confirms logout with keyboard only', async ({ page, login }) => {
   await openAuthenticated(page, login, '/profile')
   const logout = page.getByRole('button', { name: '退出登录' })
-  await logout.focus()
+  await tabTo(page, logout)
   await page.keyboard.press('Enter')
   const dialog = page.getByRole('dialog', { name: '确认退出登录' })
   await expect(dialog).toBeVisible()
@@ -151,6 +167,13 @@ test('traps focus in and dismisses the logout confirmation with keyboard only', 
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
   await expect(logout).toBeFocused()
+
+  await page.keyboard.press('Space')
+  await expect(dialog).toBeVisible()
+  await tabTo(page, dialog.getByRole('button', { name: '确认退出' }))
+  await page.keyboard.press('Enter')
+  await expect(page).toHaveURL(/\/login$/)
+  await expect(page.getByRole('button', { name: '登录' })).toBeVisible()
 })
 
 test('system reduced motion caps Shell and Dialog animation durations at 1ms', async ({ page, login, enableMotion }) => {

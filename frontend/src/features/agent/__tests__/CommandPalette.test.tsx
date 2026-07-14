@@ -31,6 +31,16 @@ describe('CommandPalette', () => {
     expect(document.body.style.overflow).toBe('hidden')
   })
 
+  it('uses the V6 630px command width and dialog radius', async () => {
+    const user = userEvent.setup()
+    renderPalette()
+    await user.keyboard('{Meta>}k{/Meta}')
+    expect(screen.getByRole('dialog', { name: '快速询问' })).toHaveClass(
+      'max-w-[630px]',
+      'rounded-[var(--radius-dialog)]',
+    )
+  })
+
   it('keeps Meta+K global, but ignores Alt+K in editable fields and repeated keydown', async () => {
     renderPalette()
     const editable = document.createElement('input')

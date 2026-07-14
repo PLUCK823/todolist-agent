@@ -294,6 +294,14 @@ describe("ConfirmDialog", () => {
   });
 
   describe("variant styling", () => {
+    it("uses the V6 modal width and radius", () => {
+      renderDialog();
+      expect(screen.getByRole("dialog")).toHaveClass(
+        "max-w-[520px]",
+        "rounded-[var(--radius-dialog)]",
+      );
+    });
+
     it("applies danger variant (red) by default", () => {
       renderDialog();
       const confirmBtn = screen.getByText("确认");

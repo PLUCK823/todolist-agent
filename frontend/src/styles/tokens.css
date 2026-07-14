@@ -43,6 +43,8 @@
 
   --radius-shell: 20px;
   --radius-panel: 14px;
+  --radius-dialog: 18px;
+  --radius-popover: 13px;
   --radius-control: 10px;
   --motion-shell: 480ms cubic-bezier(.22, 1, .36, 1);
   --motion-overlay: 300ms cubic-bezier(.16, 1, .3, 1);

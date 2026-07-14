@@ -170,7 +170,7 @@ export function Popover({ open, anchorRef, onOpenChange, ariaLabel = '浮层', c
       role="dialog"
       aria-label={ariaLabel}
       tabIndex={-1}
-      className="fixed z-50 min-w-52 animate-[popover-enter_var(--motion-overlay)_both] rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] shadow-[var(--shadow-panel)] focus:outline-none"
+      className="fixed z-50 w-[210px] animate-[popover-enter_var(--motion-overlay)_both] rounded-[var(--radius-popover)] border border-[var(--border)] bg-[var(--surface)] p-2 text-[var(--text)] shadow-[var(--shadow-panel)] focus:outline-none"
     >
       <span id={`${popoverId}-label`} className="sr-only">
         {ariaLabel}
