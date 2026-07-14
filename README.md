@@ -38,6 +38,15 @@ docker-compose up -d
 | 数据库 | PostgreSQL 16 + Redis 7 |
 | 部署 | Docker + Docker Compose + Nginx |
 
+## 真实栈端到端测试
+
+```bash
+./scripts/e2e-real.sh
+```
+
+脚本会构建并启动独立的 `todolist-agent-e2e` Compose 项目，在
+`http://127.0.0.1:3000` 运行真实 Chromium 测试，并在成功或失败后销毁测试容器和数据卷。
+
 ## 项目结构
 
 ```text

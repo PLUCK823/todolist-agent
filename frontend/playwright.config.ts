@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
 const mockBaseURL = 'http://127.0.0.1:3000'
-const realBaseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:8080'
+const realBaseURL = process.env.E2E_BASE_URL ?? 'http://127.0.0.1:3000'
 const runRealOnly = process.env.E2E_REAL === 'true'
 
 export default defineConfig({
