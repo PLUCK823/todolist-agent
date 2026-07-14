@@ -304,7 +304,7 @@ button:not(:disabled),
 .auth-form-card { width: min(420px, 100%); }
 .auth-form-card h2 { margin: 6px 0 4px; font-size: 2rem; letter-spacing: -.04em; }
 .auth-form-card > p:not(.form-error, .form-success) { color: var(--text-secondary); }
-.auth-form-card__eyebrow { margin: 0; color: var(--primary) !important; font-size: .68rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+.auth-form-card__eyebrow { margin: 0; color: var(--primary-action) !important; font-size: .68rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
 .auth-form-card form { display: grid; gap: 18px; margin-top: 30px; }
 .auth-form-card__switch { margin: 24px 0 12px; text-align: center; font-size: .82rem; }
 .auth-form-card__switch a { color: var(--primary-action); font-weight: 800; text-decoration: none; }

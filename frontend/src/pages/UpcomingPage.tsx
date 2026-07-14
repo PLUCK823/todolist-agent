@@ -76,7 +76,7 @@ export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
   }
 
   return (
-    <main className="mx-auto w-full max-w-[1120px] px-7 py-7 xl:px-9">
+    <div className="mx-auto w-full max-w-[1120px] px-7 py-7 xl:px-9">
       <header className="flex flex-wrap items-start justify-between gap-5">
         <div>
           <p className="m-0 text-[11px] font-bold tracking-[.18em] text-[var(--text-secondary)]">接下来 7 天</p>
@@ -155,6 +155,6 @@ export default function UpcomingPage({ now = new Date() }: UpcomingPageProps) {
           onSubmit={update}
         />
       ) : null}
-    </main>
+    </div>
   )
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { Outlet, useLocation } from 'react-router-dom'
 import AgentPanel from '../agent/AgentPanel'
@@ -18,18 +18,31 @@ function AppShellContent() {
   const { navExpanded, agentExpanded, closeAgent, openAgent, headerActionsElement } = useShell()
   const location = useLocation()
   const [agentDraft, setAgentDraft] = useState('')
+  const sparkRef = useRef<HTMLButtonElement>(null)
+  const restoreSparkFocusRef = useRef(false)
   const showPanel = agentExpanded && location.pathname !== '/assistant'
+
+  const collapseAgent = useCallback(() => {
+    restoreSparkFocusRef.current = true
+    closeAgent()
+  }, [closeAgent])
+
+  useEffect(() => {
+    if (agentExpanded || !restoreSparkFocusRef.current) return
+    restoreSparkFocusRef.current = false
+    sparkRef.current?.focus()
+  }, [agentExpanded])
 
   useEffect(() => {
     if (!showPanel) return
     const onEscape = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.key !== 'Escape' || !(window.matchMedia?.('(max-width: 1000px)').matches ?? false)) return
       event.preventDefault()
-      closeAgent()
+      collapseAgent()
     }
     window.addEventListener('keydown', onEscape)
     return () => window.removeEventListener('keydown', onEscape)
-  }, [closeAgent, showPanel])
+  }, [collapseAgent, showPanel])
 
   const style: ShellStyle = {
     '--nav-width': navExpanded
@@ -39,7 +52,7 @@ function AppShellContent() {
   }
 
   const spark = !agentExpanded && location.pathname !== '/assistant' ? (
-    <IconButton label="展开智能助手" tone="primary" icon={<span className="agent-spark">✦</span>} onClick={openAgent} />
+    <IconButton buttonRef={sparkRef} label="展开智能助手" tone="primary" icon={<span className="agent-spark">✦</span>} onClick={openAgent} />
   ) : null
 
   return (
@@ -48,7 +61,7 @@ function AppShellContent() {
       <main className="app-shell__main">
         <Outlet />
       </main>
-      {showPanel ? <><button type="button" className="agent-drawer-backdrop" aria-label="关闭智能助手遮罩" onClick={closeAgent} /><div className="app-shell__agent" data-testid="agent-column"><AgentPanel onCollapse={closeAgent} draft={agentDraft} onDraftChange={setAgentDraft} /></div></> : null}
+      {showPanel ? <><button type="button" className="agent-drawer-backdrop" aria-label="关闭智能助手遮罩" onClick={collapseAgent} /><div className="app-shell__agent" data-testid="agent-column"><AgentPanel onCollapse={collapseAgent} draft={agentDraft} onDraftChange={setAgentDraft} /></div></> : null}
       {spark && headerActionsElement ? createPortal(spark, headerActionsElement) : spark ? <div className="shell-header-actions-fallback">{spark}</div> : null}
       <CommandPalette onOpenAgent={location.pathname === '/assistant' ? () => undefined : openAgent} />
       <SettingsDialog />

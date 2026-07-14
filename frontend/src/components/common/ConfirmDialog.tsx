@@ -27,7 +27,7 @@ interface ConfirmDialogProps {
 }
 
 const variantButtonClasses: Record<ConfirmVariant, string> = {
-  danger: "bg-[#ef4444] hover:bg-[#dc2626] focus:ring-[#ef4444]",
+  danger: "bg-[var(--danger-action)] hover:bg-[#9f342e] focus:ring-[var(--danger-action)]",
   warning: "bg-[#f59e0b] hover:bg-[#d97706] focus:ring-[#f59e0b]",
   info: "bg-[#7165ea] hover:bg-[#5f54d9] focus:ring-[#7165ea]",
 };

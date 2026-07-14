@@ -67,7 +67,7 @@ export default function NavigationRail() {
       data-expanded={navExpanded}
       aria-label="主导航"
     >
-      <div className="nav-rail__brand" aria-label="Agent TodoList">
+      <div className="nav-rail__brand" role="img" aria-label="Agent TodoList">
         <span aria-hidden="true">✓</span>
         <strong
           className="nav-rail__label"

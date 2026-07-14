@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ReactNode, Ref } from 'react'
 
 export interface IconButtonProps
   extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-label'> {
@@ -6,6 +6,7 @@ export interface IconButtonProps
   icon: ReactNode
   size?: 'sm' | 'md' | 'lg'
   tone?: 'default' | 'primary' | 'onDark'
+  buttonRef?: Ref<HTMLButtonElement>
 }
 
 const sizeClasses = {
@@ -27,10 +28,12 @@ export function IconButton({
   tone = 'default',
   type = 'button',
   className = '',
+  buttonRef,
   ...props
 }: IconButtonProps) {
   return (
     <button
+      ref={buttonRef}
       type={type}
       aria-label={label}
       title={label}

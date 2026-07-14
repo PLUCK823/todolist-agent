@@ -297,7 +297,7 @@ describe("ConfirmDialog", () => {
     it("applies danger variant (red) by default", () => {
       renderDialog();
       const confirmBtn = screen.getByText("确认");
-      expect(confirmBtn.className).toMatch(/bg-\[#ef4444\]/);
+      expect(confirmBtn.className).toMatch(/bg-\[var\(--danger-action\)\]/);
     });
 
     it("applies warning variant (amber) when specified", () => {

@@ -31,7 +31,7 @@ function contrastRatio(foreground: string, background: string) {
 
 describe('V6 color tokens', () => {
   it('retains the approved prototype brand values', () => {
-    expect(token('text-muted')).toBe('#898e9d')
+    expect(token('text-muted')).toBe('#656b7a')
     expect(token('primary')).toBe('#7165ea')
     expect(token('danger')).toBe('#d9574c')
   })

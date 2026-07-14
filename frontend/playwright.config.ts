@@ -8,6 +8,7 @@ export default defineConfig({
   testDir: './e2e',
   globalSetup: './e2e/global.setup.ts',
   outputDir: './test-results/artifacts',
+  snapshotPathTemplate: '{testDir}/snapshots/{arg}-{projectName}{ext}',
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: 0,

@@ -39,7 +39,7 @@ export default function AssistantPage() {
   }
 
   return (
-    <main className="assistant-workspace">
+    <div className="assistant-workspace">
       <aside className="assistant-sessions">
         <header><span className="agent-spark" aria-hidden="true">✦</span><strong>Agent</strong></header>
         <nav aria-label="Agent 会话">
@@ -82,6 +82,6 @@ export default function AssistantPage() {
         <h2>{session.steps.length ? '当前任务轨迹' : '等待新指令'}</h2>
         <p>{session.steps.length ? `${session.steps.length} 个步骤 · 交互控件位于对话时间线` : '发送指令后将在对话区显示执行过程'}</p>
       </aside>
-    </main>
+    </div>
   )
 }
