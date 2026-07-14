@@ -99,7 +99,8 @@ class ProcessResult:
 
 
 def _build_llm():
-    if os.getenv("LLM_PROVIDER", "openai").lower() in {"fake", "e2e"}:
+    provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+    if _validate_provider_environment(provider):
         return _DeterministicE2ELLM()
 
     from langchain_openai import ChatOpenAI
@@ -147,6 +148,25 @@ class _DeterministicE2ELLM:
         match = re.search(r"(?:任务|待办)\s*[：:]\s*(.+)$", prompt.strip())
         title = match.group(1).strip(" \t\r\n。.!！?？\"'「」") if match else prompt.strip()
         return title or "真实联调任务"
+
+
+def _validate_provider_environment(provider: str | None = None) -> bool:
+    """Fail closed when the deterministic provider escapes the E2E stack."""
+    selected = (provider or os.getenv("LLM_PROVIDER", "openai")).strip().lower()
+    if selected not in {"fake", "e2e"}:
+        return False
+    app_env = os.getenv("APP_ENV", "").strip().lower()
+    explicitly_enabled = os.getenv("ENABLE_E2E_PROVIDER", "").strip().lower() == "true"
+    if app_env != "e2e" or not explicitly_enabled:
+        raise RuntimeError(
+            "Deterministic LLM provider is disabled outside the isolated E2E environment"
+        )
+    return True
+
+
+# A misconfigured deployed process fails during import/startup, before health
+# checks can report a service that would later execute deterministic writes.
+_validate_provider_environment()
 
 
 _compiled_graph = None

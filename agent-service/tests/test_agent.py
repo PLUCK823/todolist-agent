@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import subprocess
+import sys
 import time
 from typing import Any, Sequence
 from unittest.mock import AsyncMock, patch
@@ -123,6 +126,8 @@ async def test_deterministic_e2e_provider_creates_requested_high_priority_todo(h
     from app.agent import process_message
 
     monkeypatch.setenv("LLM_PROVIDER", "fake")
+    monkeypatch.setenv("APP_ENV", "e2e")
+    monkeypatch.setenv("ENABLE_E2E_PROVIDER", "true")
     httpx_mock.add_response(
         url="http://localhost:8080/api/todos",
         method="POST",
@@ -150,6 +155,54 @@ async def test_deterministic_e2e_provider_creates_requested_high_priority_todo(h
     request = httpx_mock.get_request()
     assert request is not None
     assert request.read().decode() == '{"title":"真实联调任务","priority":"high"}'
+
+
+@pytest.mark.parametrize(
+    ("provider", "app_env", "enabled"),
+    [
+        ("fake", None, None),
+        ("fake", "production", "true"),
+        ("fake", "e2e", None),
+        ("e2e", "e2e", "false"),
+    ],
+)
+def test_deterministic_provider_fails_closed_without_both_e2e_gates(
+    monkeypatch, provider, app_env, enabled
+):
+    from app.agent import _build_llm
+
+    monkeypatch.setenv("LLM_PROVIDER", provider)
+    if app_env is None:
+        monkeypatch.delenv("APP_ENV", raising=False)
+    else:
+        monkeypatch.setenv("APP_ENV", app_env)
+    if enabled is None:
+        monkeypatch.delenv("ENABLE_E2E_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("ENABLE_E2E_PROVIDER", enabled)
+
+    with pytest.raises(RuntimeError, match="disabled outside the isolated E2E environment"):
+        _build_llm()
+
+
+def test_misconfigured_deterministic_provider_fails_service_startup():
+    env = {
+        **os.environ,
+        "LLM_PROVIDER": "fake",
+        "APP_ENV": "production",
+        "ENABLE_E2E_PROVIDER": "true",
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.agent"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "disabled outside the isolated E2E environment" in result.stderr
 
 
 @pytest.mark.asyncio

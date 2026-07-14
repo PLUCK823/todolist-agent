@@ -3,7 +3,14 @@ name: todolist-agent-e2e
 services:
   postgres:
     ports: !override
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
     volumes:
       - ./data/e2e-init.sql:/docker-entrypoint-initdb.d/20-e2e-seed.sql:ro
     healthcheck:
@@ -14,7 +21,14 @@ services:
 
   redis:
     ports: !override
-      - "16379:6379"
+      - "127.0.0.1:16379:6379"
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -23,7 +37,16 @@ services:
 
   backend:
     ports: !override
-      - "18080:8080"
+      - "127.0.0.1:18080:8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
     environment:
       GIN_MODE: release
       LOG_LEVEL: warn
@@ -36,9 +59,20 @@ services:
 
   agent:
     ports: !override
-      - "18000:8000"
+      - "127.0.0.1:18000:8000"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 768M
     environment:
       LLM_PROVIDER: fake
+      APP_ENV: e2e
+      ENABLE_E2E_PROVIDER: "true"
       LOG_LEVEL: warning
     healthcheck:
       test: ["CMD", "uv", "run", "python", "-c", "import httpx; httpx.get('http://127.0.0.1:8000/api/agent/health').raise_for_status()"]
@@ -49,7 +83,14 @@ services:
 
   frontend:
     ports: !override
-      - "3000:80"
+      - "127.0.0.1:3000:80"
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
       interval: 2s
