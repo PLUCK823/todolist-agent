@@ -1,6 +1,7 @@
 import { expect, test as base, type Page } from '@playwright/test'
 
 export const FIXED_NOW = '2026-07-13T10:00:00+08:00'
+const CONTEXT_INITIALIZED_COOKIE = 'todolist_e2e_initialized'
 
 export interface DemoAccount {
   id: string
@@ -34,12 +35,13 @@ export interface AppFixtures {
 
 async function installTestState(page: Page) {
   await page.clock.setFixedTime(new Date(FIXED_NOW))
+  await page.context().clearCookies({ name: CONTEXT_INITIALIZED_COOKIE })
   await page.context().addInitScript(() => {
-    const initializedKey = 'todolist:e2e:initialized'
     try {
-      if (sessionStorage.getItem(initializedKey) !== 'true') {
+      const initialized = document.cookie.split(';').some((part) => part.trim() === 'todolist_e2e_initialized=true')
+      if (!initialized) {
         localStorage.clear()
-        sessionStorage.setItem(initializedKey, 'true')
+        document.cookie = 'todolist_e2e_initialized=true; Path=/; SameSite=Lax'
       }
     } catch {
       // Storage is unavailable on opaque origins such as about:blank.

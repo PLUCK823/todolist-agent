@@ -90,6 +90,10 @@ function hydrateE2ETodoState() {
   }
 }
 
+function persistTodos() {
+  writeStorage(E2E_TODOS_KEY, todos)
+}
+
 export function resetTodos(): void {
   nextId = Math.max(0, ...defaultTodos.map((todo) => todo.id)) + 1
   todos = defaultTodos.map((todo) => ({ ...todo }))
@@ -146,8 +150,8 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     const name = config?.name ?? 'success'
     const timeScale = config?.timeScale ?? 0
     const scenario = agentEventScenarios[name] ?? agentEventScenarios.success
-    const send = (item: (typeof scenario.events)[number]) => {
-      const delay = Math.max(0, Math.round(item.atMs * timeScale))
+    const send = (item: (typeof scenario.events)[number], relativeToMs = 0) => {
+      const delay = Math.max(0, Math.round((item.atMs - relativeToMs) * timeScale))
       setTimeout(() => client.send(JSON.stringify(item.event)), delay)
     }
 
@@ -167,9 +171,10 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     if (waitingForConfirmation && frame.type === 'confirmation_response') {
       waitingForConfirmation = false
       if (frame.approved) {
+        const confirmationAt = scenario.events.find(({ event }) => event.type === 'confirmation_required')?.atMs ?? 0
         scenario.events
           .filter(({ event }) => event.type === 'action_completed' || event.type === 'reply' || event.type === 'done')
-          .forEach(send)
+          .forEach((event) => send(event, confirmationAt))
       } else {
         client.send(JSON.stringify({ type: 'reply', content: '已取消删除操作。' }))
         client.send(JSON.stringify({ type: 'done' }))
@@ -301,6 +306,7 @@ export const handlers = [
       updated_at: now,
     }
     todos.unshift(todo)
+    persistTodos()
     return HttpResponse.json(ok(todo), { status: 201 })
   }),
 
@@ -320,6 +326,7 @@ export const handlers = [
       ...(body.due_date !== undefined && { due_date: body.due_date }),
       updated_at: new Date().toISOString(),
     }
+    persistTodos()
     return HttpResponse.json(ok(todos[idx]))
   }),
 
@@ -331,6 +338,7 @@ export const handlers = [
       return HttpResponse.json(notFound(), { status: 404 })
     }
     todos.splice(idx, 1)
+    persistTodos()
     return new HttpResponse(null, { status: 204 })
   }),
 
@@ -346,6 +354,7 @@ export const handlers = [
       completed: true,
       updated_at: new Date().toISOString(),
     }
+    persistTodos()
     return HttpResponse.json(ok(todos[idx]))
   }),
 
@@ -361,6 +370,7 @@ export const handlers = [
       completed: false,
       updated_at: new Date().toISOString(),
     }
+    persistTodos()
     return HttpResponse.json(ok(todos[idx]))
   }),
 
