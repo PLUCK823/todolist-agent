@@ -107,7 +107,7 @@ test('Agent fixture streams a deterministic success sequence', async ({ page, us
 })
 
 test('Agent confirmation timing is relative to the confirmation event', async ({ page, useAgentScenario }) => {
-  await useAgentScenario('confirmationRequired', { timeScale: 0.05 })
+  await useAgentScenario('confirmationRequired', { timeScale: 0.25 })
   await page.goto('/login')
   await page.getByRole('button', { name: '登录' }).waitFor()
   const actionDelay = await page.evaluate(() => new Promise<number>((resolve, reject) => {
@@ -128,6 +128,6 @@ test('Agent confirmation timing is relative to the confirmation event', async ({
       if (event.type === 'action_completed') resolve(performance.now() - confirmedAt)
     }
   }))
-  expect(actionDelay).toBeGreaterThan(40)
-  expect(actionDelay).toBeLessThan(120)
+  expect(actionDelay).toBeGreaterThan(200)
+  expect(actionDelay).toBeLessThan(600)
 })
