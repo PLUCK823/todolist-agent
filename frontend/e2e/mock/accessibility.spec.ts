@@ -15,21 +15,29 @@ async function openAuthenticated(page: Page, login: () => Promise<void>, path: s
   await page.locator('main, section').first().waitFor()
 }
 
+async function sequentialTabKey(page: Page, reverse = false) {
+  const optionTab = await page.evaluate(() => /AppleWebKit/.test(navigator.userAgent) && !/(Chrome|Chromium)/.test(navigator.userAgent))
+  return [optionTab ? 'Alt' : '', reverse ? 'Shift' : '', 'Tab'].filter(Boolean).join('+')
+}
+
 async function assertFocusTrapped(page: Page, dialog: Locator) {
   for (let index = 0; index < 16; index += 1) {
-    await page.keyboard.press(index % 5 === 0 ? 'Shift+Tab' : 'Tab')
+    await page.keyboard.press(await sequentialTabKey(page, index % 5 === 0))
     expect(await dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true)
   }
 }
 
 async function tabTo(page: Page, target: Locator, options: { reverse?: boolean; limit?: number } = {}) {
-  const key = options.reverse ? 'Shift+Tab' : 'Tab'
-  const limit = options.limit ?? 80
-  for (let index = 0; index < limit; index += 1) {
-    if (await target.evaluate((node) => node === document.activeElement)) return
-    await page.keyboard.press(key)
+  const preferredDirection = options.reverse ?? false
+  const limit = options.limit ?? 40
+  for (const reverse of [preferredDirection, !preferredDirection]) {
+    const key = await sequentialTabKey(page, reverse)
+    for (let index = 0; index < limit; index += 1) {
+      if (await target.evaluate((node) => node === document.activeElement)) return
+      await page.keyboard.press(key)
+    }
   }
-  throw new Error(`Could not reach keyboard target after ${limit} ${key} presses`)
+  throw new Error(`Could not reach keyboard target with sequential keyboard navigation`)
 }
 
 test.describe('WCAG 2.2 AA automated checks', () => {
@@ -134,7 +142,7 @@ test('completes the primary task controls with keyboard only', async ({ page, lo
   const status = page.getByRole('dialog', { name: '状态筛选' })
   await expect(status).toBeVisible()
   await expect(status.getByRole('button', { name: '全部状态' })).toBeFocused()
-  await page.keyboard.press('Tab')
+  await page.keyboard.press(await sequentialTabKey(page))
   await expect(status.getByRole('button', { name: '进行中' })).toBeFocused()
   await page.keyboard.press('Enter')
   await expect(status).toBeHidden()

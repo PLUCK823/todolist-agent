@@ -18,11 +18,13 @@ export async function persistAvatarFile(file: File): Promise<AvatarValue> {
   if (!['image/png', 'image/jpeg'].includes(file.type)) throw new Error('仅支持 PNG 或 JPEG 图片')
   if (file.size > 5 * 1024 * 1024) throw new Error('图片不能超过 5MB')
   const key = `avatar:${crypto.randomUUID()}`
+  const bytes = await file.arrayBuffer()
+  const blob = new Blob([bytes], { type: file.type })
   const database = await openDatabase()
-  if (!database) memoryBlobs.set(key, file)
+  if (!database) memoryBlobs.set(key, blob)
   else await new Promise<void>((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, 'readwrite')
-    transaction.objectStore(STORE_NAME).put(file, key)
+    transaction.objectStore(STORE_NAME).put({ bytes, type: file.type }, key)
     transaction.oncomplete = () => { database.close(); resolve() }
     transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('头像存储失败')) }
     transaction.onabort = transaction.onerror
@@ -35,7 +37,13 @@ export async function getAvatarBlob(key: string): Promise<Blob | null> {
   if (!database) return memoryBlobs.get(key) ?? null
   return new Promise((resolve, reject) => {
     const request = database.transaction(STORE_NAME).objectStore(STORE_NAME).get(key)
-    request.onsuccess = () => { database.close(); resolve(request.result instanceof Blob ? request.result : null) }
+    request.onsuccess = () => {
+      database.close()
+      const stored = request.result as Blob | { bytes?: ArrayBuffer; type?: string } | undefined
+      if (stored instanceof Blob) resolve(stored)
+      else if (stored?.bytes instanceof ArrayBuffer) resolve(new Blob([stored.bytes], { type: stored.type }))
+      else resolve(null)
+    }
     request.onerror = () => { database.close(); reject(request.error ?? new Error('读取头像失败')) }
   })
 }

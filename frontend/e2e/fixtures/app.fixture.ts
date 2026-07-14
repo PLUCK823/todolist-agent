@@ -65,6 +65,13 @@ async function installTestState(page: Page) {
   })
 }
 
+export async function reloadMockPage(page: Page) {
+  const current = new URL(page.url())
+  const target = `${current.pathname}${current.search}${current.hash}`
+  await page.goto('about:blank')
+  await page.goto(target)
+}
+
 export const test = base.extend<AppFixtures>({
   _appState: [async ({ page }, provide) => {
     await installTestState(page)

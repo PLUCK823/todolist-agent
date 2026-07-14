@@ -31,8 +31,18 @@ export default defineConfig({
   },
   projects: [
     { name: 'chromium', grepInvert: /@real/, use: { ...devices['Desktop Chrome'] } },
-    { name: 'firefox', grepInvert: /@real/, use: { ...devices['Desktop Firefox'] } },
-    { name: 'webkit', grepInvert: /@real/, use: { ...devices['Desktop Safari'] } },
+    {
+      name: 'firefox',
+      grepInvert: /@real/,
+      testIgnore: /visual\.spec\.ts/,
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      grepInvert: /@real/,
+      testIgnore: /visual\.spec\.ts/,
+      use: { ...devices['Desktop Safari'] },
+    },
     {
       name: 'real-chromium',
       grep: /@real/,

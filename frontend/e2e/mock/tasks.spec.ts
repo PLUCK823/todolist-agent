@@ -1,5 +1,6 @@
 import type { Todo } from '../../src/features/todos/todo.types'
 import { expect, test } from '../fixtures/agent.fixture'
+import { reloadMockPage } from '../fixtures/app.fixture'
 
 function todo(id: number, title: string, overrides: Partial<Todo> = {}): Todo {
   return {
@@ -116,7 +117,7 @@ test('distinguishes an empty list from a filtered no-results state', async ({ pa
   await page.goto('/tasks')
   await expect(page.getByRole('heading', { name: '还没有任务' })).toBeVisible()
   await seedTodos([todo(1, '唯一任务')])
-  await page.reload()
+  await reloadMockPage(page)
   await page.getByLabel('搜索任务').fill('无匹配')
   await expect(page.getByRole('heading', { name: '没有符合条件的任务' })).toBeVisible()
 })

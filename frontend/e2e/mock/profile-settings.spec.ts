@@ -1,4 +1,5 @@
 import { expect, test } from '../fixtures/agent.fixture'
+import { reloadMockPage } from '../fixtures/app.fixture'
 
 test.beforeEach(async ({ login }) => { await login() })
 
@@ -8,7 +9,7 @@ test('saves display name and timezone and reflects them in the account UI', asyn
   await page.getByLabel('时区').fill('Asia/Tokyo (UTC+9)')
   await page.getByRole('button', { name: '保存修改' }).click()
   await expect(page.getByText('个人资料已保存')).toBeVisible()
-  await page.reload()
+  await reloadMockPage(page)
   await expect(page.getByLabel('显示名称')).toHaveValue('更新后的用户')
   await expect(page.getByLabel('时区')).toHaveValue('Asia/Tokyo (UTC+9)')
   await page.getByRole('button', { name: '展开导航' }).click()
@@ -23,7 +24,7 @@ test('chooses and persists a preset avatar', async ({ page }) => {
   await expect(dialog.getByRole('radio', { name: '星紫' })).toBeChecked()
   await dialog.getByRole('button', { name: '保存头像' }).click()
   await expect(page.getByText('头像已更新')).toBeVisible()
-  await page.reload()
+  await reloadMockPage(page)
   await expect(page.getByLabel('Plucky HZ的头像').first()).toContainText('✦')
 })
 
@@ -54,7 +55,7 @@ test('persists theme, motion and Agent startup preferences', async ({ page }) =>
   await expect(page.getByText('设置已保存')).toBeVisible()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
   await expect(page.locator('html')).toHaveAttribute('data-reduced-motion', 'true')
-  await page.reload()
+  await reloadMockPage(page)
   await expect(page.getByTestId('agent-column')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '展开智能助手' })).toBeVisible()
 })

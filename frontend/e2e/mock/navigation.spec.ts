@@ -1,4 +1,5 @@
 import { expect, test } from '../fixtures/agent.fixture'
+import { reloadMockPage } from '../fixtures/app.fixture'
 
 test.beforeEach(async ({ login }) => { await login() })
 
@@ -19,14 +20,14 @@ test('navigates among all four workspaces with an active destination', async ({ 
   }
 })
 
-test('expands the icon rail, exposes labels and persists the state across reload', async ({ page }) => {
+test('expands the icon rail, exposes labels and persists the state across a fresh page load', async ({ page }) => {
   await page.goto('/tasks')
   const navigation = page.getByRole('navigation', { name: '主导航' })
   await expect(navigation).toHaveAttribute('data-expanded', 'false')
   await page.getByRole('button', { name: '展开导航' }).click()
   await expect(navigation).toHaveAttribute('data-expanded', 'true')
   await expect(page.getByText('近期安排', { exact: true })).toBeVisible()
-  await page.reload()
+  await reloadMockPage(page)
   await expect(navigation).toHaveAttribute('data-expanded', 'true')
   await page.getByRole('button', { name: '收起导航' }).click()
   await expect(navigation).toHaveAttribute('data-expanded', 'false')

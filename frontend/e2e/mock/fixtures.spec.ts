@@ -82,7 +82,7 @@ test('API fixture preserves updates, completion and deletion for following GETs'
 test('app fixture clears storage once per browser context, not once per page', async ({ context, login }) => {
   await login()
   const secondPage = await context.newPage()
-  await secondPage.goto('/login')
+  await secondPage.goto('/favicon.svg')
   await expect.poll(() => secondPage.evaluate(() => localStorage.getItem('todolist.auth.session')))
     .toBe('e2e-demo-account')
   await secondPage.close()

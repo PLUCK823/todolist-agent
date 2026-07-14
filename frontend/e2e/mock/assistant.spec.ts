@@ -72,6 +72,7 @@ test('forged retry tool and args are rejected without creating a Todo', async ({
   await seedTodos([])
   await useAgentScenario('readOnlyTimeout')
   await page.goto('/login')
+  await page.getByRole('button', { name: '登录' }).waitFor()
   const result = await page.evaluate(() => new Promise<{ errorCode: string; total: number }>((resolve, reject) => {
     const first = new WebSocket('/api/agent/stream')
     first.onerror = () => reject(new Error('initial mock socket failed'))
