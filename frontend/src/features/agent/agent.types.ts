@@ -96,7 +96,7 @@ export interface AgentSessionState {
   messages: AgentMessage[]
   steps: AgentStep[]
   status: AgentSessionStatus
-  turnDone: boolean
+  serverDone: boolean
   pendingConfirmation?: PendingConfirmation
   lastRequest?: string
   activeAssistantMessageId?: string

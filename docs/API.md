@@ -330,7 +330,7 @@ WS /api/agent/stream
 
 该 frame 严格禁止 `tool`、`args`、`message` 等额外字段。服务端根据 token 与会话内 pending retry record 恢复原始工具和完整参数，验证 session、step、generation、turn ID、终结 phase 与只读 allowlist 后原子消费 token，并直接执行同一次查询；此路径不会调用 LLM，也不会重新规划整轮请求。若对应 turn 仍在执行或处于非终结 phase，服务端拒绝请求且不消费 token；若已到 `ready_reply`，服务端会在同一 session lock 内先提交原 turn，再消费 token。token 一次性使用，错误会话/step 不会消耗合法 token，成功或已开始的合法重试不能并发重复执行。无效、已使用、未终结或过期 token 返回 `step_failed(error_code="INVALID_RETRY_STEP", retryable=false)`。
 
-Todo 写接口当前没有 action/turn 幂等键，因此 create/update/complete/delete 即使超时也始终返回 `retryable=false` 且不签发 token，避免“服务端已写入但响应丢失”造成重复副作用。前端可以在 `step_failed` 暂存 token，但必须等同一 turn 的 `done` 到达后才启用 `supportsStepRetry`、显示按钮或发送 `retry_step`；在此之前也不能关闭原 stream 或发送下一条消息。
+Todo 写接口当前没有 action/turn 幂等键，因此 create/update/complete/delete 即使超时也始终返回 `retryable=false` 且不签发 token，避免“服务端已写入但响应丢失”造成重复副作用。前端可以在 `step_failed` 暂存 token，但必须等同一 turn 的服务端 `done` 到达后才启用 `supportsStepRetry`、显示按钮或发送 `retry_step`；本地 `client_failed`、WebSocket close/error 和 `cancelled` 都不能替代 `done`，也不能开放新消息。在没有受控同请求恢复协议时，用户只能清空该会话后重新开始。
 
 Agent 会在每个工具完成后先记录该 turn 的 action journal，并在每次 WebSocket 事件写入前保存稳定的事件内容与 ID。如果写入失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重连；同一 Python worker、且该内存记录仍在 TTL/LRU 保留期内时，服务端会重放未确认事件并复用已记录的 tool-call ID，避免再次执行已经写入 journal 的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
 

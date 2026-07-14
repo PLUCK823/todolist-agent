@@ -214,6 +214,20 @@ test('reports and clears a disconnected panel session', async ({ page, useAgentS
   await expect(page.getByRole('log', { name: '对话消息' })).not.toContainText('侧栏触发断线')
 })
 
+test('keeps a token locked when the panel disconnects before done', async ({ page, useAgentScenario }) => {
+  await useAgentScenario('readOnlyDisconnect')
+  await page.goto('/tasks')
+  await sendFromPanel(page, '查询后断线')
+  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 查询超时' })).toBeVisible()
+  await expect(page.getByRole('alert').filter({ hasText: '智能助手连接已断开' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试查询 Todo 列表' })).toHaveCount(0)
+  await expect(page.getByLabel('消息输入框')).toBeDisabled()
+
+  await page.getByRole('button', { name: '清空对话' }).click()
+  await expect(page.getByRole('heading', { name: '今天要做什么？' })).toBeVisible()
+  await expect(page.getByLabel('消息输入框')).toBeEnabled()
+})
+
 test('reports a disconnected stream and clears retained history', async ({ page, useAgentScenario }) => {
   await useAgentScenario('disconnect')
   await page.goto('/assistant')

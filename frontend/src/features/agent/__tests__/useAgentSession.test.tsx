@@ -234,6 +234,26 @@ describe('createAgentStreamClient', () => {
     expect(failures).toHaveLength(1)
   })
 
+  it('does not synthesize server done when a token-bearing stream closes', () => {
+    const { factory, sockets } = createSocketFactory()
+    const events: AgentEvent[] = []
+    const failures: unknown[] = []
+    const client = createAgentStreamClient({ socketFactory: factory, maxRetries: 0 })
+    client.send({ message: '查询任务', session_id: 's' }, {
+      onEvent: (event) => events.push(event),
+      onFailure: (failure) => failures.push(failure),
+    })
+    sockets[0].open()
+    sockets[0].message({
+      type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时',
+      retryable: true, retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 1,
+    })
+    sockets[0].abnormalClose()
+
+    expect(events.map((event) => event.type)).toEqual(['step_failed'])
+    expect(failures).toHaveLength(1)
+  })
+
   it('turns a socket factory exception during backoff into one terminal failure', async () => {
     vi.useFakeTimers()
     const first = new FakeSocket()
@@ -524,6 +544,36 @@ describe('useAgentSession', () => {
     expect(result.current.sessionId).toBe('s')
     expect(result.current.status).toBe('connecting')
     expect(result.current.capabilities.supportsStepRetry).toBe(false)
+  })
+
+  it('keeps retry and send locked when the socket fails after a token but before done', async () => {
+    const client = new ControlledClient()
+    const clearHistory = vi.fn().mockResolvedValue(undefined)
+    const { result } = renderHook(() => useAgentSession({
+      client, historyApi: { clear: clearHistory }, sessionIdFactory: () => 's',
+    }))
+    act(() => result.current.send('查询任务'))
+    act(() => client.handlers[0].onEvent({
+      type: 'step_started', step_id: 'read', label: '查询', tool: 'list_todos',
+    }))
+    act(() => client.handlers[0].onEvent({
+      type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true,
+      retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 5000,
+    }))
+    act(() => client.handlers[0].onFailure?.({
+      code: 'CONNECTION_CLOSED', message: 'done 前断线', retryable: false,
+    }))
+
+    expect(result.current.canRetry('read')).toBe(false)
+    expect(result.current.capabilities.supportsStepRetry).toBe(false)
+    expect(result.current.canSend).toBe(false)
+    act(() => result.current.retry('read'))
+    act(() => result.current.send('不能发送的新消息'))
+    expect(client.requests).toHaveLength(1)
+
+    await act(() => result.current.clear())
+    expect(clearHistory).toHaveBeenCalledWith('s')
+    expect(result.current.canSend).toBe(true)
   })
 
   it.each(['create_todo', 'update_todo', 'delete_todo', 'unknown_tool'])('never replays the write or unknown tool %s', (tool) => {

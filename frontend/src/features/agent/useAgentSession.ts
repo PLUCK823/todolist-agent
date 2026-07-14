@@ -30,7 +30,7 @@ export function canRetryServerStep(state: AgentSessionState, stepId: string): bo
   const failedStep = state.steps.find((step) => step.id === stepId)
   const toolSteps = state.steps.filter((step) => typeof step.tool === 'string')
   return state.status === 'failed'
-    && state.turnDone
+    && state.serverDone
     && Boolean(state.sessionId)
     && failedStep?.status === 'failed'
     && failedStep.retryable === true
@@ -104,7 +104,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     const trimmed = message.trim()
     if (!trimmed
       || clearingRef.current
-      || !stateRef.current.turnDone
+      || !stateRef.current.serverDone
       || activeStatuses.has(stateRef.current.status)) return false
     let sessionId: string
     let messageId: string
@@ -292,10 +292,10 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     steps: state.steps,
     status: state.status,
     capabilities: {
-      supportsStepRetry: state.turnDone
+      supportsStepRetry: state.serverDone
         && state.steps.some((step) => typeof step.retryToken === 'string'),
     },
-    canSend: !isClearing && state.turnDone && !activeStatuses.has(state.status),
+    canSend: !isClearing && state.serverDone && !activeStatuses.has(state.status),
     isClearing,
     send,
     canRetry,

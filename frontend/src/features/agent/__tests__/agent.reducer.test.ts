@@ -106,7 +106,23 @@ describe('reduceAgent', () => {
     const cancelled = reduceAgent(running, { type: 'cancelled' })
 
     expect(cancelled.status).toBe('idle')
+    expect(cancelled.serverDone).toBe(false)
     expect(cancelled.steps).toEqual(running.steps)
+  })
+
+  it('only server done opens the terminal gate, never a client failure', () => {
+    const running = reduceAgent(initialAgentState, {
+      type: 'request_started', message: '查询', sessionId: 's', messageId: 'm', createdAt: 'now',
+    })
+    const failed = reduceAgent(running, {
+      type: 'client_failed',
+      failure: { code: 'CONNECTION_CLOSED', message: '断线', retryable: false },
+    })
+    const done = reduceAgent(running, { type: 'done' })
+
+    expect(running.serverDone).toBe(false)
+    expect(failed.serverDone).toBe(false)
+    expect(done.serverDone).toBe(true)
   })
 
   it('preserves messages but clears the previous timeline for a new request', () => {

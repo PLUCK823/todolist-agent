@@ -191,7 +191,7 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     const config = (() => {
       try {
         return JSON.parse(readStorage(E2E_AGENT_SCENARIO_KEY) ?? 'null') as {
-          name?: keyof typeof agentEventScenarios | 'disconnect'
+          name?: keyof typeof agentEventScenarios | 'disconnect' | 'readOnlyDisconnect'
           timeScale?: number
         } | null
       } catch { return null }
@@ -235,7 +235,9 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
       setTimeout(() => client.close(1011, 'mock_disconnect'), Math.max(0, Math.round(50 * timeScale)))
       return
     }
-    const scenario = agentEventScenarios[name] ?? agentEventScenarios.success
+    const scenario = name === 'readOnlyDisconnect'
+      ? agentEventScenarios.readOnlyTimeout
+      : agentEventScenarios[name] ?? agentEventScenarios.success
     if (!started) {
       connectionSession = typeof frame.session_id === 'string' ? frame.session_id : ''
       connectionGeneration = (agentSessionGenerations.get(connectionSession) ?? 0) + 1
@@ -300,6 +302,9 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
         }
         applyAction(eventToSend)
         client.send(JSON.stringify(eventToSend))
+        if (name === 'readOnlyDisconnect' && eventToSend.type === 'step_failed') {
+          setTimeout(() => client.close(1011, 'mock_disconnect_before_done'), 0)
+        }
       }, delay)
     }
 
@@ -311,7 +316,9 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
           .filter(({ event }) => event.type === 'step_started' || event.type === 'step_completed' || event.type === 'confirmation_required')
           .forEach(send)
       } else {
-        scenario.events.forEach(send)
+        scenario.events
+          .filter(({ event }) => name !== 'readOnlyDisconnect' || event.type !== 'done')
+          .forEach(send)
       }
       return
     }
@@ -373,8 +380,8 @@ export const handlers = [
     return HttpResponse.json({ armed: true })
   }),
   http.post('/api/__e2e__/agent/scenario', async ({ request }) => {
-    const body = await request.json() as { name?: keyof typeof agentEventScenarios | 'disconnect'; timeScale?: number }
-    if (!body.name || (body.name !== 'disconnect' && !agentEventScenarios[body.name])) {
+    const body = await request.json() as { name?: keyof typeof agentEventScenarios | 'disconnect' | 'readOnlyDisconnect'; timeScale?: number }
+    if (!body.name || (body.name !== 'disconnect' && body.name !== 'readOnlyDisconnect' && !agentEventScenarios[body.name])) {
       return HttpResponse.json({ message: 'unknown Agent scenario' }, { status: 400 })
     }
     writeStorage(E2E_AGENT_SCENARIO_KEY, { name: body.name, timeScale: body.timeScale ?? 0 })
