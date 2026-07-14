@@ -9,6 +9,7 @@ export const initialAgentState: AgentSessionState = {
   messages: [],
   steps: [],
   status: 'idle',
+  turnDone: true,
 }
 
 function updateStep(
@@ -62,6 +63,7 @@ export function reduceAgent(
         }],
         steps: [],
         status: 'connecting',
+        turnDone: false,
         pendingConfirmation: undefined,
         activeAssistantMessageId: undefined,
         lastRequest: action.message,
@@ -72,6 +74,7 @@ export function reduceAgent(
       return {
         ...state,
         status: 'connecting',
+        turnDone: false,
         steps: state.steps.map((step) => step.id === action.stepId
           ? { ...step, status: 'waiting', errorCode: undefined, errorMessage: undefined }
           : step),
@@ -151,6 +154,7 @@ export function reduceAgent(
       return {
         ...state,
         status: state.steps.some((step) => step.status === 'failed') ? 'failed' : 'done',
+        turnDone: true,
         pendingConfirmation: undefined,
         activeAssistantMessageId: undefined,
       }
@@ -167,6 +171,7 @@ export function reduceAgent(
       return {
         ...state,
         status: 'failed',
+        turnDone: true,
         steps: [...withoutOldConnection, connectionStep],
         pendingConfirmation: undefined,
         activeAssistantMessageId: undefined,
@@ -176,6 +181,7 @@ export function reduceAgent(
       return {
         ...state,
         status: 'idle',
+        turnDone: true,
         pendingConfirmation: undefined,
         activeAssistantMessageId: undefined,
       }

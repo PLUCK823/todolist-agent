@@ -110,11 +110,10 @@ export const agentEventScenarios = {
           error_code: 'TOOL_TIMEOUT',
           message: 'Todo API 查询超时',
           retryable: true,
-          retry_token: 'mock-readonly-retry-token-list-0001',
           duration_ms: 5000,
         },
       },
-      { atMs: createStarted.atMs + 5000, event: { type: 'done' } },
+      { atMs: createStarted.atMs + 6000, event: { type: 'done' } },
     ],
   },
   readOnlySuccess: {

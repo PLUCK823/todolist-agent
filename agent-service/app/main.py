@@ -292,11 +292,6 @@ async def stream(ws: WebSocket):
                 except Exception:
                     logger.warning("Final reply delivery failed", exc_info=True)
                     return
-                try:
-                    await writer.send_json({"type": "done"})
-                except Exception:
-                    logger.warning("Final done delivery failed", exc_info=True)
-                    return
                 if isinstance(result, ProcessResult):
                     try:
                         acknowledged = await complete_turn(
@@ -304,15 +299,25 @@ async def stream(ws: WebSocket):
                         )
                     except Exception:
                         logger.exception("Final turn checkpoint commit failed")
-                    else:
-                        if not acknowledged:
-                            logger.warning(
-                                "Final turn checkpoint was not committed: "
-                                "session=%s turn=%s generation=%s",
-                                session_id,
-                                result.turn_id,
-                                result.generation,
-                            )
+                        with suppress(RuntimeError, WebSocketDisconnect):
+                            await ws.close(code=1011)
+                        return
+                    if not acknowledged:
+                        logger.warning(
+                            "Final turn checkpoint was not committed: "
+                            "session=%s turn=%s generation=%s",
+                            session_id,
+                            result.turn_id,
+                            result.generation,
+                        )
+                        with suppress(RuntimeError, WebSocketDisconnect):
+                            await ws.close(code=1011)
+                        return
+                try:
+                    await writer.send_json({"type": "done"})
+                except Exception:
+                    logger.warning("Final done delivery failed", exc_info=True)
+                    return
                 try:
                     await ws.close()
                 except Exception:

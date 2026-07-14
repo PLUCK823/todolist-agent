@@ -502,7 +502,15 @@ describe('useAgentSession', () => {
       type: 'step_failed', step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true,
       retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 5000,
     }))
+    expect(result.current.canRetry('step-1')).toBe(false)
+    expect(result.current.canSend).toBe(false)
+    let earlySendAccepted = true
+    act(() => { earlySendAccepted = result.current.send('过早的新请求') })
+    expect(earlySendAccepted).toBe(false)
+    expect(client.requests).toHaveLength(1)
+    act(() => client.handlers[0].onEvent({ type: 'done' }))
     expect(result.current.canRetry('step-1')).toBe(true)
+    expect(result.current.capabilities.supportsStepRetry).toBe(true)
     act(() => result.current.retry('step-1'))
 
     expect(client.requests).toEqual([
@@ -515,7 +523,7 @@ describe('useAgentSession', () => {
     expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(1)
     expect(result.current.sessionId).toBe('s')
     expect(result.current.status).toBe('connecting')
-    expect(result.current.capabilities.supportsStepRetry).toBe(true)
+    expect(result.current.capabilities.supportsStepRetry).toBe(false)
   })
 
   it.each(['create_todo', 'update_todo', 'delete_todo', 'unknown_tool'])('never replays the write or unknown tool %s', (tool) => {

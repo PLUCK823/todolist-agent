@@ -98,6 +98,47 @@ test('forged retry tool and args are rejected without creating a Todo', async ({
   expect(result).toEqual({ errorCode: 'INVALID_RETRY_STEP', total: 0 })
 })
 
+test('retry before done is rejected without consuming the token', async ({ page, useAgentScenario }) => {
+  await useAgentScenario('readOnlyTimeout', { timeScale: 0.05 })
+  await page.goto('/login')
+  const result = await page.evaluate(() => new Promise<string[]>((resolve, reject) => {
+    const results: string[] = []
+    const first = new WebSocket('/api/agent/stream')
+    first.onerror = () => reject(new Error('initial socket failed'))
+    first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: 'terminal-gate' }))
+    first.onmessage = (message) => {
+      const event = JSON.parse(String(message.data)) as { type: string; step_id?: string; retry_token?: string }
+      if (event.type !== 'step_failed' || !event.step_id || !event.retry_token) return
+      const retryFrame = {
+        type: 'retry_step', session_id: 'terminal-gate', step_id: event.step_id,
+        retry_token: event.retry_token,
+      }
+      const early = new WebSocket('/api/agent/stream')
+      early.onerror = () => reject(new Error('early retry socket failed'))
+      early.onopen = () => early.send(JSON.stringify(retryFrame))
+      early.onmessage = (earlyMessage) => {
+        const earlyEvent = JSON.parse(String(earlyMessage.data)) as { type: string; error_code?: string }
+        if (earlyEvent.type !== 'step_failed') return
+        results.push(earlyEvent.error_code ?? '')
+        setTimeout(() => {
+          const terminal = new WebSocket('/api/agent/stream')
+          terminal.onerror = () => reject(new Error('terminal retry socket failed'))
+          terminal.onopen = () => terminal.send(JSON.stringify(retryFrame))
+          terminal.onmessage = (terminalMessage) => {
+            const terminalEvent = JSON.parse(String(terminalMessage.data)) as { type: string }
+            if (terminalEvent.type === 'action_completed') {
+              results.push(terminalEvent.type)
+              resolve(results)
+            }
+          }
+        }, 100)
+      }
+    }
+  }))
+
+  expect(result).toEqual(['INVALID_RETRY_STEP', 'action_completed'])
+})
+
 test('rejects and approves destructive Agent confirmations', async ({ page, useAgentScenario }) => {
   await useAgentScenario('confirmationRequired')
   await page.goto('/tasks')

@@ -373,24 +373,45 @@ async def retry_failed_step(
 ) -> dict[str, Any]:
     """Execute one exact server-recorded read-only call without invoking the LLM."""
     slot = _session_slots.get(session_id)
-    if slot is None:
+    if slot is None or slot.active is not None:
         raise InvalidRetryStep("retry step does not exist or is no longer available")
     async with slot.lock:
         pending = _pending_retries.get(retry_token)
+        record = _conversations.get(session_id)
         if (
             pending is None
             or pending.session_id != session_id
             or pending.step_id != step_id
             or pending.generation != slot.epoch
             or pending.tool not in READ_ONLY_RETRY_TOOLS
-            or session_id not in _conversations
+            or record is None
         ):
             raise InvalidRetryStep("retry step does not exist or is no longer available")
-        if _pending_retries.pop(retry_token, None) is not pending:
-            raise InvalidRetryStep("retry step does not exist or is no longer available")
+        state = record.get("incomplete")
+        if state is not None:
+            if (
+                state.get("turn_id") != pending.turn_id
+                or state.get("phase") != "ready_reply"
+            ):
+                raise InvalidRetryStep(
+                    "retry step is not available before its turn is terminal"
+                )
+            _commit_state(session_id, pending.generation, record, state)
+            record = _conversations.get(session_id)
+            assert record is not None
+            record["pending_terminal_ack_turn_id"] = pending.turn_id
+            _save_record(session_id, pending.generation, record)
+            record = _conversations.get(session_id)
+        if (
+            record is None
+            or record.get("last_completed_turn_id") != pending.turn_id
+        ):
+            raise InvalidRetryStep("retry step is not bound to the completed turn")
         tool = _tools_by_name.get(pending.tool)
         if tool is None:
             raise InvalidRetryStep("retry tool is no longer available")
+        if _pending_retries.pop(retry_token, None) is not pending:
+            raise InvalidRetryStep("retry step does not exist or is no longer available")
         started = time.monotonic()
         await _emit(
             on_event,
@@ -550,6 +571,7 @@ def _commit_state(
     state: dict[str, Any],
 ) -> None:
     record["messages"] = _trim_messages(state["messages"])
+    record["last_completed_turn_id"] = state["turn_id"]
     record["incomplete"] = None
     _save_record(session_id, generation, record)
 
@@ -566,6 +588,14 @@ async def complete_turn(session_id: str, turn_id: str, generation: int) -> bool:
         if record is None:
             return False
         state = record.get("incomplete")
+        if (
+            state is None
+            and record.get("generation") == generation
+            and record.get("pending_terminal_ack_turn_id") == turn_id
+        ):
+            record.pop("pending_terminal_ack_turn_id", None)
+            _save_record(session_id, generation, record)
+            return True
         if (
             state is None
             or state.get("phase") != "ready_reply"

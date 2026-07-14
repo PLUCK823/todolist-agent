@@ -648,6 +648,74 @@ async def test_mixed_read_write_turn_never_issues_a_retry_token():
 
 
 @pytest.mark.asyncio
+async def test_retry_before_turn_terminal_is_rejected_without_consuming_token():
+    from app.agent import (
+        InvalidRetryStep,
+        _conversations,
+        _tools_by_name,
+        complete_turn,
+        process_message,
+        retry_failed_step,
+    )
+
+    failure_ready = asyncio.Event()
+    release_failure_delivery = asyncio.Event()
+    events: list[dict[str, Any]] = []
+    retry_events: list[dict[str, Any]] = []
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("get_todo", {"todo_id": 9}, "read")]),
+            _aim("查询失败"),
+        ]
+    )
+    tool = StubTool(side_effect=[TimeoutError("查询超时"), {"id": 9}])
+
+    async def block_failure(event):
+        events.append(event)
+        if event["type"] == "step_failed":
+            failure_ready.set()
+            await release_failure_delivery.wait()
+
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"get_todo": tool}),
+    ):
+        processing = asyncio.create_task(
+            process_message("terminal-gate", "查看 9", block_failure)
+        )
+        await asyncio.wait_for(failure_ready.wait(), timeout=1)
+        failure = next(event for event in events if event["type"] == "step_failed")
+        with pytest.raises(InvalidRetryStep):
+            await asyncio.wait_for(
+                retry_failed_step(
+                    "terminal-gate",
+                    failure["step_id"],
+                    failure["retry_token"],
+                    retry_events.append,
+                ),
+                timeout=0.05,
+            )
+        release_failure_delivery.set()
+        processed = await processing
+        await retry_failed_step(
+            "terminal-gate",
+            failure["step_id"],
+            failure["retry_token"],
+            retry_events.append,
+        )
+        assert await complete_turn(
+            "terminal-gate", processed.turn_id, processed.generation
+        ) is True
+        llm.responses = [_aim("新请求完成")]
+        llm._call_count = 0
+        reply, _, _ = await process_message("terminal-gate", "下一条消息")
+
+    assert _conversations["terminal-gate"]["incomplete"] is None
+    assert tool.ainvoke.await_count == 2
+    assert reply == "新请求完成"
+
+
+@pytest.mark.asyncio
 async def test_cancelling_process_message_cancels_running_tool():
     """Disconnect cancellation propagates into an in-flight backend operation."""
     from app.agent import _tools_by_name, process_message

@@ -170,16 +170,21 @@ async function consumeTodoControl(request: Request) {
 
 const agentStream = ws.link('/api/agent/stream')
 const mockReadOnlyRetryTools = new Set(['list_todos', 'get_todo'])
+const agentSessionGenerations = new Map<string, number>()
 const pendingAgentRetries = new Map<string, {
   sessionId: string
   stepId: string
   tool: string
   args: Record<string, unknown>
+  generation: number
+  terminal: boolean
 }>()
 
 const agentStreamHandler = agentStream.addEventListener('connection', ({ client }) => {
   let started = false
   let waitingForConfirmation = false
+  let connectionSession = ''
+  let connectionGeneration = 0
   client.addEventListener('message', (message) => {
     let frame: Record<string, unknown>
     try { frame = JSON.parse(String(message.data)) as Record<string, unknown> } catch { return }
@@ -203,6 +208,8 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
         && pending.sessionId === frame.session_id
         && pending.stepId === frame.step_id
         && mockReadOnlyRetryTools.has(pending.tool)
+        && pending.terminal
+        && agentSessionGenerations.get(pending.sessionId) === pending.generation
       if (!valid || !pending) {
         client.send(JSON.stringify({
           type: 'step_failed', step_id: typeof frame.step_id === 'string' ? frame.step_id : 'retry',
@@ -229,6 +236,14 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
       return
     }
     const scenario = agentEventScenarios[name] ?? agentEventScenarios.success
+    if (!started) {
+      connectionSession = typeof frame.session_id === 'string' ? frame.session_id : ''
+      connectionGeneration = (agentSessionGenerations.get(connectionSession) ?? 0) + 1
+      agentSessionGenerations.set(connectionSession, connectionGeneration)
+      for (const [retryToken, pending] of pendingAgentRetries) {
+        if (pending.sessionId === connectionSession) pendingAgentRetries.delete(retryToken)
+      }
+    }
     const applyAction = (event: (typeof scenario.events)[number]['event']) => {
       if (event.type !== 'action_completed') return
       if (event.action === 'create_todo') {
@@ -257,24 +272,34 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
     const send = (item: (typeof scenario.events)[number], relativeToMs = 0) => {
       const delay = Math.max(0, Math.round((item.atMs - relativeToMs) * timeScale))
       setTimeout(() => {
-        if (item.event.type === 'step_failed' && item.event.retry_token) {
+        let eventToSend = item.event
+        if (item.event.type === 'step_failed' && item.event.retryable) {
           const failedEvent = item.event
-          const retryToken = failedEvent.retry_token as string
-          const requestSession = typeof frame.session_id === 'string' ? frame.session_id : ''
           const startedEvent = scenario.events.find(({ event }) => (
             event.type === 'step_started' && event.step_id === failedEvent.step_id
           ))?.event
           if (startedEvent?.type === 'step_started' && startedEvent.tool && mockReadOnlyRetryTools.has(startedEvent.tool)) {
+            const retryToken = `mock-retry-${globalThis.crypto.randomUUID()}`
             pendingAgentRetries.set(retryToken, {
-              sessionId: requestSession,
+              sessionId: connectionSession,
               stepId: failedEvent.step_id,
               tool: startedEvent.tool,
               args: startedEvent.args ?? {},
+              generation: connectionGeneration,
+              terminal: false,
             })
+            eventToSend = { ...failedEvent, retry_token: retryToken }
           }
         }
-        applyAction(item.event)
-        client.send(JSON.stringify(item.event))
+        if (item.event.type === 'done') {
+          for (const pending of pendingAgentRetries.values()) {
+            if (pending.sessionId === connectionSession && pending.generation === connectionGeneration) {
+              pending.terminal = true
+            }
+          }
+        }
+        applyAction(eventToSend)
+        client.send(JSON.stringify(eventToSend))
       }, delay)
     }
 

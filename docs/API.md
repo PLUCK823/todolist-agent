@@ -275,7 +275,7 @@ WS /api/agent/stream
 2. LLM 返回 tool call 后发送 `step_completed(understand)`；
 3. 每个工具真正执行前发送 `step_started(tool)`；
 4. 工具 await 返回后立即发送 `action_completed`，失败或超时则发送 `step_failed`；
-5. Agent 生成最终文本后发送 `reply`，最后发送 `done`。
+5. Agent 生成最终文本后发送 `reply`，提交 turn checkpoint，提交成功后才发送 `done`。
 
 事件示例：
 
@@ -328,13 +328,13 @@ WS /api/agent/stream
 { "type": "retry_step", "session_id": "session-uuid", "step_id": "list_todos-a1b2c3d4", "retry_token": "<opaque-server-token>" }
 ```
 
-该 frame 严格禁止 `tool`、`args`、`message` 等额外字段。服务端根据 token 与会话内 pending retry record 恢复原始工具和完整参数，验证 session、step、generation、只读 allowlist 后原子消费 token，并直接执行同一次查询；此路径不会调用 LLM，也不会重新规划整轮请求。token 一次性使用，错误会话/step 不会消耗合法 token，成功或已开始的合法重试不能并发重复执行。无效、已使用或过期 token 返回 `step_failed(error_code="INVALID_RETRY_STEP", retryable=false)`。
+该 frame 严格禁止 `tool`、`args`、`message` 等额外字段。服务端根据 token 与会话内 pending retry record 恢复原始工具和完整参数，验证 session、step、generation、turn ID、终结 phase 与只读 allowlist 后原子消费 token，并直接执行同一次查询；此路径不会调用 LLM，也不会重新规划整轮请求。若对应 turn 仍在执行或处于非终结 phase，服务端拒绝请求且不消费 token；若已到 `ready_reply`，服务端会在同一 session lock 内先提交原 turn，再消费 token。token 一次性使用，错误会话/step 不会消耗合法 token，成功或已开始的合法重试不能并发重复执行。无效、已使用、未终结或过期 token 返回 `step_failed(error_code="INVALID_RETRY_STEP", retryable=false)`。
 
-Todo 写接口当前没有 action/turn 幂等键，因此 create/update/complete/delete 即使超时也始终返回 `retryable=false` 且不签发 token，避免“服务端已写入但响应丢失”造成重复副作用。前端 `supportsStepRetry` 只在当前状态确实持有服务端签发的 token 时启用，按钮仍以对应步骤的 token 为准。
+Todo 写接口当前没有 action/turn 幂等键，因此 create/update/complete/delete 即使超时也始终返回 `retryable=false` 且不签发 token，避免“服务端已写入但响应丢失”造成重复副作用。前端可以在 `step_failed` 暂存 token，但必须等同一 turn 的 `done` 到达后才启用 `supportsStepRetry`、显示按钮或发送 `retry_step`；在此之前也不能关闭原 stream 或发送下一条消息。
 
 Agent 会在每个工具完成后先记录该 turn 的 action journal，并在每次 WebSocket 事件写入前保存稳定的事件内容与 ID。如果写入失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重连；同一 Python worker、且该内存记录仍在 TTL/LRU 保留期内时，服务端会重放未确认事件并复用已记录的 tool-call ID，避免再次执行已经写入 journal 的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
 
-上述 action journal、turn ID、事件 checkpoint 和会话锁都只是**单进程内存状态**，不是数据库级 durable log，也不是 exactly-once 交付协议。进程重启、多 worker 路由到不同进程、缓存淘汰都会丢失恢复上下文；即使服务端成功调用 `send_json`，也不能证明客户端已经收到事件。成功终态严格按 `reply → done → complete_turn(turn_id, generation) → close` 处理；`reply` 或 `done` 写入失败时不会提交该轮，同请求可从 `ready_reply` 恢复。`done` 已发送后，提交竞态或 close 失败只记录服务端日志，不会再追加第二个 `step_failed` 或 `done`。客户端仍应把未收到 `done` 视为结果不确定，并允许用户查看 Todo 实际状态后决定是否重试。
+上述 action journal、turn ID、事件 checkpoint 和会话锁都只是**单进程内存状态**，不是数据库级 durable log，也不是 exactly-once 交付协议。进程重启、多 worker 路由到不同进程、缓存淘汰都会丢失恢复上下文；即使服务端成功调用 `send_json`，也不能证明客户端已经收到事件。成功终态严格按 `reply → complete_turn(turn_id, generation) → done → close` 处理，确保客户端看到 `done` 时服务端 turn 已提交。`reply` 写入失败会保留 `ready_reply` 供同请求恢复；`complete_turn` 失败不会发送 `done`；`done` 写入失败时 turn 已提交，客户端仍应把未收到 `done` 视为结果不确定，并查看 Todo 实际状态后决定下一步。
 
 服务端为每个 session 串行执行 turn，不同 session 仍可并行。会话采用 TTL/LRU 有界缓存，并限制每个会话保留的消息数、单 turn 的工具轮数和工具调用总数；超限返回 `step_failed(error_code="AGENT_LIMIT_EXCEEDED", retryable=false)`。删除历史会建立 tombstone 并取消同 session 的在途处理，晚到结果不能重新创建已删除的历史或确认状态。
 

@@ -633,13 +633,18 @@ async def test_terminal_send_failure_keeps_checkpoint_and_retry_reuses_side_effe
     ):
         await stream(first)
         state = _conversations[f"fail-{fail_event}"]["incomplete"]
-        assert state["phase"] == "ready_reply"
-        retry = _TerminalWebSocket(session_id=f"fail-{fail_event}")
-        await stream(retry)
+        if fail_event == "reply":
+            assert state["phase"] == "ready_reply"
+            retry = _TerminalWebSocket(session_id=f"fail-{fail_event}")
+            await stream(retry)
+            assert [event["type"] for event in retry.events[-2:]] == [
+                "reply", "done"
+            ]
+            assert _conversations[f"fail-{fail_event}"]["incomplete"] is None
+        else:
+            assert state is None
 
     tool.ainvoke.assert_awaited_once()
-    assert [event["type"] for event in retry.events[-2:]] == ["reply", "done"]
-    assert _conversations[f"fail-{fail_event}"]["incomplete"] is None
     if fail_event == "done":
         terminal = [
             event["type"]
@@ -672,8 +677,8 @@ async def test_complete_false_after_done_adds_no_second_terminal_event():
 
     result_state = _conversations["complete-false"]["incomplete"]
     assert result_state["phase"] == "ready_reply"
-    assert [event["type"] for event in ws.events[-2:]] == ["reply", "done"]
-    assert len([event for event in ws.events if event["type"] == "done"]) == 1
+    assert ws.events[-1]["type"] == "reply"
+    assert len([event for event in ws.events if event["type"] == "done"]) == 0
     complete.assert_awaited_once_with("complete-false", result_state["turn_id"], 0)
     tool.ainvoke.assert_awaited_once()
 
@@ -695,6 +700,38 @@ async def test_close_failure_after_commit_adds_no_second_terminal_event():
     assert [event["type"] for event in ws.events[-2:]] == ["reply", "done"]
     assert len([event for event in ws.events if event["type"] == "done"]) == 1
     tool.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_done_is_not_sent_until_turn_commit_finishes():
+    from app.agent import ProcessResult
+    from app.main import stream
+
+    commit_started = asyncio.Event()
+    release_commit = asyncio.Event()
+
+    async def commit(*_args):
+        commit_started.set()
+        await release_commit.wait()
+        return True
+
+    ws = _TerminalWebSocket(session_id="terminal-order")
+    process = AsyncMock(
+        return_value=ProcessResult(
+            "完成", [], "terminal-order", "turn-terminal", 0
+        )
+    )
+    with (
+        patch("app.main.process_message", new=process),
+        patch("app.main.complete_turn", new=AsyncMock(side_effect=commit)),
+    ):
+        running = asyncio.create_task(stream(ws))
+        await asyncio.wait_for(commit_started.wait(), timeout=1)
+        assert [event["type"] for event in ws.events] == ["reply"]
+        release_commit.set()
+        await running
+
+    assert [event["type"] for event in ws.events] == ["reply", "done"]
 
 
 @pytest.mark.asyncio
