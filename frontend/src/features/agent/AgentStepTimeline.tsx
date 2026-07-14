@@ -24,9 +24,9 @@ function ActionResult({ action, result }: { action: string; result: Record<strin
   )
 }
 
-function AgentStepItem({ step, capabilities, onRetry, onConfirm, onReject }: {
+function AgentStepItem({ step, retryAllowed, onRetry, onConfirm, onReject }: {
   step: AgentStep
-  capabilities: AgentCapabilities
+  retryAllowed: boolean
   onRetry(stepId: string): void
   onConfirm(confirmationId: string): void
   onReject(confirmationId: string): void
@@ -52,7 +52,7 @@ function AgentStepItem({ step, capabilities, onRetry, onConfirm, onReject }: {
         {step.tool ? <code className="agent-step__tool">{step.tool}</code> : null}
         {step.errorMessage ? <p className="agent-step__error" role="alert">{step.errorMessage}</p> : null}
         {step.action && step.result ? <ActionResult action={step.action} result={step.result} /> : null}
-        {step.status === 'failed' && step.retryable && capabilities.supportsStepRetry ? (
+        {step.status === 'failed' && step.retryable && retryAllowed ? (
           <Button variant="secondary" size="sm" onClick={() => onRetry(step.id)} aria-label={`重试${step.label}`}>重试</Button>
         ) : null}
         {step.status === 'waiting_confirmation' && step.confirmationId ? (
@@ -69,22 +69,18 @@ function AgentStepItem({ step, capabilities, onRetry, onConfirm, onReject }: {
   )
 }
 
-export default function AgentStepTimeline({ steps, capabilities, onRetry, onConfirm, onReject }: {
+export default function AgentStepTimeline({ steps, capabilities, canRetry, onRetry, onConfirm, onReject }: {
   steps: AgentStep[]
   capabilities: AgentCapabilities
+  canRetry?(stepId: string): boolean
   onRetry(stepId: string): void
   onConfirm(confirmationId: string): void
   onReject(confirmationId: string): void
 }) {
   if (!steps.length) return null
-  const turnCapabilities = {
-    ...capabilities,
-    supportsStepRetry: capabilities.supportsStepRetry
-      && !steps.some((step) => step.status === 'completed' && Boolean(step.action)),
-  }
   return (
     <ol className="agent-timeline" aria-label="Agent 执行步骤">
-      {steps.map((step) => <AgentStepItem key={step.id} step={step} capabilities={turnCapabilities} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
+      {steps.map((step) => <AgentStepItem key={step.id} step={step} retryAllowed={capabilities.supportsStepRetry || canRetry?.(step.id) === true} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
     </ol>
   )
 }

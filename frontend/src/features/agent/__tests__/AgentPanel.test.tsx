@@ -19,7 +19,7 @@ function session(overrides: Partial<AgentSessionValue> = {}): AgentSessionValue 
     canSend: true,
     isClearing: false,
     capabilities: { supportsStepRetry: false },
-    send: vi.fn(), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(),
+    send: vi.fn(), canRetry: vi.fn().mockReturnValue(false), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(),
     resolveConfirmation: vi.fn(), cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
@@ -83,13 +83,30 @@ describe('AgentStepTimeline', () => {
     expect(onRetry).toHaveBeenCalledWith('failed')
   })
 
+  it('offers read-only turn replay independently from unsupported step retry', async () => {
+    const user = userEvent.setup()
+    const onRetry = vi.fn()
+    render(<AgentStepTimeline
+      steps={[{ id: 'query', label: '查询任务', tool: 'list_todos', status: 'failed', retryable: true, errorMessage: '查询超时' }]}
+      capabilities={{ supportsStepRetry: false }}
+      canRetry={(stepId) => stepId === 'query'}
+      onRetry={onRetry}
+      onConfirm={vi.fn()}
+      onReject={vi.fn()}
+    />)
+
+    await user.click(screen.getByRole('button', { name: '重试查询任务' }))
+    expect(onRetry).toHaveBeenCalledWith('query')
+  })
+
   it('hides replay when the turn has already completed an action', () => {
     render(<AgentStepTimeline
       steps={[
         { id: 'done', label: '创建任务', status: 'completed', action: 'create_todo', result: { id: 1 } },
         { id: 'failed', label: '同步页面', status: 'failed', retryable: true, errorMessage: '同步失败' },
       ]}
-      capabilities={{ supportsStepRetry: true }}
+      capabilities={{ supportsStepRetry: false }}
+      canRetry={() => false}
       onRetry={vi.fn()}
       onConfirm={vi.fn()}
       onReject={vi.fn()}
@@ -176,6 +193,15 @@ describe('AgentPanel integration', () => {
     await user.type(screen.getByPlaceholderText('输入消息或指令…'), '安排明日计划')
     await user.keyboard('{Enter}')
     expect(send).toHaveBeenCalledWith('安排明日计划')
+  })
+
+  it('clears panel history from a visible header action', async () => {
+    const user = userEvent.setup()
+    const clear = vi.fn().mockResolvedValue(undefined)
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session({ clear })}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+
+    await user.click(screen.getByRole('button', { name: '清空对话' }))
+    expect(clear).toHaveBeenCalledTimes(1)
   })
 
   it('announces a failed connection as offline while preserving the conversation', () => {

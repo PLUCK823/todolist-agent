@@ -33,13 +33,26 @@ test('shows running and waiting time before a delayed tool completes', async ({ 
 })
 
 test('retries a retryable tool timeout from the panel and succeeds', async ({ page, useAgentScenario }) => {
+  await useAgentScenario('readOnlyTimeout')
+  await page.goto('/tasks')
+  await sendFromPanel(page, '查询未完成任务')
+  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 查询超时' })).toBeVisible()
+  await useAgentScenario('readOnlySuccess')
+  await page.getByRole('button', { name: '重试查询 Todo 列表' }).click()
+  await expect(page.getByText('已查询到 4 项任务。')).toBeVisible()
+})
+
+test('never offers replay for create or delete timeouts', async ({ page, useAgentScenario }) => {
   await useAgentScenario('timeout')
   await page.goto('/tasks')
   await sendFromPanel(page, '创建超时任务')
   await expect(page.getByRole('alert').filter({ hasText: 'Todo API 响应超时' })).toBeVisible()
-  await useAgentScenario('success')
-  await page.getByRole('button', { name: '重试调用 Todo API' }).click()
-  await expect(page.getByText('好的，已创建高优先级任务。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试调用 Todo API' })).toHaveCount(0)
+
+  await useAgentScenario('deleteTimeout')
+  await sendFromPanel(page, '删除超时任务')
+  await expect(page.getByRole('alert').filter({ hasText: '删除 Todo 超时' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试删除待办' })).toHaveCount(0)
 })
 
 test('rejects and approves destructive Agent confirmations', async ({ page, useAgentScenario }) => {
@@ -69,15 +82,52 @@ test('shares the same live session with the standalone Agent workspace', async (
 })
 
 test('recovers a retryable failure from the standalone Agent workspace', async ({ page, useAgentScenario }) => {
-  await useAgentScenario('timeout')
+  await useAgentScenario('readOnlyTimeout')
   await page.goto('/assistant')
-  await page.getByLabel('智能助手消息').fill('独立页超时任务')
+  await page.getByLabel('智能助手消息').fill('独立页查询任务')
   await page.getByRole('button', { name: '发送消息' }).click()
-  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 响应超时' })).toBeVisible()
-  await useAgentScenario('success')
-  await page.getByRole('button', { name: '重试调用 Todo API' }).click()
-  await expect(page.getByRole('log')).toContainText('好的，已创建高优先级任务。')
+  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 查询超时' })).toBeVisible()
+  await useAgentScenario('readOnlySuccess')
+  await page.getByRole('button', { name: '重试查询 Todo 列表' }).click()
+  await expect(page.getByRole('log')).toContainText('已查询到 4 项任务。')
   await expect(page.locator('#current > header').getByText('任务已完成', { exact: true })).toBeVisible()
+})
+
+test('shows waiting time and completion in the standalone Agent workspace', async ({ page, useAgentScenario }) => {
+  await useAgentScenario('readOnlySuccess', { timeScale: 0.25 })
+  await page.goto('/assistant')
+  await page.getByLabel('智能助手消息').fill('查询近期任务')
+  await page.getByRole('button', { name: '发送消息' }).click()
+  const timeline = page.getByRole('list', { name: 'Agent 执行步骤' })
+  await expect(timeline).toContainText('运行中')
+  await expect(timeline.locator('time')).toBeVisible()
+  await expect(timeline).toContainText('1.4 秒')
+  await expect(page.getByRole('log')).toContainText('已查询到 4 项任务。')
+})
+
+test('confirms deletion in the standalone workspace and refreshes cached Todos', async ({ page, seedTodos, useAgentScenario }) => {
+  await seedTodos()
+  await page.goto('/tasks')
+  await expect(page.getByRole('button', { name: '查看任务：完成项目文档' })).toBeVisible()
+  await page.getByRole('link', { name: '智能助手' }).click()
+  await useAgentScenario('confirmationRequired')
+  await page.getByLabel('智能助手消息').fill('删除完成项目文档')
+  await page.getByRole('button', { name: '发送消息' }).click()
+  await page.getByRole('button', { name: '确认删除待办' }).click()
+  await expect(page.getByRole('log')).toContainText('已删除待办「完成项目文档」。')
+  await page.getByRole('link', { name: '我的任务' }).click()
+  await expect(page.getByRole('button', { name: '查看任务：完成项目文档' })).toHaveCount(0)
+})
+
+test('reports and clears a disconnected panel session', async ({ page, useAgentScenario }) => {
+  await useAgentScenario('disconnect')
+  await page.goto('/tasks')
+  await sendFromPanel(page, '侧栏触发断线')
+  await expect(page.getByRole('alert').filter({ hasText: '连接异常 · 当前离线' })).toBeVisible()
+  await expect(page.getByRole('log', { name: '对话消息' })).toContainText('侧栏触发断线')
+  await page.getByRole('button', { name: '清空对话' }).click()
+  await expect(page.getByRole('heading', { name: '今天要做什么？' })).toBeVisible()
+  await expect(page.getByRole('log', { name: '对话消息' })).not.toContainText('侧栏触发断线')
 })
 
 test('reports a disconnected stream and clears retained history', async ({ page, useAgentScenario }) => {

@@ -455,6 +455,41 @@ figcaption {
   margin: 0;
 }
 
+.agent-panel__clear {
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: transparent;
+  color: rgb(248 248 251 / 72%);
+  font-size: .75rem;
+  font-weight: 700;
+}
+
+.agent-panel__clear:hover {
+  background: rgb(255 255 255 / 8%);
+  color: #fff;
+}
+
+.agent-panel__clear:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgb(141 131 246 / 28%);
+}
+
+.agent-panel__clear:disabled {
+  cursor: wait;
+  opacity: .5;
+}
+
+.agent-panel__clear-error {
+  border: 1px solid rgb(242 122 112 / 35%);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgb(242 122 112 / 12%);
+  color: #ffb4ae;
+  font-size: .75rem;
+}
+
 .agent-panel__header h2 {
   font-size: .9rem;
   letter-spacing: -.01em;

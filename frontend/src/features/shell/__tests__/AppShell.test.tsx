@@ -12,7 +12,7 @@ import { useShell } from '../shell-context'
 const session: AgentSessionValue = {
   messages: [], steps: [], status: 'idle', capabilities: { supportsStepRetry: false },
   canSend: true, isClearing: false,
-  send: vi.fn(), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(),
+  send: vi.fn(), canRetry: vi.fn().mockReturnValue(false), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(),
   cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
 }
 

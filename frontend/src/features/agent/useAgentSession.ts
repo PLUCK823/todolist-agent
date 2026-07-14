@@ -24,7 +24,22 @@ const activeStatuses = new Set<AgentSessionState['status']>([
   'connecting', 'running', 'waiting_confirmation',
 ])
 
-export const agentCapabilities = { supportsStepRetry: true } as const
+export const agentCapabilities = { supportsStepRetry: false } as const
+const readOnlyRetryTools = new Set(['list_todos', 'get_todo'])
+
+export function canRetryReadOnlyTurn(state: AgentSessionState, stepId: string): boolean {
+  const failedStep = state.steps.find((step) => step.id === stepId)
+  const toolSteps = state.steps.filter((step) => typeof step.tool === 'string')
+  return state.status === 'failed'
+    && Boolean(state.lastRequest)
+    && failedStep?.status === 'failed'
+    && failedStep.retryable === true
+    && typeof failedStep.tool === 'string'
+    && readOnlyRetryTools.has(failedStep.tool)
+    && toolSteps.length > 0
+    && toolSteps.every((step) => readOnlyRetryTools.has(step.tool!))
+    && !state.steps.some((step) => step.status === 'completed' && Boolean(step.action))
+}
 
 export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSessionValue {
   const client = options.client ?? agentStreamClient
@@ -142,17 +157,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
 
   const send = useCallback((message: string) => startRequest(message), [startRequest])
 
+  const canRetry = useCallback((stepId: string) => (
+    canRetryReadOnlyTurn(stateRef.current, stepId)
+  ), [])
+
   const retry = useCallback((stepId: string) => {
     const current = stateRef.current
-    const failedStep = current.steps.find((step) => step.id === stepId)
-    const alreadyMutated = current.steps.some((step) => step.status === 'completed' && Boolean(step.action))
-    if (
-      current.status !== 'failed'
-      || failedStep?.status !== 'failed'
-      || !failedStep.retryable
-      || alreadyMutated
-      || !current.lastRequest
-    ) return
+    if (!canRetryReadOnlyTurn(current, stepId) || !current.lastRequest) return
     startRequest(current.lastRequest)
   }, [startRequest])
 
@@ -246,6 +257,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     canSend: !isClearing && !activeStatuses.has(state.status),
     isClearing,
     send,
+    canRetry,
     retry,
     confirm,
     reject,

@@ -15,6 +15,7 @@ function SendIcon() {
 export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraftChange }: { onCollapse(): void; draft?: string; onDraftChange?(draft: string): void }) {
   const session = useAgentSessionContext()
   const [internalDraft, setInternalDraft] = useState('')
+  const [clearError, setClearError] = useState('')
   const draft = controlledDraft ?? internalDraft
   const setDraft = onDraftChange ?? setInternalDraft
   const endRef = useRef<HTMLDivElement>(null)
@@ -37,14 +38,21 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
     }
   }
 
+  async function clearConversation() {
+    setClearError('')
+    try { await session.clear() } catch { setClearError('清空失败，对话记录已保留。') }
+  }
+
   return (
     <aside className="agent-panel" aria-label="智能助手面板">
       <header className="agent-panel__header">
         <IconButton label="收起智能助手" tone="primary" icon={<span className="agent-spark">✦</span>} onClick={onCollapse} />
         <div><h2>智能助手</h2><p role={status.isError ? 'alert' : 'status'} data-tone={status.tone}><span aria-hidden="true" />{status.label}</p></div>
+        <button type="button" className="agent-panel__clear" disabled={session.isClearing} onClick={() => void clearConversation()}>{session.isClearing ? '清空中…' : '清空对话'}</button>
       </header>
 
       <div ref={bodyRef} className="agent-panel__body" role="log" aria-live="polite" aria-label="对话消息" onScroll={onScroll}>
+        {clearError ? <p className="agent-panel__clear-error" role="alert">{clearError}</p> : null}
         {!session.messages.length ? (
           <section className="agent-panel__welcome">
             <span className="agent-panel__eyebrow">TODAY / FOCUS</span>
@@ -62,7 +70,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
           </article>
           )
         })}
-        <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+        <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} canRetry={session.canRetry} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
         <div ref={endRef} />
       </div>
 

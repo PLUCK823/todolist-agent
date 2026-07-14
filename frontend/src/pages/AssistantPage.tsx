@@ -67,7 +67,7 @@ export default function AssistantPage() {
           })}
           <section className="assistant-timeline" aria-label="执行详情">
             <p>执行详情</p>
-            <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+            <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} canRetry={session.canRetry} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
           </section>
           <div ref={endRef} />
         </div>

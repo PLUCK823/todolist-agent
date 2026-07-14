@@ -488,7 +488,7 @@ describe('useAgentSession', () => {
     expect(client.controls).toEqual([])
   })
 
-  it('replays a retryable failed turn when no action has completed', () => {
+  it('replays only a retryable read-only failed turn when no action has completed', () => {
     const client = new ControlledClient()
     let messageId = 0
     const { result } = renderHook(() => useAgentSession({
@@ -496,24 +496,54 @@ describe('useAgentSession', () => {
       sessionIdFactory: () => 's',
       messageIdFactory: () => `message-${++messageId}`,
     }))
-    act(() => result.current.send('创建任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'step-1', label: '调用' }))
+    act(() => result.current.send('列出未完成任务'))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'step-1', label: '查询任务', tool: 'list_todos' }))
     act(() => client.handlers[0].onEvent({
       type: 'step_failed', step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
     }))
+    expect(result.current.canRetry('step-1')).toBe(true)
     act(() => result.current.retry('step-1'))
 
     expect(client.requests).toEqual([
-      { message: '创建任务', session_id: 's' },
-      { message: '创建任务', session_id: 's' },
+      { message: '列出未完成任务', session_id: 's' },
+      { message: '列出未完成任务', session_id: 's' },
     ])
     expect(result.current.messages.filter((message) => message.role === 'user')).toHaveLength(2)
     expect(result.current.sessionId).toBe('s')
     expect(result.current.status).toBe('connecting')
-    expect(result.current.capabilities.supportsStepRetry).toBe(true)
+    expect(result.current.capabilities.supportsStepRetry).toBe(false)
   })
 
-  it('refuses replay for missing, non-retryable or already-mutated steps', () => {
+  it.each(['create_todo', 'update_todo', 'delete_todo', 'unknown_tool'])('never replays the write or unknown tool %s', (tool) => {
+    const client = new ControlledClient()
+    const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
+    act(() => result.current.send('执行可能有副作用的操作'))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'failed', label: '执行工具', tool }))
+    act(() => client.handlers[0].onEvent({
+      type: 'step_failed', step_id: 'failed', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
+    }))
+
+    expect(result.current.canRetry('failed')).toBe(false)
+    act(() => result.current.retry('failed'))
+    expect(client.requests).toHaveLength(1)
+  })
+
+  it('refuses a read-only failed step when any other step makes the turn mixed or unsafe', () => {
+    const client = new ControlledClient()
+    const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
+    act(() => result.current.send('查询后创建任务'))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'write', label: '创建', tool: 'create_todo' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'read', label: '查询', tool: 'list_todos' }))
+    act(() => client.handlers[0].onEvent({
+      type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
+    }))
+
+    expect(result.current.canRetry('read')).toBe(false)
+    act(() => result.current.retry('read'))
+    expect(client.requests).toHaveLength(1)
+  })
+
+  it('refuses read-only replay for missing, non-retryable or already-mutated steps', () => {
     const cases = [
       { failedId: 'failed', requestedId: 'missing', retryable: true, completedAction: false },
       { failedId: 'failed', requestedId: 'failed', retryable: false, completedAction: false },
@@ -523,8 +553,8 @@ describe('useAgentSession', () => {
     for (const scenario of cases) {
       const client = new ControlledClient()
       const { result, unmount } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
-      act(() => result.current.send('创建任务'))
-      act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: scenario.failedId, label: '调用' }))
+      act(() => result.current.send('查询任务'))
+      act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: scenario.failedId, label: '查询', tool: 'list_todos' }))
       if (scenario.completedAction) {
         act(() => client.handlers[0].onEvent({
           type: 'step_started', step_id: 'mutated', label: '创建', tool: 'create_todo',
@@ -536,6 +566,7 @@ describe('useAgentSession', () => {
       act(() => client.handlers[0].onEvent({
         type: 'step_failed', step_id: scenario.failedId, error_code: 'TIMEOUT', message: '超时', retryable: scenario.retryable, duration_ms: 5000,
       }))
+      expect(result.current.canRetry(scenario.requestedId)).toBe(false)
       act(() => result.current.retry(scenario.requestedId))
 
       expect(client.requests).toHaveLength(1)

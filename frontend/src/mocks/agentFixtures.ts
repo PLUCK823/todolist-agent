@@ -88,6 +88,73 @@ export const agentEventScenarios = {
       { atMs: createStarted.atMs + 5000, event: { type: 'done' } },
     ],
   },
+  readOnlyTimeout: {
+    events: [
+      understandStarted,
+      understandCompleted,
+      {
+        atMs: createStarted.atMs,
+        event: {
+          type: 'step_started',
+          step_id: 'list-1',
+          label: '查询 Todo 列表',
+          tool: 'list_todos',
+          args: { completed: false },
+        },
+      },
+      {
+        atMs: createStarted.atMs + 5000,
+        event: {
+          type: 'step_failed',
+          step_id: 'list-1',
+          error_code: 'TOOL_TIMEOUT',
+          message: 'Todo API 查询超时',
+          retryable: true,
+          duration_ms: 5000,
+        },
+      },
+      { atMs: createStarted.atMs + 5000, event: { type: 'done' } },
+    ],
+  },
+  readOnlySuccess: {
+    events: [
+      understandStarted,
+      understandCompleted,
+      {
+        atMs: createStarted.atMs,
+        event: {
+          type: 'step_started',
+          step_id: 'list-1',
+          label: '查询 Todo 列表',
+          tool: 'list_todos',
+          args: { completed: false },
+        },
+      },
+      {
+        atMs: createFinishedAt,
+        event: { type: 'step_completed', step_id: 'list-1', duration_ms: agentMockDelays.waitForTodoApi },
+      },
+      { atMs: replyAt, event: { type: 'reply', content: '已查询到 4 项任务。' } },
+      { atMs: replyAt, event: { type: 'done' } },
+    ],
+  },
+  deleteTimeout: {
+    events: [
+      understandStarted,
+      understandCompleted,
+      {
+        atMs: createStarted.atMs,
+        event: { type: 'step_started', step_id: 'delete-1', label: '删除待办', tool: 'delete_todo', args: { id: 1 } },
+      },
+      {
+        atMs: createStarted.atMs + 5000,
+        event: {
+          type: 'step_failed', step_id: 'delete-1', error_code: 'TOOL_TIMEOUT', message: '删除 Todo 超时', retryable: true, duration_ms: 5000,
+        },
+      },
+      { atMs: createStarted.atMs + 5000, event: { type: 'done' } },
+    ],
+  },
   validationError: {
     events: [
       understandStarted,

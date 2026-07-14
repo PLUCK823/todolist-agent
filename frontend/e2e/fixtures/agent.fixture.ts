@@ -1,7 +1,7 @@
 import { agentEventScenarios, type AgentEventScenario } from '../../src/mocks/agentFixtures'
 import { expect, postE2EControl, test as apiTest } from './api.fixture'
 
-export type AgentScenarioName = 'success' | 'timeout' | 'validationError' | 'confirmationRequired' | 'disconnect'
+export type AgentScenarioName = 'success' | 'timeout' | 'readOnlyTimeout' | 'readOnlySuccess' | 'deleteTimeout' | 'validationError' | 'confirmationRequired' | 'disconnect'
 
 export interface AgentScenarioOptions {
   timeScale?: number
