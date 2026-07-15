@@ -71,8 +71,11 @@ REDIS_PORT=6379
 
 # === Agent 服务 ===
 AGENT_SERVICE_URL=http://localhost:8000
-LLM_API_KEY=sk-xxxxxxxx         # OpenAI / Anthropic API Key
-LLM_MODEL=gpt-4o                # 或 claude-sonnet-5
+LLM_PROVIDER=openai             # openai | anthropic | google | deepseek | openai-compatible
+LLM_API_KEY=replace-with-provider-api-key
+LLM_MODEL=gpt-4o
+LLM_BASE_URL=                   # openai-compatible 必填；DeepSeek 默认 https://api.deepseek.com
+LLM_TEMPERATURE=0.1
 
 # === 后端服务 ===
 BACKEND_PORT=8080
@@ -840,7 +843,11 @@ services:
     depends_on: [backend]
     environment:
       BACKEND_URL: http://backend:8080/api
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       LLM_API_KEY: ${LLM_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
 
   frontend:
     build: ./frontend

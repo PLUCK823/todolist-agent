@@ -61,8 +61,13 @@ vim .env
 | 变量 | 说明 |
 | ------ | ------ |
 | `POSTGRES_PASSWORD` | 设置强密码 |
-| `LLM_API_KEY` | OpenAI 或 Anthropic API Key |
-| `LLM_MODEL` | 选择使用的模型 |
+| `LLM_PROVIDER` | `openai`、`anthropic`、`google`/`gemini`、`deepseek` 或 `openai-compatible` |
+| `LLM_API_KEY` | 所选提供商的 API Key；只保存在 Secret 或已忽略的 `.env` 中 |
+| `LLM_MODEL` | 模型 ID；留空时使用提供商默认值（兼容端点除外） |
+| `LLM_BASE_URL` | DeepSeek 可省略；`openai-compatible` 必填；原生提供商通常留空 |
+| `LLM_TEMPERATURE` | `0.0` 到 `2.0`，默认 `0.1` |
+
+默认模型分别为 OpenAI `gpt-4o`、Anthropic `claude-sonnet-4-5`、Google `gemini-2.5-flash` 和 DeepSeek `deepseek-v4-flash`。变更模型配置后运行 `docker compose up -d --force-recreate agent frontend`。服务会在启动时验证配置，但健康检查不会调用模型 API。
 
 ---
 

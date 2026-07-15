@@ -37,6 +37,20 @@ docker compose down
 
 该命令不删除数据卷；需要清除本地数据时显式运行 `docker compose down -v`。
 
+### 模型提供商
+
+Agent 通过统一适配器支持以下提供商，切换 `.env` 后重启 `agent` 容器即可生效：
+
+| `LLM_PROVIDER` | 默认模型 | `LLM_BASE_URL` |
+|---|---|---|
+| `openai` | `gpt-4o` | 通常留空 |
+| `anthropic` | `claude-sonnet-4-5` | 通常留空 |
+| `google` / `gemini` | `gemini-2.5-flash` | 留空 |
+| `deepseek` | `deepseek-v4-flash` | 默认 `https://api.deepseek.com` |
+| `openai-compatible` | 必填 | 必填，指向兼容 API 的 `/v1` 端点 |
+
+统一变量为 `LLM_PROVIDER`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL` 和 `LLM_TEMPERATURE`。旧的 `OPENAI_MODEL`、`OPENAI_BASE_URL`、`ANTHROPIC_API_KEY` 不再读取。服务启动时只校验配置，不会为健康检查发起付费模型请求；密钥只应放在已被 Git 忽略的 `.env` 或部署平台的 Secret 中。
+
 ### 只运行高保真前端
 
 不启动 Go、PostgreSQL 或 Agent 服务时，可使用 MSW 查看和操作完整前端：
