@@ -4,7 +4,7 @@
 
 ## 1. 环境
 
-- [x] 以 Docker 构建基准 Node 22 + pnpm 10.30.3 执行；本机 Node 24.16.0 + pnpm 11.9.0 也完成验证，安装使用 `pnpm install --frozen-lockfile`。
+- [x] 项目通过 `packageManager` 与 Dockerfile 固定 pnpm 10.30.3，Node 要求 ≥22；Docker Node 22 与本机 Node 24.16.0 均以 Corepack 解析到 pnpm 10.30.3，`CI=true pnpm install --frozen-lockfile` 已从重建的 `node_modules` 验证。
 - [x] Go 1.21+、Python 3.12、uv 和 Docker Compose 可用。
 - [x] Playwright Chromium、Firefox、WebKit 已安装并在本轮实际运行。
 - [x] Mock 与真实栈测试均由脚本管理 `127.0.0.1:3000`，没有复用未知残留服务。
@@ -17,10 +17,10 @@
 | 前端静态检查 | `cd frontend && pnpm lint` | ESLint 退出码 0，无 error |
 | 前端单元覆盖率 | `cd frontend && pnpm test:coverage` | 测试全绿；行/函数/语句 ≥85%，分支 ≥80% |
 | 前端生产构建 | `cd frontend && pnpm build` | TypeScript 与 Vite 构建成功；首屏入口 gzip <100KB |
-| 可复现体验门禁 | `cd frontend && pnpm verify:experience` | production MSW build/preview；5 次 FTI <2s；桌面/移动无横溢；Agent 运行期可滚动、可操作；8 条路径证据齐全 |
+| 可复现体验门禁 | `cd frontend && pnpm verify:experience` | production MSW build/preview；5 个全新 context 首次导航 `/tasks` 的 cold FTI <2s；桌面/移动无横溢；Agent 运行期可滚动、可操作；8 条路径证据齐全 |
 | 三浏览器 Mock E2E | `cd frontend && pnpm e2e:mock` | Chromium、Firefox、WebKit 全绿；无产品功能 browser-specific skip |
 | Go 测试 | `cd backend && go test ./...` | 全部包退出码 0 |
-| Agent 测试 | `cd agent-service && uv run pytest -q` | 139 项测试退出码 0；当前报告覆盖率 94%（尚未配置独立 fail-under） |
+| Agent 测试 | `cd agent-service && uv sync --frozen --extra dev && uv run --frozen --extra dev pytest -q` | 锁文件安装可复现；139 项测试退出码 0；当前报告覆盖率 94%（尚未配置独立 fail-under） |
 | 隔离真实栈 E2E | `./scripts/e2e-real.sh` | health、Todo 生命周期、Agent 流式创建三条 Chromium 用例全绿；退出后容器和数据卷被清理 |
 
 Mock E2E 会自动启动 `VITE_ENABLE_MSW=true` 的独立 Vite 服务。真实栈脚本会叠加 `docker-compose.yml` 与 `docker-compose.e2e.yml`，不应手工复用开发数据库。
@@ -33,7 +33,7 @@ cd frontend && pnpm install --frozen-lockfile
 pnpm exec playwright install chromium firefox webkit
 pnpm lint && pnpm test:coverage && pnpm build && pnpm verify:experience && pnpm e2e:mock
 cd ../backend && go test ./...
-cd ../agent-service && uv run pytest -q
+cd ../agent-service && uv sync --frozen --extra dev && uv run --frozen --extra dev pytest -q
 cd .. && ./scripts/e2e-real.sh
 git status --short && git diff --check
 # 合并后
@@ -42,10 +42,12 @@ cd frontend && pnpm exec playwright test e2e/mock/smoke.spec.ts --project=chromi
 
 若真实 E2E 被中断，兜底清理：`docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v --remove-orphans`。
 
+Mock Playwright context 会自动销毁；若在普通浏览器手工使用过 Mock 页面，还必须清理对应 origin：DevTools → Application → Storage → **Clear site data**，并在 Service Workers 中执行 **Unregister**。等价控制台命令：`localStorage.clear(); navigator.serviceWorker.getRegistrations().then((items) => Promise.all(items.map((item) => item.unregister())))`。清理后关闭该标签页，再执行真实栈验证。
+
 ## 3. 关键体验与性能
 
 - [x] production MSW 入口 `index-DkZYdFn0.js` raw 269,785B、gzip 85,133B（约 85.13KB，限制 100,000B）；CSS gzip 12.30KB，六个路由继续输出独立懒加载 chunk。
-- [x] production preview `/tasks` 使用 Chromium 新 context 测 5 次，从导航开始到页面标题与首个真实任务按钮可见：821/832/821/822/819ms，平均 823ms、最大 832ms（本机 Apple Silicon，2026-07-15）。
+- [x] production preview `/tasks` 使用 5 个全新 Chromium context；在任何 `goto` 前通过 `addInitScript` 注入 session，从每个 context 的第一次 `page.goto('/tasks')` 前计时，包含 MSW 首次安装/controller 与数据加载，直到标题和首个真实任务按钮可见：823/819/822/822/819ms，平均 821ms、最大 823ms（本机 Apple Silicon，2026-07-15）。
 - [x] 1223×1227 桌面与 390×844 移动视口均实测 `scrollWidth - clientWidth = 0`；68px/210px 导航与 0px/340px Agent 另由视觉/E2E 守卫。
 - [x] 390×844 下 `scrollWidth - clientWidth = 0`；移动导航、Agent 全宽抽屉与可滚动 Dialog 由响应式测试守卫。
 - [x] 1223×844 下 Agent 运行期间，任务主区实测 `scrollTop 0 → 326`；“新建任务”保持 enabled 并成功打开 Dialog。1223×1227 的 Agent 运行证据另见第 6 条路径截图。
@@ -66,14 +68,14 @@ cd frontend && pnpm exec playwright test e2e/mock/smoke.spec.ts --project=chromi
 
 | # | 路径 | 自动化证据 | 截图 / 视觉证据 | 1223×1227 人工记录 | 执行时间 |
 |---:|---|---|---|---|---|
-| 1 | 创建任务 → 保存 → 列表反馈 | `tasks.spec.ts`、`todo-lifecycle.spec.ts` | [path-1.png](evidence/path-1.png) | PASS；生产构建实走，1,169ms | 2026-07-15 05:36:53Z |
-| 2 | 打开任务 → 编辑或删除 → 二次确认 → 状态反馈 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-2.png](evidence/path-2.png) | PASS；停在删除二次确认，1,194ms | 2026-07-15 05:36:55Z |
-| 3 | 状态和优先级筛选 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-3.png](evidence/path-3.png) | PASS；状态应用且优先级 Popover 可交互，1,071ms | 2026-07-15 05:36:56Z |
-| 4 | 左导航展开/收起和页面切换 | `navigation.spec.ts`、页面视觉基线 | [path-4.png](evidence/path-4.png) | PASS；展开后进入近期安排，1,094ms | 2026-07-15 05:36:57Z |
-| 5 | Agent 展开/完全收起，以及快捷输入框 | `navigation.spec.ts`、`visual.spec.ts` | [path-5.png](evidence/path-5.png) | PASS；完全收起后以 ⌘K 打开，1,070ms | 2026-07-15 05:36:58Z |
-| 6 | Agent 多步执行与等待状态 | `assistant.spec.ts`、`agent-stream.spec.ts` | [path-6.png](evidence/path-6.png) | PASS；运行状态可见；另证主区滚动与非冲突操作，2,227ms | 2026-07-15 05:37:00Z |
-| 7 | 更换头像和保存资料 | `profile-settings.spec.ts`、`visual.spec.ts` | [path-7.png](evidence/path-7.png) | PASS；保存后打开头像 Dialog，1,113ms | 2026-07-15 05:37:01Z |
-| 8 | 退出确认 → 登录 → 注册 → 返回登录 → 回到应用 | `auth.spec.ts`、登录/注册视觉基线 | [path-8.png](evidence/path-8.png) | PASS；完整闭环后回到任务页，2,846ms | 2026-07-15 05:37:04Z |
+| 1 | 创建任务 → 保存 → 列表反馈 | `tasks.spec.ts`、`todo-lifecycle.spec.ts` | [path-1.png](evidence/path-1.png) | PASS；生产构建实走，1,118ms | 2026-07-15 05:48:36Z |
+| 2 | 打开任务 → 编辑或删除 → 二次确认 → 状态反馈 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-2.png](evidence/path-2.png) | PASS；停在删除二次确认，1,181ms | 2026-07-15 05:48:38Z |
+| 3 | 状态和优先级筛选 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-3.png](evidence/path-3.png) | PASS；状态应用且优先级 Popover 可交互，1,055ms | 2026-07-15 05:48:39Z |
+| 4 | 左导航展开/收起和页面切换 | `navigation.spec.ts`、页面视觉基线 | [path-4.png](evidence/path-4.png) | PASS；展开后进入近期安排，1,095ms | 2026-07-15 05:48:40Z |
+| 5 | Agent 展开/完全收起，以及快捷输入框 | `navigation.spec.ts`、`visual.spec.ts` | [path-5.png](evidence/path-5.png) | PASS；完全收起后以 ⌘K 打开，1,061ms | 2026-07-15 05:48:41Z |
+| 6 | Agent 多步执行与等待状态 | `assistant.spec.ts`、`agent-stream.spec.ts` | [path-6.png](evidence/path-6.png) | PASS；运行状态可见；另证主区滚动与非冲突操作，2,221ms | 2026-07-15 05:48:43Z |
+| 7 | 更换头像和保存资料 | `profile-settings.spec.ts`、`visual.spec.ts` | [path-7.png](evidence/path-7.png) | PASS；保存后打开头像 Dialog，1,094ms | 2026-07-15 05:48:44Z |
+| 8 | 退出确认 → 登录 → 注册 → 返回登录 → 回到应用 | `auth.spec.ts`、登录/注册视觉基线 | [path-8.png](evidence/path-8.png) | PASS；完整闭环后回到任务页，2,793ms | 2026-07-15 05:48:47Z |
 
 > 上表的 PASS 是仓库实现与自动化/视觉签核的交付记录，不代表额外的最终用户审批。任何无响应按钮都视为失败。
 

@@ -70,13 +70,22 @@ async function capture(id, action) {
 
 const ftiSamples = []
 for (let index = 0; index < 5; index += 1) {
-  const { context, page } = await session()
-  const started = performance.now()
-  await page.goto(`${baseURL}/tasks`)
-  await page.getByRole('heading', { name: '今天，保持专注' }).waitFor()
-  await page.getByRole('button', { name: /^查看任务：/ }).first().waitFor()
-  ftiSamples.push(Math.round(performance.now() - started))
-  await context.close()
+  const context = await browser.newContext({ viewport: { width: 1223, height: 1227 }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', reducedMotion: 'reduce' })
+  await context.addInitScript((accountValue) => {
+    localStorage.setItem('todolist.auth.account', JSON.stringify(accountValue))
+    localStorage.setItem('todolist.auth.session', accountValue.id)
+  }, account)
+  const page = await context.newPage()
+  try {
+    if (page.url() !== 'about:blank') throw new Error(`cold FTI page must start at about:blank, got ${page.url()}`)
+    const started = performance.now()
+    await page.goto(`${baseURL}/tasks`)
+    await page.getByRole('heading', { name: '今天，保持专注' }).waitFor()
+    await page.getByRole('button', { name: /^查看任务：/ }).first().waitFor()
+    ftiSamples.push(Math.round(performance.now() - started))
+  } finally {
+    await context.close()
+  }
 }
 
 const overflow = []
@@ -168,7 +177,7 @@ const report = {
   generatedAt: new Date().toISOString(),
   status: 'pass',
   build: { entry: { file: `dist/assets/${entryName}`, ...entrySize, limitBytes: 100_000, pass: entrySize.gzipBytes < 100_000 } },
-  fti: { samplesMs: ftiSamples, limitMs: 2_000, pass: ftiSamples.every((value) => value < 2_000) },
+  fti: { mode: 'cold-first-navigation', samplesMs: ftiSamples, limitMs: 2_000, pass: ftiSamples.every((value) => value < 2_000) },
   overflow,
   agentRunning,
   evidence,

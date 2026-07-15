@@ -47,8 +47,8 @@
 | 无障碍与键盘 | axe WCAG 2.2 AA + 关键纯键盘路径 | 🟢 覆盖页面、Dialog、Popover 与退出流程 |
 | 真实栈 | real-chromium：健康、Todo 生命周期、Agent 创建 Todo | 🟢 3 项全绿，隔离 Compose 自动清理 |
 | Go | `go test ./...` | 🟢 纳入最终矩阵 |
-| Agent | `uv run pytest -q`：139 项，94% 覆盖率 | 🟢 全绿；尚未配置独立 fail-under |
-| Production 体验 | 入口 gzip 85,133B；FTI 5/5 <2s；桌面/移动零横溢；8 条路径证据 | 🟢 `pnpm verify:experience` 可复现 |
+| Agent | `uv run --frozen --extra dev pytest -q`：139 项，94% 覆盖率 | 🟢 全绿；`uv.lock` 已纳入版本控制，尚未配置独立 fail-under |
+| Production 体验 | 入口 gzip 85,133B；全新 context cold FTI 5/5 <2s；桌面/移动零横溢；8 条路径证据 | 🟢 `pnpm verify:experience` 可复现 |
 
 逐功能映射见 [全量 E2E 覆盖矩阵](qa/e2e-matrix.md)，执行命令、性能检查和非 MVP 边界见 [发布检查清单](qa/release-checklist.md)。
 

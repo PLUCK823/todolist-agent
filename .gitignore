@@ -57,3 +57,4 @@ docker-compose.override.yml
 
 # === uv ===
 uv.lock
+!agent-service/uv.lock

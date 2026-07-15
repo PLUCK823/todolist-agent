@@ -39,6 +39,9 @@ export function assertExperienceReport(report) {
   }
 
   const samples = report?.fti?.samplesMs
+  if (report?.fti?.mode !== 'cold-first-navigation') {
+    throw new Error('FTI must measure a cold first navigation without prewarming the origin')
+  }
   if (!Array.isArray(samples) || samples.length !== 5) throw new Error('experience report must contain exactly five FTI samples')
   samples.forEach((sample, index) => {
     if (!Number.isFinite(sample) || sample >= FTI_LIMIT_MS) throw new Error(`FTI sample ${index + 1} must be < ${FTI_LIMIT_MS}ms`)

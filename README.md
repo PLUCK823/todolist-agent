@@ -75,13 +75,16 @@ cd ../backend
 go test ./...
 
 cd ../agent-service
-uv run pytest -q
+uv sync --frozen --extra dev
+uv run --frozen --extra dev pytest -q
 
 cd ..
 ./scripts/e2e-real.sh
 ```
 
 `e2e:mock` 在 Chromium、Firefox 和 WebKit 上运行功能、键盘和 axe 检查；像素视觉基线只在 Chromium 上比较。`scripts/e2e-real.sh` 使用隔离的 `todolist-agent-e2e` Compose 项目、独立端口和数据卷，完成后自动清理。真实栈 Agent E2E 使用确定性的 fake LLM provider，但经过真实 Nginx、WebSocket、Agent 服务、Go API 和数据库链路。
+
+Playwright Mock context 会自动销毁；若曾在普通浏览器手工打开 `VITE_ENABLE_MSW=true` 页面，结束后请在 DevTools → Application → Storage 执行 **Clear site data** 并注销 Service Worker，或在该 origin 控制台执行 `localStorage.clear(); navigator.serviceWorker.getRegistrations().then((items) => Promise.all(items.map((item) => item.unregister())))`，避免 Mock 数据影响后续真实栈检查。
 
 完整命令、预期结果和视觉审批记录见 [发布检查清单](docs/qa/release-checklist.md)。
 

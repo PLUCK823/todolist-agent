@@ -12,6 +12,7 @@ function passingReport() {
       entry: { gzipBytes: 98_000, limitBytes: 100_000, pass: true },
     },
     fti: {
+      mode: 'cold-first-navigation',
       samplesMs: [720, 760, 810, 780, 740],
       limitMs: 2_000,
       pass: true,
@@ -66,6 +67,12 @@ test('requires exactly five FTI samples and rejects any sample at or above two s
   slow.fti.samplesMs[3] = 2_000
   slow.fti.pass = false
   assert.throws(() => assertExperienceReport(slow), /FTI sample 4/i)
+})
+
+test('rejects FTI measured after a warm-up navigation', () => {
+  const report = passingReport()
+  report.fti.mode = 'prewarmed-navigation'
+  assert.throws(() => assertExperienceReport(report), /cold first navigation/i)
 })
 
 test('requires zero horizontal overflow at both required viewports', () => {

@@ -214,7 +214,7 @@ Run:
 ```bash
 cd frontend && pnpm lint && pnpm test && pnpm build
 cd ../backend && go test ./...
-cd ../agent-service && uv run pytest -q
+cd ../agent-service && uv run --frozen --extra dev pytest -q
 ```
 
 Expected: 所有命令退出码为 0；前端仍为 179 个或更多测试通过。
@@ -734,7 +734,7 @@ class PendingConfirmation(BaseModel):
 
 - [ ] **Step 7: 验证**
 
-Run: `cd agent-service && uv run pytest -q`
+Run: `cd agent-service && uv run --frozen --extra dev pytest -q`
 
 Expected: 现有 57 个测试和新增流式/确认测试全部通过，覆盖率不低于 90%。
 
@@ -1178,7 +1178,7 @@ pnpm test:coverage
 pnpm build
 pnpm e2e:mock
 cd ../backend && go test ./...
-cd ../agent-service && uv run pytest -q
+cd ../agent-service && uv run --frozen --extra dev pytest -q
 ```
 
 Expected: 全部退出码为 0，覆盖率达到门禁。

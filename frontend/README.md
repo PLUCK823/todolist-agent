@@ -82,3 +82,5 @@ pnpm verify:experience    # production build/preview 的包体、FTI、溢出和
 审批后的更新顺序是：先让对应功能测试通过，逐张与 V6 原型核对，再运行 `pnpm e2e:update --project=chromium`，检查所有 PNG diff 并同步视觉签核文档。
 
 新机器先运行 `pnpm exec playwright install chromium firefox webkit`。390×844 移动响应式门禁是 V6 MVP 后纳入的质量范围扩展，不代表原始桌面原型新增产品范围。
+
+`pnpm e2e:mock` 创建的浏览器 context 会自动销毁。若使用普通浏览器手工访问 Mock 页面，验证结束后还需在 DevTools → Application → Storage 清除该 origin 的 site data 并注销 Service Worker；也可在页面控制台执行 `localStorage.clear(); navigator.serviceWorker.getRegistrations().then((items) => Promise.all(items.map((item) => item.unregister())))`。不要让残留的 MSW controller 参与真实服务验证。
