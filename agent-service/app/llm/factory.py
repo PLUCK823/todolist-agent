@@ -6,7 +6,13 @@ from langchain_core.language_models.chat_models import BaseChatModel
 
 from .base import ModelConfigurationError, ProviderAdapter
 from .config import ModelConfig
-from .providers import DEEPSEEK_ADAPTER, OPENAI_COMPATIBLE_ADAPTER
+from .providers import (
+    ANTHROPIC_ADAPTER,
+    DEEPSEEK_ADAPTER,
+    GOOGLE_ADAPTER,
+    OPENAI_ADAPTER,
+    OPENAI_COMPATIBLE_ADAPTER,
+)
 
 
 def _build_registry(
@@ -19,7 +25,15 @@ def _build_registry(
     return registry
 
 
-_REGISTRY = _build_registry((DEEPSEEK_ADAPTER, OPENAI_COMPATIBLE_ADAPTER))
+_REGISTRY = _build_registry(
+    (
+        OPENAI_ADAPTER,
+        ANTHROPIC_ADAPTER,
+        GOOGLE_ADAPTER,
+        DEEPSEEK_ADAPTER,
+        OPENAI_COMPATIBLE_ADAPTER,
+    )
+)
 
 
 def resolve_adapter(provider: str) -> ProviderAdapter:

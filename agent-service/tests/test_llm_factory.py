@@ -93,6 +93,62 @@ def test_deepseek_and_generic_compatible_have_distinct_registrations() -> None:
     assert generic.name == "openai-compatible"
 
 
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "google", "gemini"])
+def test_native_providers_are_registered(provider: str) -> None:
+    assert resolve_adapter(provider).name in {"openai", "anthropic", "google"}
+
+
+def test_openai_uses_native_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        providers,
+        "ChatOpenAI",
+        lambda **kwargs: captured.update(kwargs) or StubModel(),
+    )
+
+    create_model(config("openai", model="gpt-4o", base_url=None))
+
+    assert captured["model"] == "gpt-4o"
+    assert captured["api_key"].get_secret_value() == "secret-value"
+    assert captured["temperature"] == 0.1
+    assert "base_url" not in captured
+
+
+def test_anthropic_uses_native_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        providers,
+        "ChatAnthropic",
+        lambda **kwargs: captured.update(kwargs) or StubModel(),
+    )
+
+    create_model(config("anthropic", model="claude-sonnet-4-5", base_url=None))
+
+    assert captured["model_name"] == "claude-sonnet-4-5"
+    assert captured["api_key"].get_secret_value() == "secret-value"
+    assert captured["temperature"] == 0.1
+    assert "base_url" not in captured
+
+
+@pytest.mark.parametrize("provider", ["google", "gemini"])
+def test_google_uses_native_client(
+    provider: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(
+        providers,
+        "ChatGoogleGenerativeAI",
+        lambda **kwargs: captured.update(kwargs) or StubModel(),
+    )
+
+    create_model(config(provider, model="gemini-2.5-flash", base_url=None))
+
+    assert captured["model"] == "gemini-2.5-flash"
+    assert captured["api_key"].get_secret_value() == "secret-value"
+    assert captured["temperature"] == 0.1
+
+
 def test_created_model_can_bind_existing_tools(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
