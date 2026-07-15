@@ -157,6 +157,41 @@ async def test_deterministic_e2e_provider_creates_requested_high_priority_todo(h
     assert request.read().decode() == '{"title":"真实联调任务","priority":"high"}'
 
 
+def test_build_llm_uses_unified_factory(monkeypatch):
+    from app import agent
+    from app.llm.config import ModelConfig
+
+    expected_config = object()
+    expected_model = object()
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+
+    with (
+        patch.object(ModelConfig, "from_env", return_value=expected_config) as load,
+        patch.object(agent, "create_model", return_value=expected_model) as create,
+    ):
+        assert agent._build_llm() is expected_model
+
+    load.assert_called_once_with()
+    create.assert_called_once_with(expected_config)
+
+
+def test_build_llm_ignores_legacy_openai_environment(monkeypatch):
+    from app import agent
+
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_KEY", "unified-secret")
+    monkeypatch.setenv("LLM_MODEL", "gpt-4.1-mini")
+    monkeypatch.setenv("OPENAI_MODEL", "legacy-model")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://legacy.invalid/v1")
+
+    with patch.object(agent, "create_model", return_value=object()) as create:
+        agent._build_llm()
+
+    config = create.call_args.args[0]
+    assert config.model == "gpt-4.1-mini"
+    assert config.base_url is None
+
+
 @pytest.mark.parametrize(
     ("provider", "app_env", "enabled"),
     [

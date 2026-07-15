@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import uuid
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -32,12 +32,25 @@ from .agent import (
     InvalidRetryStep,
     retry_failed_step,
     resolve_confirmation,
+    validate_model_configuration,
 )
 from .schemas import ChatRequest, ConfirmationResponse, RetryStepRequest
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Agent TodoList - Agent Service", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Fail readiness on unsafe or incomplete model configuration."""
+
+    validate_model_configuration()
+    yield
+
+
+app = FastAPI(
+    title="Agent TodoList - Agent Service",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
 
 class _WebSocketWriter:

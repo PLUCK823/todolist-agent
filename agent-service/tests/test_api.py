@@ -72,6 +72,19 @@ def test_health_check(client):
     assert data["status"] == "ok"
 
 
+def test_startup_rejects_invalid_model_configuration(monkeypatch):
+    from app.agent import validate_model_configuration
+    from app.llm import ModelConfigurationError
+
+    monkeypatch.setenv("LLM_PROVIDER", "openai-compatible")
+    monkeypatch.setenv("LLM_API_KEY", "secret-value")
+    monkeypatch.setenv("LLM_MODEL", "compatible-model")
+    monkeypatch.delenv("LLM_BASE_URL", raising=False)
+
+    with pytest.raises(ModelConfigurationError, match="LLM_BASE_URL"):
+        validate_model_configuration()
+
+
 # ===================================================================
 # POST /api/agent/chat
 # ===================================================================

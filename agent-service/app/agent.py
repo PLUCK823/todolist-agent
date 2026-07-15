@@ -24,6 +24,7 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import BaseTool, tool as langchain_tool
 
+from .llm import ModelConfig, create_model
 from .prompts import SYSTEM_PROMPT
 from .schemas import PendingConfirmation
 from .tools import (
@@ -102,14 +103,7 @@ def _build_llm():
     provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
     if _validate_provider_environment(provider):
         return _DeterministicE2ELLM()
-
-    from langchain_openai import ChatOpenAI
-
-    return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-        temperature=0.2,
-        base_url=os.getenv("OPENAI_BASE_URL", None),
-    )
+    return create_model(ModelConfig.from_env())
 
 
 class _DeterministicE2ELLM:
@@ -162,6 +156,14 @@ def _validate_provider_environment(provider: str | None = None) -> bool:
             "Deterministic LLM provider is disabled outside the isolated E2E environment"
         )
     return True
+
+
+def validate_model_configuration() -> None:
+    """Validate the selected provider without making a model API request."""
+
+    provider = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+    if not _validate_provider_environment(provider):
+        ModelConfig.from_env()
 
 
 # A misconfigured deployed process fails during import/startup, before health
