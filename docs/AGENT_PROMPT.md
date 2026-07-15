@@ -159,7 +159,7 @@ def list_todos(filter=None):
 ```bash
 # 运行 Agent 测试套件
 cd agent-service
-uv run pytest tests/ -v -k "agent"
+uv run --frozen --extra dev pytest tests/ -v -k "agent"
 
 # 手动测试新提示词
 uv run python scripts/test_prompt.py \

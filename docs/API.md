@@ -86,6 +86,10 @@ GET /api/todos
 | keyword | string | 否 | 标题关键词模糊搜索 |
 | sort_by | string | 否 | 排序字段：created_at / priority / due_date |
 | order | string | 否 | 排序方向：asc / desc，默认 desc |
+| due_from | RFC3339 | 否 | 截止时间下界（含）；必须携带 `Z` 或 UTC 偏移，设置后排除 `due_date=null` |
+| due_to | RFC3339 | 否 | 截止时间上界（不含）；必须携带 `Z` 或 UTC 偏移，设置后排除 `due_date=null` |
+
+`due_from` 与 `due_to` 同时存在时必须满足 `due_from < due_to`，否则返回统一的 `40001` 查询参数错误。按 `due_date` 排序时使用任务 ID 作为次级排序键，以保证跨页顺序稳定。
 
 **响应示例：**
 
@@ -257,7 +261,23 @@ POST /api/agent/chat
 WS /api/agent/stream
 ```
 
-**连接后，发送文本消息即可。服务端逐条推送 JSON 事件：**
+连接后，客户端先发送一条消息请求。推荐使用 JSON；为兼容旧客户端，也接受纯文本（等价于仅提供 `message`）：
+
+```json
+{ "message": "删除待办 7", "session_id": "abc-123-def" }
+```
+
+`message` 必须为非空字符串；`session_id` 可省略，此时服务端在执行前生成并固定会话 ID。JSON 中的未知字段会被拒绝。
+
+服务端从 Agent 的实际执行点逐条转发事件，而不是在工具执行结束后补造进度。真实顺序如下：
+
+1. 调用 LLM 前发送 `step_started(understand)`；
+2. LLM 返回 tool call 后发送 `step_completed(understand)`；
+3. 每个工具真正执行前发送 `step_started(tool)`；
+4. 工具 await 返回后立即发送 `action_completed`，失败或超时则发送 `step_failed`；
+5. Agent 生成最终文本后发送 `reply`，提交 turn checkpoint，提交成功后才发送 `done`。
+
+事件示例：
 
 ```json
 // 步骤开始：理解请求
@@ -275,8 +295,8 @@ WS /api/agent/stream
 // 工具执行结果
 { "type": "action_completed", "step_id": "create_todo", "action": "create_todo", "result": { "id": 1, "title": "买牛奶" }, "duration_ms": 1380 }
 
-// 步骤失败，可由前端展示原因和重试入口
-{ "type": "step_failed", "step_id": "create_todo", "error_code": "TOOL_TIMEOUT", "message": "Todo API 响应超时", "retryable": true, "duration_ms": 5000 }
+// 步骤失败；timeout 可建议人工重试，当前客户端不会自动重放步骤或整轮
+{ "type": "step_failed", "step_id": "list_todos-a1b2c3d4", "error_code": "TOOL_TIMEOUT", "message": "Todo API 响应超时", "retryable": true, "retry_token": "<opaque-server-token>", "duration_ms": 5000 }
 
 // 回复文本（可能分多次推送实现流式效果）
 { "type": "reply", "content": "好的，已为你创建" }
@@ -286,7 +306,37 @@ WS /api/agent/stream
 { "type": "done" }
 ```
 
-前端应根据步骤事件展示等待、运行、完成和失败状态。上述事件是 UI 原型所需的目标契约；Agent 服务实现前仍可使用 Mock 事件，但字段名称和状态语义应保持一致。
+收到 `confirmation_required` 后，客户端必须在同一 WebSocket 连接中发送：
+
+```json
+{
+  "type": "confirmation_response",
+  "confirmation_id": "confirm-123",
+  "approved": true
+}
+```
+
+`approved` 必须是 JSON 布尔值，不能使用字符串或数字代替。确认 ID 与服务端保存的 `session_id`、工具名和完整参数绑定，并且只能消费一次；跨会话、重复或已过期的确认不会执行工具。`approved=false` 会把“用户取消”结果交回 Agent，删除接口不会被调用。确认超时会发送 `step_failed`，其 `error_code` 为 `CONFIRMATION_TIMEOUT`。
+
+同一个 WebSocket 消息处理过程中可以顺序出现多次 `confirmation_required`；客户端应逐次使用各自的 ID 回复，因此一个会话可以安全完成多轮确认。客户端断开连接时，服务端会取消仍在运行的 Agent/后端请求并清理未决确认，不会继续尝试向已断开的连接写事件。
+
+前端应根据步骤事件展示等待、运行、完成和失败状态。仅当 `list_todos` / `get_todo` 在整轮均为只读调用时超时，服务端才发送 `step_failed(retryable=true, retry_token=...)`。写工具、未知工具、混合读写轮次和没有服务端 token 的失败均不可重试，客户端也不得根据 `tool`、`args` 或自由文本自行推导重试能力。
+
+人工重试使用新的 WebSocket 连接，并把下列事件作为首帧发送：
+
+```json
+{ "type": "retry_step", "session_id": "session-uuid", "step_id": "list_todos-a1b2c3d4", "retry_token": "<opaque-server-token>" }
+```
+
+该 frame 严格禁止 `tool`、`args`、`message` 等额外字段。服务端根据 token 与会话内 pending retry record 恢复原始工具和完整参数，验证 session、step、generation、turn ID、终结 phase 与只读 allowlist 后原子消费 token，并直接执行同一次查询；此路径不会调用 LLM，也不会重新规划整轮请求。若对应 turn 仍在执行或处于非终结 phase，服务端拒绝请求且不消费 token；若已到 `ready_reply`，服务端会在同一 session lock 内先提交原 turn，再消费 token。token 一次性使用，错误会话/step 不会消耗合法 token，成功或已开始的合法重试不能并发重复执行。无效、已使用、未终结或过期 token 返回 `step_failed(error_code="INVALID_RETRY_STEP", retryable=false)`。
+
+Todo 写接口当前没有 action/turn 幂等键，因此 create/update/complete/delete 即使超时也始终返回 `retryable=false` 且不签发 token，避免“服务端已写入但响应丢失”造成重复副作用。前端可以在 `step_failed` 暂存 token，但必须等同一 turn 的服务端 `done` 到达后才启用 `supportsStepRetry`、显示按钮或发送 `retry_step`；本地 `client_failed`、WebSocket close/error 和 `cancelled` 都不能替代 `done`，也不能开放新消息。在没有受控同请求恢复协议时，用户只能清空该会话后重新开始。
+
+Agent 会在每个工具完成后先记录该 turn 的 action journal，并在每次 WebSocket 事件写入前保存稳定的事件内容与 ID。如果写入失败，客户端可以用相同 `session_id` 和完全相同的 `message` 重连；同一 Python worker、且该内存记录仍在 TTL/LRU 保留期内时，服务端会重放未确认事件并复用已记录的 tool-call ID，避免再次执行已经写入 journal 的工具。此时模型阶段失败使用 `step_id="respond"`，不会误报为理解阶段失败。未完成 turn 存在时，不同内容的新消息会被拒绝。
+
+上述 action journal、turn ID、事件 checkpoint 和会话锁都只是**单进程内存状态**，不是数据库级 durable log，也不是 exactly-once 交付协议。进程重启、多 worker 路由到不同进程、缓存淘汰都会丢失恢复上下文；即使服务端成功调用 `send_json`，也不能证明客户端已经收到事件。成功终态严格按 `reply → complete_turn(turn_id, generation) → done → close` 处理，确保客户端看到 `done` 时服务端 turn 已提交。`reply` 写入失败会保留 `ready_reply` 供同请求恢复；`complete_turn` 失败不会发送 `done`；`done` 写入失败时 turn 已提交，客户端仍应把未收到 `done` 视为结果不确定，并查看 Todo 实际状态后决定下一步。
+
+服务端为每个 session 串行执行 turn，不同 session 仍可并行。会话采用 TTL/LRU 有界缓存，并限制每个会话保留的消息数、单 turn 的工具轮数和工具调用总数；超限返回 `step_failed(error_code="AGENT_LIMIT_EXCEEDED", retryable=false)`。删除历史会建立 tombstone 并取消同 session 的在途处理，晚到结果不能重新创建已删除的历史或确认状态。
 
 ### 3.3 获取对话历史
 

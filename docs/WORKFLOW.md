@@ -1054,7 +1054,7 @@ pnpm lint                              # 代码检查
 # === Agent ===
 uv sync                                      # 安装依赖
 uv run uvicorn app.main:app --reload --port 8000  # 启动 Agent
-uv run pytest tests/ -v                      # 运行测试
+uv run --frozen --extra dev pytest tests/ -v # 按锁文件运行测试依赖
 
 # === Docker ===
 docker-compose up -d                   # 启动所有服务

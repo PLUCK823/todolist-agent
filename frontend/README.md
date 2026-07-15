@@ -1,42 +1,86 @@
 # Agent TodoList 前端
 
-Agent TodoList 的 React 前端工程。当前目录仅完成 Vite 脚手架初始化，产品页面尚未迁移到 `src/`。
+React 19 + TypeScript 6 + Vite 8 的生产前端。当前实现覆盖任务、近期安排、Agent、认证原型、资料和设置完整流程，并以 V6 可交互原型和固定视觉截图作为回归基准。
 
-## 实现前必读
+## 设计与实现依据
 
-前端页面不得从默认 Vite 模板继续自由扩展。实现时按以下顺序读取：
+首次接手的开发者或 AI 必须按顺序阅读：
 
-1. [UI 高保真原型设计](../docs/superpowers/specs/2026-07-13-agent-todolist-prototype-design.md)
+1. [UI 高保真设计规格](../docs/superpowers/specs/2026-07-13-agent-todolist-prototype-design.md)
 2. [V6 可交互页面原型](../.superpowers/brainstorm/40507-1783945975/content/workspace-full-flow-v6.html)
-3. [产品需求文档](../docs/PRD.md)
-4. [API 接口文档](../docs/API.md)
-5. [前端开发工作流](../docs/WORKFLOW.md#5-前端开发工作流)
+3. [视觉回归基准](../docs/qa/visual-review.md)
+4. [产品需求](../docs/PRD.md) 与 [API 契约](../docs/API.md)
+5. [E2E 覆盖矩阵](../docs/qa/e2e-matrix.md)
 
-设计文档规定产品规则和完成标准；V6 原型是视觉层级、页面构图、动效与交互顺序的基准。
+设计规格规定产品规则，V6 原型规定视觉与交互手感，`e2e/snapshots/` 是已签核的 Chromium 基线。`.superpowers/` 是设计资产，不是生产代码；不得把单文件 HTML 直接复制进 `src/`。
 
-## 当前状态
-
-- 已有：React、TypeScript、Vite、ESLint 脚手架
-- 未实现：产品布局、页面、组件、API 层、Agent 通信和测试
-- 未安装：TailwindCSS、Axios、前端测试框架
-
-当前 `package.json` 使用 React 19、TypeScript 6 和 Vite 8，与早期架构文档中的目标版本不同。开始实现前需在实施计划中确认沿用当前版本还是调整依赖，并同步更新相关技术文档。
-
-## 本地运行
+## 运行方式
 
 ```bash
+corepack enable
 pnpm install
 pnpm dev
 ```
 
-默认开发地址由 `vite.config.ts` 决定。构建和检查：
+普通开发模式会将 `/api` 代理到 `http://localhost:8080`，将 `/ws` 代理到 `ws://localhost:8000`。
+
+只查看和操作前端原型时使用 Mock Service Worker：
 
 ```bash
-pnpm build
-pnpm lint
-pnpm preview
+VITE_ENABLE_MSW=true pnpm dev --host 127.0.0.1
 ```
 
-## 原型与生产代码的边界
+打开 <http://127.0.0.1:3000>，注册本地账号后登录。不要在生产环境设置 `VITE_ENABLE_MSW=true`。
 
-`.superpowers/` 中的 V6 文件是设计评审原型，不是生产前端代码。实现时应将其拆分为设计规格第 10 节定义的 React 组件，并通过 Mock 数据或正式 API 驱动状态，不直接把单文件 HTML 复制到 `src/`。
+## 认证边界
+
+`src/features/auth/auth.storage.ts` 是可替换的浏览器本地 adapter：
+
+- 账号、摘要凭据和会话保存在浏览器存储中，资料和头像也只对当前浏览器生效。
+- 密码经过带盐 SHA-256 摘要后保存，不存储明文。
+- 该实现只用于高保真原型和导航闭环，**不是服务端认证**，没有真实授权、多用户隔离、令牌过期、找回密码或跨设备同步。
+- 接入真实认证时应替换 `AuthStorageAdapter`，并由服务端保护 Todo 与 Agent 接口。
+
+## 目录
+
+```text
+src/
+├── app/                    # Provider、路由、Query Client
+├── features/
+│   ├── agent/              # WebSocket 会话、侧栏、快捷询问、执行时间线
+│   ├── auth/               # 本地认证 adapter 与受保护路由
+│   ├── preferences/        # 主题、动效和 Agent 启动偏好
+│   ├── profile/            # 头像与资料
+│   ├── shell/              # 导航、页头与三栏 Shell
+│   └── todos/              # Todo API、查询、卡片、弹窗、筛选、近期安排
+├── pages/                  # 六个路由页面
+├── shared/ui/              # Dialog、Popover、Button、Toast 等原语
+├── mocks/                  # 仅开发与测试启用的 MSW handler
+└── styles/                 # Token、全局样式和动效
+e2e/
+├── fixtures/               # 固定时间、认证、Todo API、Agent 流式场景
+├── mock/                   # 三浏览器功能、axe、键盘与 Chromium 视觉测试
+├── real/                   # 真实 Compose 栈 Chromium 测试
+└── snapshots/              # 已签核视觉基线
+```
+
+## 质量命令
+
+```bash
+pnpm lint                 # ESLint
+pnpm test                 # Vitest 单元/组件测试
+pnpm test:coverage        # 覆盖率：行/函数/语句 85%，分支 80%
+pnpm build                # TypeScript + Vite 生产构建
+pnpm e2e:mock             # Chromium、Firefox、WebKit；视觉仅 Chromium
+pnpm e2e:real             # 已启动真实栈时运行 @real Chromium 项目
+pnpm verify:experience    # production build/preview 的包体、FTI、溢出和 Agent 可操作性门禁
+```
+
+从仓库根目录执行 `./scripts/e2e-real.sh` 可构建隔离 Compose 栈、运行真实 Chromium E2E 并自动清理。
+
+更新截图前必须先阅读 [视觉回归基准](../docs/qa/visual-review.md)，逐张确认差异；`pnpm e2e:update` 不是修复视觉回归的手段。
+审批后的更新顺序是：先让对应功能测试通过，逐张与 V6 原型核对，再运行 `pnpm e2e:update --project=chromium`，检查所有 PNG diff 并同步视觉签核文档。
+
+新机器先运行 `pnpm exec playwright install chromium firefox webkit`。390×844 移动响应式门禁是 V6 MVP 后纳入的质量范围扩展，不代表原始桌面原型新增产品范围。
+
+`pnpm e2e:mock` 创建的浏览器 context 会自动销毁。若使用普通浏览器手工访问 Mock 页面，验证结束后还需在 DevTools → Application → Storage 清除该 origin 的 site data 并注销 Service Worker；也可在页面控制台执行 `localStorage.clear(); navigator.serviceWorker.getRegistrations().then((items) => Promise.all(items.map((item) => item.unregister())))`。不要让残留的 MSW controller 参与真实服务验证。

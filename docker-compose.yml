@@ -1,10 +1,7 @@
-version: "3.9"
-
 services:
   # ===== 基础设施 =====
   postgres:
     image: postgres:16-alpine
-    container_name: todolist-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-todolist}
@@ -14,7 +11,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./data/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./data/init.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-todolist}"]
       interval: 5s
@@ -23,7 +20,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: todolist-redis
     restart: unless-stopped
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -40,7 +36,6 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: todolist-backend
     restart: unless-stopped
     ports:
       - "${BACKEND_PORT:-8080}:8080"
@@ -50,29 +45,31 @@ services:
       redis:
         condition: service_healthy
     environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: ${POSTGRES_USER:-todolist}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
-      POSTGRES_DB: ${POSTGRES_DB:-todolist}
+      DB_DSN: "host=postgres port=5432 user=${POSTGRES_USER:-todolist} password=${POSTGRES_PASSWORD:-changeme} dbname=${POSTGRES_DB:-todolist} sslmode=disable TimeZone=Asia/Shanghai"
       REDIS_HOST: redis
       REDIS_PORT: 6379
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
   agent:
     build:
       context: ./agent-service
       dockerfile: Dockerfile
-    container_name: todolist-agent
     restart: unless-stopped
     ports:
       - "${AGENT_SERVICE_PORT:-8000}:8000"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
       BACKEND_URL: http://backend:8080/api
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
-      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -81,16 +78,23 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: todolist-frontend
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${FRONTEND_PORT:-3000}:80"
     depends_on:
-      - backend
-      - agent
+      backend:
+        condition: service_healthy
+      agent:
+        condition: service_healthy
     environment:
       VITE_API_BASE_URL: http://backend:8080
       VITE_WS_URL: ws://agent:8000
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 volumes:
   postgres_data:
