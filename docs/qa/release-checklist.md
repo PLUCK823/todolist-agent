@@ -46,14 +46,14 @@ Mock Playwright context 会自动销毁；若在普通浏览器手工使用过 M
 
 ## 3. 关键体验与性能
 
-- [x] production MSW 入口 `index-DkZYdFn0.js` raw 269,785B、gzip 85,133B（约 85.13KB，限制 100,000B）；CSS gzip 12.30KB，六个路由继续输出独立懒加载 chunk。
-- [x] production preview `/tasks` 使用 5 个全新 Chromium context；在任何 `goto` 前通过 `addInitScript` 注入 session，从每个 context 的第一次 `page.goto('/tasks')` 前计时，包含 MSW 首次安装/controller 与数据加载，直到标题和首个真实任务按钮可见：823/819/822/822/819ms，平均 821ms、最大 823ms（本机 Apple Silicon，2026-07-15）。
+- [x] production MSW 入口 `index-CLoFBEz5.js` raw 269,785B、gzip 85,135B（约 85.14KB，限制 100,000B）；CSS gzip 12.30KB，六个路由继续输出独立懒加载 chunk。
+- [x] production preview `/tasks` 使用 5 个全新 Chromium context；在任何 `goto` 前通过 `addInitScript` 注入 session，从每个 context 的第一次 `page.goto('/tasks')` 前计时，包含 MSW 首次安装/controller 与数据加载，直到标题和首个真实任务按钮可见：829/832/829/824/828ms，平均 828.4ms、最大 832ms（本机 Apple Silicon，2026-07-15）。
 - [x] 1223×1227 桌面与 390×844 移动视口均实测 `scrollWidth - clientWidth = 0`；68px/210px 导航与 0px/340px Agent 另由视觉/E2E 守卫。
 - [x] 390×844 下 `scrollWidth - clientWidth = 0`；移动导航、Agent 全宽抽屉与可滚动 Dialog 由响应式测试守卫。
 - [x] 1223×844 下 Agent 运行期间，任务主区实测 `scrollTop 0 → 326`；“新建任务”保持 enabled 并成功打开 Dialog。1223×1227 的 Agent 运行证据另见第 6 条路径截图。
 - [x] `accessibility.spec.ts` 在三浏览器验证 reduced-motion 下 Shell 与 Dialog 动画时长不超过 1ms。
 
-机器可读的本轮数据、时间戳和截图路径见 [experience-report.json](experience-report.json)；生成器为 `frontend/scripts/experience-gate.mjs`，每次使用隔离端口并在失败路径清理浏览器与 production preview。
+机器可读的本轮数据、时间戳和截图路径见 [experience-report.json](experience-report.json)；生成器为 `frontend/scripts/experience-gate.mjs`，每次使用隔离端口。SIGINT、SIGTERM 与注入运行时错误均由自动化验证退出码和清理结果：浏览器 context 关闭、detached Vite 进程组退出且端口可立即重新绑定。
 
 ## 4. 视觉与人工验收
 
@@ -68,14 +68,14 @@ Mock Playwright context 会自动销毁；若在普通浏览器手工使用过 M
 
 | # | 路径 | 自动化证据 | 截图 / 视觉证据 | 1223×1227 人工记录 | 执行时间 |
 |---:|---|---|---|---|---|
-| 1 | 创建任务 → 保存 → 列表反馈 | `tasks.spec.ts`、`todo-lifecycle.spec.ts` | [path-1.png](evidence/path-1.png) | PASS；生产构建实走，1,118ms | 2026-07-15 05:48:36Z |
-| 2 | 打开任务 → 编辑或删除 → 二次确认 → 状态反馈 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-2.png](evidence/path-2.png) | PASS；停在删除二次确认，1,181ms | 2026-07-15 05:48:38Z |
-| 3 | 状态和优先级筛选 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-3.png](evidence/path-3.png) | PASS；状态应用且优先级 Popover 可交互，1,055ms | 2026-07-15 05:48:39Z |
-| 4 | 左导航展开/收起和页面切换 | `navigation.spec.ts`、页面视觉基线 | [path-4.png](evidence/path-4.png) | PASS；展开后进入近期安排，1,095ms | 2026-07-15 05:48:40Z |
-| 5 | Agent 展开/完全收起，以及快捷输入框 | `navigation.spec.ts`、`visual.spec.ts` | [path-5.png](evidence/path-5.png) | PASS；完全收起后以 ⌘K 打开，1,061ms | 2026-07-15 05:48:41Z |
-| 6 | Agent 多步执行与等待状态 | `assistant.spec.ts`、`agent-stream.spec.ts` | [path-6.png](evidence/path-6.png) | PASS；运行状态可见；另证主区滚动与非冲突操作，2,221ms | 2026-07-15 05:48:43Z |
-| 7 | 更换头像和保存资料 | `profile-settings.spec.ts`、`visual.spec.ts` | [path-7.png](evidence/path-7.png) | PASS；保存后打开头像 Dialog，1,094ms | 2026-07-15 05:48:44Z |
-| 8 | 退出确认 → 登录 → 注册 → 返回登录 → 回到应用 | `auth.spec.ts`、登录/注册视觉基线 | [path-8.png](evidence/path-8.png) | PASS；完整闭环后回到任务页，2,793ms | 2026-07-15 05:48:47Z |
+| 1 | 创建任务 → 保存 → 列表反馈 | `tasks.spec.ts`、`todo-lifecycle.spec.ts` | [path-1.png](evidence/path-1.png) | PASS；创建 Dialog 关闭且新任务进入列表，1,130ms | 2026-07-15 06:15:00Z |
+| 2 | 打开任务 → 编辑或删除 → 二次确认 → 状态反馈 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-2.png](evidence/path-2.png) | PASS；保存编辑、确认删除并验证列表移除，1,245ms | 2026-07-15 06:15:01Z |
+| 3 | 状态和优先级筛选 | `tasks.spec.ts`、`accessibility.spec.ts` | [path-3.png](evidence/path-3.png) | PASS；实际应用“进行中 + 高优先级”并验证唯一匹配结果，1,118ms | 2026-07-15 06:15:03Z |
+| 4 | 左导航展开/收起和页面切换 | `navigation.spec.ts`、页面视觉基线 | [path-4.png](evidence/path-4.png) | PASS；展开、进入近期安排、再收起并验证标签隐藏，1,201ms | 2026-07-15 06:15:04Z |
+| 5 | Agent 展开/完全收起，以及快捷输入框 | `navigation.spec.ts`、`visual.spec.ts` | [path-5.png](evidence/path-5.png) | PASS；确认 Agent 列完全移除、页头入口出现并以 ⌘K 打开快捷询问，1,047ms | 2026-07-15 06:15:05Z |
+| 6 | Agent 多步执行与等待状态 | `assistant.spec.ts`、`agent-stream.spec.ts` | [path-6.png](evidence/path-6.png) | PASS；断言 running/time 后等待 action、reply、done 与 Todo 刷新；另证主区滚动和非冲突操作，6,090ms | 2026-07-15 06:15:11Z |
+| 7 | 更换头像和保存资料 | `profile-settings.spec.ts`、`visual.spec.ts` | [path-7.png](evidence/path-7.png) | PASS；保存新名称、改选星紫头像并验证资料页与展开导航同步，1,271ms | 2026-07-15 06:15:12Z |
+| 8 | 退出确认 → 登录 → 注册 → 返回登录 → 回到应用 | `auth.spec.ts`、登录/注册视觉基线 | [path-8.png](evidence/path-8.png) | PASS；完整认证闭环后回到任务页并加载真实任务，2,775ms | 2026-07-15 06:15:15Z |
 
 > 上表的 PASS 是仓库实现与自动化/视觉签核的交付记录，不代表额外的最终用户审批。任何无响应按钮都视为失败。
 

@@ -271,8 +271,9 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
         }
       }
     }
+    let scheduleSequence = 0
     const send = (item: (typeof scenario.events)[number], relativeToMs = 0) => {
-      const delay = Math.max(0, Math.round((item.atMs - relativeToMs) * timeScale))
+      const delay = Math.max(0, Math.round((item.atMs - relativeToMs) * timeScale)) + scheduleSequence++
       setTimeout(() => {
         let eventToSend = item.event
         if (item.event.type === 'step_failed' && item.event.retryable) {

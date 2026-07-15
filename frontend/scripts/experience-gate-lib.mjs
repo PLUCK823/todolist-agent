@@ -1,5 +1,6 @@
 import { gzipSync } from 'node:zlib'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import { createServer } from 'node:net'
 
 export const ENTRY_GZIP_LIMIT_BYTES = 100_000
@@ -30,8 +31,23 @@ export async function findAvailablePort(host = '127.0.0.1') {
   })
 }
 
+export async function verifyEvidenceFiles(report, root) {
+  for (const item of report.evidence) {
+    const filePath = join(root, item.screenshot)
+    let details
+    try {
+      details = await stat(filePath)
+    } catch (error) {
+      if (error?.code === 'ENOENT') throw new Error(`evidence path-${item.id} is missing`)
+      throw error
+    }
+    if (!details.isFile() || details.size === 0) throw new Error(`evidence path-${item.id} is empty`)
+  }
+}
+
 export function assertExperienceReport(report) {
   if (report?.schemaVersion !== 1) throw new Error('experience report schemaVersion must be 1')
+  if (report?.status !== 'pass') throw new Error('experience report status must be pass')
 
   const entry = report?.build?.entry
   if (!entry || entry.gzipBytes >= ENTRY_GZIP_LIMIT_BYTES || entry.pass !== true) {
@@ -68,7 +84,8 @@ export function assertExperienceReport(report) {
     throw new Error('experience report must contain exactly eight evidence paths')
   }
   report.evidence.forEach((item, index) => {
-    if (item?.id !== index + 1 || !item.timestamp || !Number.isFinite(item.durationMs) || item.durationMs < 0 || item.pass !== true || !item.screenshot) {
+    const expectedScreenshot = `docs/qa/evidence/path-${index + 1}.png`
+    if (item?.id !== index + 1 || !item.timestamp || !Number.isFinite(item.durationMs) || item.durationMs < 0 || item.pass !== true || item.screenshot !== expectedScreenshot) {
       throw new Error(`evidence path ${index + 1} must include timestamp, duration, pass and screenshot`)
     }
   })

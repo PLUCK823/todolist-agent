@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-07-15T05:48:47.422Z",
+  "generatedAt": "2026-07-15T06:15:15.489Z",
   "status": "pass",
   "build": {
     "entry": {
-      "file": "dist/assets/index-DkZYdFn0.js",
+      "file": "dist/assets/index-CLoFBEz5.js",
       "rawBytes": 269785,
-      "gzipBytes": 85133,
+      "gzipBytes": 85135,
       "limitBytes": 100000,
       "pass": true
     }
@@ -14,11 +14,11 @@
   "fti": {
     "mode": "cold-first-navigation",
     "samplesMs": [
-      823,
-      819,
-      822,
-      822,
-      819
+      829,
+      832,
+      829,
+      824,
+      828
     ],
     "limitMs": 2000,
     "pass": true
@@ -56,57 +56,57 @@
   "evidence": [
     {
       "id": 1,
-      "timestamp": "2026-07-15T05:48:36.909Z",
-      "durationMs": 1118,
+      "timestamp": "2026-07-15T06:15:00.727Z",
+      "durationMs": 1130,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-1.png"
     },
     {
       "id": 2,
-      "timestamp": "2026-07-15T05:48:38.092Z",
-      "durationMs": 1181,
+      "timestamp": "2026-07-15T06:15:01.975Z",
+      "durationMs": 1245,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-2.png"
     },
     {
       "id": 3,
-      "timestamp": "2026-07-15T05:48:39.149Z",
-      "durationMs": 1055,
+      "timestamp": "2026-07-15T06:15:03.095Z",
+      "durationMs": 1118,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-3.png"
     },
     {
       "id": 4,
-      "timestamp": "2026-07-15T05:48:40.246Z",
-      "durationMs": 1095,
+      "timestamp": "2026-07-15T06:15:04.298Z",
+      "durationMs": 1201,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-4.png"
     },
     {
       "id": 5,
-      "timestamp": "2026-07-15T05:48:41.308Z",
-      "durationMs": 1061,
+      "timestamp": "2026-07-15T06:15:05.346Z",
+      "durationMs": 1047,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-5.png"
     },
     {
       "id": 6,
-      "timestamp": "2026-07-15T05:48:43.531Z",
-      "durationMs": 2221,
+      "timestamp": "2026-07-15T06:15:11.438Z",
+      "durationMs": 6090,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-6.png"
     },
     {
       "id": 7,
-      "timestamp": "2026-07-15T05:48:44.626Z",
-      "durationMs": 1094,
+      "timestamp": "2026-07-15T06:15:12.711Z",
+      "durationMs": 1271,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-7.png"
     },
     {
       "id": 8,
-      "timestamp": "2026-07-15T05:48:47.421Z",
-      "durationMs": 2793,
+      "timestamp": "2026-07-15T06:15:15.487Z",
+      "durationMs": 2775,
       "pass": true,
       "screenshot": "docs/qa/evidence/path-8.png"
     }
