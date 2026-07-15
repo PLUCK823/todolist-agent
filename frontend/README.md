@@ -73,9 +73,12 @@ pnpm test:coverage        # 覆盖率：行/函数/语句 85%，分支 80%
 pnpm build                # TypeScript + Vite 生产构建
 pnpm e2e:mock             # Chromium、Firefox、WebKit；视觉仅 Chromium
 pnpm e2e:real             # 已启动真实栈时运行 @real Chromium 项目
+pnpm verify:experience    # production build/preview 的包体、FTI、溢出和 Agent 可操作性门禁
 ```
 
 从仓库根目录执行 `./scripts/e2e-real.sh` 可构建隔离 Compose 栈、运行真实 Chromium E2E 并自动清理。
 
 更新截图前必须先阅读 [视觉回归基准](../docs/qa/visual-review.md)，逐张确认差异；`pnpm e2e:update` 不是修复视觉回归的手段。
 审批后的更新顺序是：先让对应功能测试通过，逐张与 V6 原型核对，再运行 `pnpm e2e:update --project=chromium`，检查所有 PNG diff 并同步视觉签核文档。
+
+新机器先运行 `pnpm exec playwright install chromium firefox webkit`。390×844 移动响应式门禁是 V6 MVP 后纳入的质量范围扩展，不代表原始桌面原型新增产品范围。

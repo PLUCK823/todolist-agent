@@ -1,12 +1,12 @@
 # 全量 E2E 覆盖矩阵
 
-> 更新日期：2026-07-14。`C` = Chromium，`F` = Firefox，`W` = WebKit，`RC` = 隔离 Compose 真实栈的 Chromium。Mock E2E 对 C/F/W 运行；`visual.spec.ts` 因字体栅格差异只在 C 运行，不能据此跳过跨浏览器功能断言。
+> 更新日期：2026-07-15。`C` = Chromium，`F` = Firefox，`W` = WebKit，`RC` = 隔离 Compose 真实栈的 Chromium。Mock E2E 对 C/F/W 运行；`visual.spec.ts` 因字体栅格差异只在 C 运行，不能据此跳过跨浏览器功能断言。表中未写目录的单元测试位于 `frontend/src/**/__tests__/`，Mock E2E 位于 `frontend/e2e/mock/`，真实栈 E2E 位于 `frontend/e2e/real/`。
 
 ## 产品功能到测试的映射
 
 | 产品功能 / 验收路径 | 单元或组件测试 | Mock E2E | 真实栈 E2E | 浏览器 |
 |---|---|---|---|---|
-| 受保护路由、登录和原目标回跳 | `AuthContext.test.tsx`、`RequireSession.test.tsx`、`AuthPage.test.tsx` | `auth.spec.ts` | — | C/F/W |
+| 受保护路由、登录和原目标回跳 | `frontend/src/features/auth/__tests__/AuthContext.test.tsx`、`frontend/src/features/auth/__tests__/RequireSession.test.tsx`、`frontend/src/pages/__tests__/AuthPage.test.tsx` | `frontend/e2e/mock/auth.spec.ts` | — | C/F/W |
 | 注册校验、注册后回填登录 | `AuthContext.test.tsx`、`AuthPage.test.tsx` | `auth.spec.ts` | — | C/F/W |
 | 退出取消、确认并返回登录 | `ProfilePage.test.tsx`、`ConfirmDialog.test.tsx` | `auth.spec.ts`、`accessibility.spec.ts` | — | C/F/W |
 | 任务创建、详情、编辑、删除确认 | `TaskDashboard.test.tsx`、`TaskDialog.test.tsx`、Todo query tests | `tasks.spec.ts`、`accessibility.spec.ts` | `todo-lifecycle.spec.ts` | C/F/W + RC |
@@ -42,3 +42,4 @@
 - 可运行参考：[V6 原型](../../.superpowers/brainstorm/40507-1783945975/content/workspace-full-flow-v6.html)
 - 截图量尺及逐文件签核：[视觉回归基准](visual-review.md)
 - 最终执行方式和非 MVP 边界：[发布检查清单](release-checklist.md)
+- production build/preview 体验数据与八条路径证据：[experience-report.json](experience-report.json)

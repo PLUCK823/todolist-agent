@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../test/render'
 import AuthPage from '../AuthPage'
@@ -58,7 +58,7 @@ describe('AuthPage', () => {
     await userEvent.type(screen.getByLabelText('邮箱地址'), 'plucky@example.com')
     await userEvent.type(screen.getByLabelText('密码'), 'password1')
     await userEvent.click(screen.getByRole('button', { name: '登录' }))
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/upcoming?view=week#tuesday|')
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/upcoming?view=week#tuesday|'))
   })
 
   it('preserves the complete target while switching to registration and back to login', async () => {
@@ -77,7 +77,7 @@ describe('AuthPage', () => {
     await userEvent.clear(screen.getByLabelText('密码'))
     await userEvent.type(screen.getByLabelText('密码'), 'password1')
     await userEvent.click(screen.getByRole('button', { name: '登录' }))
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/tasks?priority=high#today|')
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/tasks?priority=high#today|'))
   })
 
   it('falls back to tasks instead of navigating to a protocol-relative target', async () => {
@@ -87,6 +87,6 @@ describe('AuthPage', () => {
     await userEvent.type(screen.getByLabelText('邮箱地址'), 'plucky@example.com')
     await userEvent.type(screen.getByLabelText('密码'), 'password1')
     await userEvent.click(screen.getByRole('button', { name: '登录' }))
-    expect(screen.getByLabelText('当前位置')).toHaveTextContent('/tasks|')
+    await waitFor(() => expect(screen.getByLabelText('当前位置')).toHaveTextContent('/tasks|'))
   })
 })

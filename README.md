@@ -35,6 +35,8 @@ docker compose up -d --build
 docker compose down
 ```
 
+该命令不删除数据卷；需要清除本地数据时显式运行 `docker compose down -v`。
+
 ### 只运行高保真前端
 
 不启动 Go、PostgreSQL 或 Agent 服务时，可使用 MSW 查看和操作完整前端：
@@ -58,7 +60,7 @@ VITE_ENABLE_MSW=true pnpm dev --host 127.0.0.1
 4. [产品需求](docs/PRD.md) 与 [API 文档](docs/API.md)：业务范围和真实接口契约。
 5. [E2E 覆盖矩阵](docs/qa/e2e-matrix.md) 与 [发布检查清单](docs/qa/release-checklist.md)：确认实现不是只有静态外观。
 
-视觉参考发生冲突时，以设计规格中的明确产品规则优先，其次是 V6 原型，再其次是视觉基线；生产实现不得直接复制单文件 HTML。
+视觉权威顺序为：设计规格明确规则 → V6 原型 → 已签核视觉基线（仅用于回归）→ PRD/API。WCAG 2.2 AA 可以覆盖原型低对比色，但必须在视觉签核中记录；生产实现不得直接复制单文件 HTML。
 
 ## 验证
 
