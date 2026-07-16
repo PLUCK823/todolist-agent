@@ -27,12 +27,15 @@ describe('TaskFilters', () => {
     expect(screen.getByRole('searchbox', { name: '搜索任务' })).toHaveAttribute('name', 'todo-search')
 
     await user.type(screen.getByRole('searchbox', { name: '搜索任务' }), '文档')
-    await user.selectOptions(screen.getByLabelText('任务排序'), 'due_date:asc')
+    await user.click(screen.getByRole('button', { name: '任务排序：最近创建' }))
+    const menu = screen.getByRole('dialog', { name: '任务排序' })
+    await user.click(within(menu).getByRole('button', { name: '截止时间' }))
 
     expect(onChange).toHaveBeenCalled()
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ sort_by: 'due_date', order: 'asc', page: 1 }),
     )
+    expect(screen.queryByRole('combobox', { name: '任务排序' })).not.toBeInTheDocument()
   })
 
   it.each([
@@ -75,16 +78,35 @@ describe('TaskFilters', () => {
   })
 
   it.each([
-    ['created_at:desc', 'created_at', 'desc'],
-    ['due_date:asc', 'due_date', 'asc'],
-    ['priority:desc', 'priority', 'desc'],
-    ['priority:asc', 'priority', 'asc'],
-  ] as const)('maps the sort value %s to query filters', async (option, sort_by, order) => {
+    ['最近创建', 'created_at', 'desc'],
+    ['截止时间', 'due_date', 'asc'],
+    ['优先级从高到低', 'priority', 'desc'],
+    ['优先级从低到高', 'priority', 'asc'],
+  ] as const)('maps the sort option %s to query filters', async (optionName, sort_by, order) => {
     const user = userEvent.setup()
     const onChange = vi.fn()
     render(<TaskFilters filters={{}} onChange={onChange} />)
-    await user.selectOptions(screen.getByLabelText('任务排序'), option)
+    await user.click(screen.getByRole('button', { name: '任务排序：最近创建' }))
+    await user.click(within(screen.getByRole('dialog', { name: '任务排序' })).getByRole('button', { name: optionName }))
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ sort_by, order, page: 1 }))
+  })
+
+  it('closes sorting when another filter opens', async () => {
+    const user = userEvent.setup()
+    render(<TaskFilters filters={{}} onChange={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: '任务排序：最近创建' }))
+    await user.click(screen.getByRole('button', { name: '全部状态' }))
+    expect(screen.queryByRole('dialog', { name: '任务排序' })).not.toBeInTheDocument()
+  })
+
+  it('closes sorting with Escape and restores focus', async () => {
+    const user = userEvent.setup()
+    render(<TaskFilters filters={{}} onChange={vi.fn()} />)
+    const trigger = screen.getByRole('button', { name: '任务排序：最近创建' })
+    await user.click(trigger)
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: '任务排序' })).not.toBeInTheDocument()
+    expect(trigger).toHaveFocus()
   })
 
   it('reports search text through the dedicated callback', async () => {
