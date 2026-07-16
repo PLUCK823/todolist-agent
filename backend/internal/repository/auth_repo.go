@@ -53,7 +53,7 @@ func (r *AuthRepository) FindUserByID(ctx context.Context, id string) (*model.Us
 func (r *AuthRepository) UpdateUserProfile(
 	ctx context.Context,
 	id, displayName, email, timezone string,
-) (*model.User, error) {
+) error {
 	result := r.db.WithContext(ctx).
 		Model(&model.User{}).
 		Where("id = ?", id).
@@ -64,12 +64,12 @@ func (r *AuthRepository) UpdateUserProfile(
 			"updated_at":   time.Now().UTC(),
 		})
 	if result.Error != nil {
-		return nil, result.Error
+		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return nil, gorm.ErrRecordNotFound
+		return gorm.ErrRecordNotFound
 	}
-	return r.FindUserByID(ctx, id)
+	return nil
 }
 
 func (r *AuthRepository) CountTodos(ctx context.Context) (int64, error) {

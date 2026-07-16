@@ -7,14 +7,13 @@ import (
 	"time"
 
 	"backend/internal/middleware"
-	"backend/internal/model"
 	"backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type AuthServiceInterface interface {
-	Register(ctx context.Context, req service.RegisterRequest) (*model.User, error)
+	Register(ctx context.Context, req service.RegisterRequest) (*service.Account, error)
 	Login(ctx context.Context, email, password string) (*service.AuthResult, error)
 	Refresh(ctx context.Context, refreshToken string) (*service.AuthResult, error)
 	Logout(ctx context.Context, refreshToken string) error
@@ -68,12 +67,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		errorResponse(c, http.StatusBadRequest, 40001, "请求参数格式错误")
 		return
 	}
-	user, err := h.svc.Register(c.Request.Context(), service.RegisterRequest{Name: request.Name, Email: request.Email, Password: request.Password})
-	if err != nil {
-		h.writeServiceError(c, err)
-		return
-	}
-	account, err := h.svc.GetAccount(c.Request.Context(), user.ID)
+	account, err := h.svc.Register(c.Request.Context(), service.RegisterRequest{Name: request.Name, Email: request.Email, Password: request.Password})
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
@@ -97,13 +91,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		h.writeServiceError(c, err)
 		return
 	}
-	account, err := h.svc.GetAccount(c.Request.Context(), result.User.ID)
-	if err != nil {
-		h.writeServiceError(c, err)
-		return
-	}
 	h.setCredentials(c, result)
-	success(c, http.StatusOK, account)
+	success(c, http.StatusOK, result.Account)
 }
 
 func (h *AuthHandler) Refresh(c *gin.Context) {
@@ -117,13 +106,8 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 		h.writeServiceError(c, err)
 		return
 	}
-	account, err := h.svc.GetAccount(c.Request.Context(), result.User.ID)
-	if err != nil {
-		h.writeServiceError(c, err)
-		return
-	}
 	h.setCredentials(c, result)
-	success(c, http.StatusOK, account)
+	success(c, http.StatusOK, result.Account)
 }
 
 func (h *AuthHandler) Logout(c *gin.Context) {

@@ -49,7 +49,7 @@ type AuthRepository interface {
 	CreateUser(context.Context, *model.User) error
 	FindUserByEmail(context.Context, string) (*model.User, error)
 	FindUserByID(context.Context, string) (*model.User, error)
-	UpdateUserProfile(context.Context, string, string, string, string) (*model.User, error)
+	UpdateUserProfile(context.Context, string, string, string, string) error
 	CountTodos(context.Context) (int64, error)
 	CountAgentSessions(context.Context, string) (int64, error)
 	CreateSession(context.Context, *model.AuthSession) error
@@ -59,20 +59,25 @@ type AuthRepository interface {
 }
 
 type AuthConfig struct {
-	JWTSecret  []byte
-	AccessTTL  time.Duration
-	RefreshTTL time.Duration
-	Issuer     string
-	Now        func() time.Time
+	JWTSecret        []byte
+	AccessTTL        time.Duration
+	RefreshTTL       time.Duration
+	Issuer           string
+	Now              func() time.Time
+	PasswordHasher   func(string) (string, error)
+	PasswordVerifier func(string, string) bool
 }
 
 type AuthService struct {
-	repo       AuthRepository
-	jwtSecret  []byte
-	accessTTL  time.Duration
-	refreshTTL time.Duration
-	issuer     string
-	now        func() time.Time
+	repo           AuthRepository
+	jwtSecret      []byte
+	accessTTL      time.Duration
+	refreshTTL     time.Duration
+	issuer         string
+	now            func() time.Time
+	hashPassword   func(string) (string, error)
+	verifyPassword func(string, string) bool
+	dummyHash      string
 }
 
 type RegisterRequest struct {
@@ -103,7 +108,7 @@ type Account struct {
 }
 
 type AuthResult struct {
-	User          *model.User
+	Account       *Account
 	AccessToken   string
 	RefreshToken  string
 	AccessExpiry  time.Time
@@ -134,9 +139,20 @@ func NewAuthService(repo AuthRepository, cfg AuthConfig) (*AuthService, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.PasswordHasher == nil {
+		cfg.PasswordHasher = HashPassword
+	}
+	if cfg.PasswordVerifier == nil {
+		cfg.PasswordVerifier = VerifyPassword
+	}
+	dummyHash, err := cfg.PasswordHasher("authentication-timing-dummy-password")
+	if err != nil {
+		return nil, fmt.Errorf("%w: initialize password verifier: %v", ErrAuthenticationStore, err)
+	}
 	return &AuthService{
 		repo: repo, jwtSecret: append([]byte(nil), cfg.JWTSecret...),
 		accessTTL: cfg.AccessTTL, refreshTTL: cfg.RefreshTTL, issuer: cfg.Issuer, now: cfg.Now,
+		hashPassword: cfg.PasswordHasher, verifyPassword: cfg.PasswordVerifier, dummyHash: dummyHash,
 	}, nil
 }
 
@@ -204,7 +220,7 @@ func validPasswordParams(params PasswordParams) bool {
 		params.KeyLength >= 16 && params.KeyLength <= 64
 }
 
-func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*model.User, error) {
+func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*Account, error) {
 	name := strings.TrimSpace(req.Name)
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if len([]rune(name)) < 1 || len([]rune(name)) > 120 || !validEmail(email) || len(req.Password) < 8 || len(req.Password) > 128 {
@@ -215,18 +231,22 @@ func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*model
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("%w: find email: %v", ErrAuthenticationStore, err)
 	}
-	hash, err := HashPassword(req.Password)
+	hash, err := s.hashPassword(req.Password)
 	if err != nil {
 		return nil, err
 	}
 	user := &model.User{ID: uuid.NewString(), Email: email, DisplayName: name, Timezone: "Asia/Shanghai (UTC+8)", PasswordHash: hash}
+	account, err := s.accountFromUser(ctx, user)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.repo.CreateUser(ctx, user); err != nil {
 		if isDuplicateError(err) {
 			return nil, ErrEmailExists
 		}
 		return nil, fmt.Errorf("%w: create user: %v", ErrAuthenticationStore, err)
 	}
-	return user, nil
+	return account, nil
 }
 
 func (s *AuthService) GetAccount(ctx context.Context, userID string) (*Account, error) {
@@ -273,14 +293,21 @@ func (s *AuthService) UpdateAccount(ctx context.Context, userID string, req Acco
 			return nil, fmt.Errorf("%w: check email: %v", ErrAuthenticationStore, findErr)
 		}
 	}
-	updated, err := s.repo.UpdateUserProfile(ctx, user.ID, name, email, timezone)
+	proposed := *user
+	proposed.DisplayName = name
+	proposed.Email = email
+	proposed.Timezone = timezone
+	account, err := s.accountFromUser(ctx, &proposed)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.UpdateUserProfile(ctx, user.ID, name, email, timezone); err != nil {
 		if isDuplicateError(err) {
 			return nil, ErrEmailExists
 		}
 		return nil, fmt.Errorf("%w: update account: %v", ErrAuthenticationStore, err)
 	}
-	return s.accountFromUser(ctx, updated)
+	return account, nil
 }
 
 func (s *AuthService) accountFromUser(ctx context.Context, user *model.User) (*Account, error) {
@@ -303,39 +330,38 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthR
 	user, err := s.repo.FindUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Keep an unknown account on the same expensive password-verification path.
-			dummy, hashErr := HashPassword("unknown-account-dummy-password")
-			if hashErr == nil {
-				_ = VerifyPassword(dummy, password)
-			}
+			// Keep an unknown account on the same single password-verification path.
+			_ = s.verifyPassword(s.dummyHash, password)
 			return nil, ErrInvalidCredentials
 		}
 		return nil, fmt.Errorf("%w: find user: %v", ErrAuthenticationStore, err)
 	}
-	if !VerifyPassword(user.PasswordHash, password) {
+	if !s.verifyPassword(user.PasswordHash, password) {
 		return nil, ErrInvalidCredentials
 	}
-	return s.createLoginSession(ctx, user)
-}
-
-func (s *AuthService) createLoginSession(ctx context.Context, user *model.User) (*AuthResult, error) {
-	now := s.now().UTC()
-	sessionID := uuid.NewString()
-	secret, refresh, hash, err := generateRefreshCredential(sessionID)
+	account, err := s.accountFromUser(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	_ = secret // raw secret exists only long enough to construct the Cookie value.
+	return s.createLoginSession(ctx, user, account)
+}
+
+func (s *AuthService) createLoginSession(ctx context.Context, user *model.User, account *Account) (*AuthResult, error) {
+	now := s.now().UTC()
+	sessionID := uuid.NewString()
+	_, refresh, hash, err := generateRefreshCredential(sessionID)
+	if err != nil {
+		return nil, err
+	}
 	session := &model.AuthSession{ID: sessionID, UserID: user.ID, RefreshTokenHash: hash, ExpiresAt: now.Add(s.refreshTTL), LastUsedAt: now}
+	access, expiry, err := s.signAccess(user.ID, session.ID, now)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.repo.CreateSession(ctx, session); err != nil {
 		return nil, fmt.Errorf("%w: create session: %v", ErrAuthenticationStore, err)
 	}
-	access, expiry, err := s.signAccess(user.ID, session.ID, now)
-	if err != nil {
-		_ = s.repo.RevokeSession(ctx, session.ID, now)
-		return nil, err
-	}
-	return &AuthResult{User: user, AccessToken: access, RefreshToken: refresh, AccessExpiry: expiry, RefreshExpiry: session.ExpiresAt}, nil
+	return &AuthResult{Account: account, AccessToken: access, RefreshToken: refresh, AccessExpiry: expiry, RefreshExpiry: session.ExpiresAt}, nil
 }
 
 func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*AuthResult, error) {
@@ -362,23 +388,27 @@ func (s *AuthService) Refresh(ctx context.Context, refreshToken string) (*AuthRe
 		}
 		return nil, fmt.Errorf("%w: find session user: %v", ErrAuthenticationStore, err)
 	}
+	account, err := s.accountFromUser(ctx, user)
+	if err != nil {
+		return nil, err
+	}
 	replacementID := uuid.NewString()
 	_, replacementToken, replacementHash, err := generateRefreshCredential(replacementID)
 	if err != nil {
 		return nil, err
 	}
 	replacement := &model.AuthSession{ID: replacementID, UserID: user.ID, RefreshTokenHash: replacementHash, ExpiresAt: now.Add(s.refreshTTL), LastUsedAt: now}
+	access, expiry, err := s.signAccess(user.ID, replacement.ID, now)
+	if err != nil {
+		return nil, err
+	}
 	if err := s.repo.RotateSession(ctx, current.ID, now, replacement); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrInvalidCredentials
 		}
 		return nil, fmt.Errorf("%w: rotate session: %v", ErrAuthenticationStore, err)
 	}
-	access, expiry, err := s.signAccess(user.ID, replacement.ID, now)
-	if err != nil {
-		return nil, err
-	}
-	return &AuthResult{User: user, AccessToken: access, RefreshToken: replacementToken, AccessExpiry: expiry, RefreshExpiry: replacement.ExpiresAt}, nil
+	return &AuthResult{Account: account, AccessToken: access, RefreshToken: replacementToken, AccessExpiry: expiry, RefreshExpiry: replacement.ExpiresAt}, nil
 }
 
 func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
@@ -414,8 +444,8 @@ func (s *AuthService) ValidateAccess(raw string) (*AccessClaims, error) {
 			return nil, ErrInvalidAccessToken
 		}
 		return s.jwtSecret, nil
-	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithIssuer(s.issuer), jwt.WithExpirationRequired(), jwt.WithTimeFunc(s.now))
-	if err != nil || !token.Valid || claims.Subject == "" || claims.SessionID == "" {
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithIssuer(s.issuer), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(s.now))
+	if err != nil || !token.Valid || claims.Subject == "" || claims.SessionID == "" || claims.IssuedAt == nil {
 		return nil, ErrInvalidAccessToken
 	}
 	if _, err := uuid.Parse(claims.Subject); err != nil {
