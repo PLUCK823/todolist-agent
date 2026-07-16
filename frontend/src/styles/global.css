@@ -787,10 +787,12 @@ figcaption {
   width: min(630px, 100%);
   max-width: 630px;
   overflow: hidden;
+  border: 1px solid var(--border);
   border-radius: var(--radius-dialog);
   padding: 8px;
-  background: rgb(255 255 255 / 96%);
-  box-shadow: 0 0 0 1px rgb(255 255 255 / 80%), 0 28px 90px rgb(28 32 48 / 28%);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-overlay);
   animation: panel-enter 280ms cubic-bezier(.2, 0, 0, 1) both;
 }
 
@@ -829,11 +831,11 @@ figcaption {
   border-radius: 16px;
   padding: 18px;
   outline: 0;
-  background: var(--surface-subtle);
+  background: var(--control-bg);
   color: var(--text);
   font-size: 1.05rem;
   line-height: 1.55;
-  box-shadow: inset 0 0 0 1px rgb(32 37 56 / 5%);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .command-palette textarea:focus {

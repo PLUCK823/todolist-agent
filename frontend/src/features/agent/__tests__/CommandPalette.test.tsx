@@ -36,6 +36,7 @@ describe('CommandPalette', () => {
     renderPalette()
     await user.keyboard('{Meta>}k{/Meta}')
     expect(screen.getByRole('dialog', { name: '快速询问' })).toHaveClass(
+      'command-palette',
       'max-w-[630px]',
       'rounded-[var(--radius-dialog)]',
     )

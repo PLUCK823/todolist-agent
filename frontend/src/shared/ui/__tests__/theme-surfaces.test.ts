@@ -59,6 +59,17 @@ describe('theme-aware application surfaces', () => {
     expect(globalStyles).toMatch(/\.assistant-clear-error\s*\{[\s\S]*?background:\s*var\(--danger-surface\)/)
   })
 
+  it('uses semantic theme surfaces for the quick-question dialog', () => {
+    expect(globalStyles).toMatch(
+      /\.command-palette\s*\{[\s\S]*?background:\s*var\(--surface\)/,
+    )
+    expect(globalStyles).toMatch(
+      /\.command-palette textarea\s*\{[\s\S]*?background:\s*var\(--control-bg\)/,
+    )
+    const paletteBlock = globalStyles.match(/\.command-palette\s*\{([\s\S]*?)\}/)?.[1]
+    expect(paletteBlock).not.toMatch(/rgb\(255\s+255\s+255/)
+  })
+
   it.each([':root', ':root[data-theme="dark"]'])('%s semantic status surfaces keep readable text', (selector) => {
     const values = tokenMap(block(selector))
     for (const intent of ['success', 'warning', 'danger']) {
