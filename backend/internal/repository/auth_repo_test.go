@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,5 +160,173 @@ func TestAuthRepositoryExcludesAndDeletesExpiredRefreshSessions(t *testing.T) {
 	}
 	if _, err := repo.FindActiveSessionByID(ctx, active.ID, now); err != nil {
 		t.Fatalf("expected active session to remain: %v", err)
+	}
+}
+
+func TestAuthRepositoryRotatesRefreshSessionAtomically(t *testing.T) {
+	ctx := context.Background()
+	db := setupAuthTestDB(t)
+	repo := NewAuthRepository(db)
+	user := &model.User{
+		Email:        "rotate@example.com",
+		DisplayName:  "Rotate User",
+		PasswordHash: "password-hash",
+	}
+	if err := repo.CreateUser(ctx, user); err != nil {
+		t.Fatalf("CreateUser() failed: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	oldLastUsed := now.Add(-time.Hour)
+	oldSession := &model.AuthSession{
+		UserID:           user.ID,
+		RefreshTokenHash: "3c6f0f2ef50cb495fb3de546f5fb9a517b44c52ab9ae19f9bf4c8df5e86dba6e",
+		ExpiresAt:        now.Add(time.Hour),
+		LastUsedAt:       oldLastUsed,
+	}
+	if err := repo.CreateSession(ctx, oldSession); err != nil {
+		t.Fatalf("CreateSession() failed: %v", err)
+	}
+	replacement := &model.AuthSession{
+		UserID:           user.ID,
+		RefreshTokenHash: "4c6f0f2ef50cb495fb3de546f5fb9a517b44c52ab9ae19f9bf4c8df5e86dba6e",
+		ExpiresAt:        now.Add(2 * time.Hour),
+	}
+
+	if err := repo.RotateSession(ctx, oldSession.ID, now, replacement); err != nil {
+		t.Fatalf("RotateSession() failed: %v", err)
+	}
+	if _, err := uuid.Parse(replacement.ID); err != nil {
+		t.Fatalf("expected replacement random UUID, got %q: %v", replacement.ID, err)
+	}
+	if !replacement.LastUsedAt.Equal(now) {
+		t.Fatalf("expected replacement last_used_at %s, got %s", now, replacement.LastUsedAt)
+	}
+	if _, err := repo.FindActiveSessionByID(ctx, oldSession.ID, now); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("expected old session to be inactive, got %v", err)
+	}
+	if _, err := repo.FindActiveSessionByID(ctx, replacement.ID, now); err != nil {
+		t.Fatalf("expected replacement session to be active: %v", err)
+	}
+
+	var persistedOld model.AuthSession
+	if err := db.First(&persistedOld, "id = ?", oldSession.ID).Error; err != nil {
+		t.Fatalf("failed to reload old session: %v", err)
+	}
+	if persistedOld.RevokedAt == nil || !persistedOld.RevokedAt.Equal(now) {
+		t.Fatalf("expected old session revoked at %s, got %v", now, persistedOld.RevokedAt)
+	}
+	if !persistedOld.LastUsedAt.Equal(now) {
+		t.Fatalf("expected old session last_used_at %s, got %s", now, persistedOld.LastUsedAt)
+	}
+}
+
+func TestAuthRepositoryRotationRollsBackWhenReplacementInsertFails(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAuthRepository(setupAuthTestDB(t))
+	user := &model.User{
+		Email:        "rollback@example.com",
+		DisplayName:  "Rollback User",
+		PasswordHash: "password-hash",
+	}
+	if err := repo.CreateUser(ctx, user); err != nil {
+		t.Fatalf("CreateUser() failed: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	oldSession := &model.AuthSession{
+		UserID:           user.ID,
+		RefreshTokenHash: "5c6f0f2ef50cb495fb3de546f5fb9a517b44c52ab9ae19f9bf4c8df5e86dba6e",
+		ExpiresAt:        now.Add(time.Hour),
+	}
+	if err := repo.CreateSession(ctx, oldSession); err != nil {
+		t.Fatalf("CreateSession() failed: %v", err)
+	}
+	replacement := &model.AuthSession{
+		UserID:           user.ID,
+		RefreshTokenHash: oldSession.RefreshTokenHash,
+		ExpiresAt:        now.Add(2 * time.Hour),
+	}
+
+	if err := repo.RotateSession(ctx, oldSession.ID, now, replacement); err == nil {
+		t.Fatal("expected duplicate refresh hash to fail replacement insert")
+	}
+	if _, err := repo.FindActiveSessionByID(ctx, oldSession.ID, now); err != nil {
+		t.Fatalf("expected failed rotation to leave old session active: %v", err)
+	}
+}
+
+func TestAuthRepositoryConcurrentRotationAllowsExactlyOneSuccess(t *testing.T) {
+	ctx := context.Background()
+	db := setupAuthTestDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("failed to get sql.DB: %v", err)
+	}
+	// A single connection keeps the in-memory SQLite database shared and makes
+	// the two transactions wait on the same database rather than seeing two
+	// unrelated :memory: databases.
+	sqlDB.SetMaxOpenConns(1)
+	repo := NewAuthRepository(db)
+	user := &model.User{
+		Email:        "concurrent@example.com",
+		DisplayName:  "Concurrent User",
+		PasswordHash: "password-hash",
+	}
+	if err := repo.CreateUser(ctx, user); err != nil {
+		t.Fatalf("CreateUser() failed: %v", err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	oldSession := &model.AuthSession{
+		UserID:           user.ID,
+		RefreshTokenHash: "6c6f0f2ef50cb495fb3de546f5fb9a517b44c52ab9ae19f9bf4c8df5e86dba6e",
+		ExpiresAt:        now.Add(time.Hour),
+	}
+	if err := repo.CreateSession(ctx, oldSession); err != nil {
+		t.Fatalf("CreateSession() failed: %v", err)
+	}
+	replacements := []*model.AuthSession{
+		{UserID: user.ID, RefreshTokenHash: "7c6f0f2ef50cb495fb3de546f5fb9a517b44c52ab9ae19f9bf4c8df5e86dba6e", ExpiresAt: now.Add(2 * time.Hour)},
+		{UserID: user.ID, RefreshTokenHash: "8c6f0f2ef50cb495fb3de546f5fb9a517b44c52ab9ae19f9bf4c8df5e86dba6e", ExpiresAt: now.Add(2 * time.Hour)},
+	}
+
+	start := make(chan struct{})
+	errorsByCall := make(chan error, len(replacements))
+	var ready sync.WaitGroup
+	ready.Add(len(replacements))
+	for _, replacement := range replacements {
+		replacement := replacement
+		go func() {
+			ready.Done()
+			<-start
+			errorsByCall <- repo.RotateSession(ctx, oldSession.ID, now, replacement)
+		}()
+	}
+	ready.Wait()
+	close(start)
+
+	var successes, notFound int
+	for range replacements {
+		err := <-errorsByCall
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			notFound++
+		default:
+			t.Fatalf("unexpected rotation error: %v", err)
+		}
+	}
+	if successes != 1 || notFound != 1 {
+		t.Fatalf("expected one success and one not found, got success=%d not_found=%d", successes, notFound)
+	}
+
+	var sessionCount int64
+	if err := db.Model(&model.AuthSession{}).Count(&sessionCount).Error; err != nil {
+		t.Fatalf("failed to count sessions: %v", err)
+	}
+	if sessionCount != 2 {
+		t.Fatalf("expected old session plus one replacement, got %d rows", sessionCount)
 	}
 }

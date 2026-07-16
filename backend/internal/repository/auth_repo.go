@@ -51,13 +51,17 @@ func (r *AuthRepository) FindUserByID(ctx context.Context, id string) (*model.Us
 }
 
 func (r *AuthRepository) CreateSession(ctx context.Context, session *model.AuthSession) error {
+	prepareAuthSession(session, time.Now().UTC())
+	return r.db.WithContext(ctx).Create(session).Error
+}
+
+func prepareAuthSession(session *model.AuthSession, now time.Time) {
 	if session.ID == "" {
 		session.ID = uuid.NewString()
 	}
 	if session.LastUsedAt.IsZero() {
-		session.LastUsedAt = time.Now().UTC()
+		session.LastUsedAt = now
 	}
-	return r.db.WithContext(ctx).Create(session).Error
 }
 
 // FindActiveSessionByID returns only a non-revoked, unexpired refresh session.
@@ -89,6 +93,34 @@ func (r *AuthRepository) RevokeSession(ctx context.Context, id string, revokedAt
 		return gorm.ErrRecordNotFound
 	}
 	return nil
+}
+
+// RotateSession atomically consumes one active refresh session and creates its
+// replacement. A failed replacement insert rolls back the old-session revoke.
+// Concurrent consumers cannot both pass the guarded update.
+func (r *AuthRepository) RotateSession(
+	ctx context.Context,
+	currentSessionID string,
+	now time.Time,
+	replacement *model.AuthSession,
+) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.AuthSession{}).
+			Where("id = ? AND revoked_at IS NULL AND expires_at > ?", currentSessionID, now).
+			Updates(map[string]any{
+				"revoked_at":   now,
+				"last_used_at": now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		prepareAuthSession(replacement, now)
+		return tx.Create(replacement).Error
+	})
 }
 
 func (r *AuthRepository) DeleteExpiredSessions(ctx context.Context, now time.Time) (int64, error) {
