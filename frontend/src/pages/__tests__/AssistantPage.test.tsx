@@ -43,15 +43,20 @@ describe('AssistantPage', () => {
 
   it('renders the input field', () => {
     renderPage()
-    expect(screen.getByPlaceholderText('告诉智能助手你想完成什么…')).toBeInTheDocument()
+    const input = screen.getByRole('textbox', { name: '智能助手消息' })
+    expect(input).toHaveAttribute('rows', '2')
+    expect(input).toHaveClass('assistant-composer__input')
   })
 
   it('sends with the shared session and clears history', async () => {
     const user = userEvent.setup()
     const { session } = renderPage()
     await user.type(screen.getByPlaceholderText('告诉智能助手你想完成什么…'), '规划今日任务')
+    const input = screen.getByRole('textbox', { name: '智能助手消息' })
+    input.style.height = '240px'
     await user.click(screen.getByRole('button', { name: '发送消息' }))
     expect(session.send).toHaveBeenCalledWith('规划今日任务')
+    expect(input.style.height).toBe('56px')
     await user.click(screen.getByRole('button', { name: '清空对话' }))
     expect(session.clear).toHaveBeenCalledTimes(1)
   })

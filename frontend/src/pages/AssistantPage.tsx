@@ -4,6 +4,7 @@ import { useAgentSessionContext } from '../features/agent/agent-session-context'
 import { getAgentStatusPresentation, getTodoToolPresentation } from '../features/agent/agent-status'
 import { formatAgentMessageTime } from '../features/agent/agent-display'
 import { getAgentScrollRevision, useAgentAutoScroll } from '../features/agent/useAgentAutoScroll'
+import { useExpandableTextarea } from '../features/agent/useExpandableTextarea'
 import { useShell } from '../features/shell/shell-context'
 import { Button } from '../shared/ui/Button'
 
@@ -12,6 +13,7 @@ export default function AssistantPage() {
   const { agentExpanded, setAgentExpanded } = useShell()
   const restoreExpanded = useRef(agentExpanded)
   const [draft, setDraft] = useState('')
+  const composer = useExpandableTextarea(draft)
   const [clearError, setClearError] = useState('')
   const agentStatus = getAgentStatusPresentation(session.status, session.steps)
   const todoStatus = getTodoToolPresentation(session.steps)
@@ -30,7 +32,10 @@ export default function AssistantPage() {
     event.preventDefault()
     const message = draft.trim()
     if (!message || !session.canSend) return
-    if (session.send(message)) setDraft('')
+    if (session.send(message)) {
+      setDraft('')
+      composer.reset()
+    }
   }
 
   async function clear() {
@@ -72,7 +77,18 @@ export default function AssistantPage() {
           <div ref={endRef} />
         </div>
         <form className="assistant-composer" onSubmit={submit}>
-          <textarea aria-label="智能助手消息" value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="告诉智能助手你想完成什么…" rows={4} disabled={!session.canSend} />
+          <textarea
+            ref={composer.ref}
+            className="assistant-composer__input"
+            aria-label="智能助手消息"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onPointerDown={composer.onPointerDown}
+            onPointerUp={composer.onPointerUp}
+            placeholder="告诉智能助手你想完成什么…"
+            rows={2}
+            disabled={!session.canSend}
+          />
           <footer><span>Agent 会展示调用工具与等待结果的全过程</span><Button type="submit" disabled={!draft.trim() || !session.canSend} aria-label="发送消息">发送 <span aria-hidden="true">↗</span></Button></footer>
         </form>
       </section>
