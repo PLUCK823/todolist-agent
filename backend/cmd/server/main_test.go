@@ -7,16 +7,16 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 )
 
 func setupIntegrationApp(t *testing.T) *httptest.Server {
 	t.Helper()
 
-	os.Setenv("DB_DRIVER", "sqlite")
-	os.Setenv("DB_DSN", ":memory:")
-	os.Setenv("GIN_MODE", "test")
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("DB_DSN", ":memory:")
+	t.Setenv("GIN_MODE", "test")
+	t.Setenv("AUTH_JWT_SECRET", "integration-test-secret-at-least-32-bytes")
 
 	router, _, err := SetupApp()
 	if err != nil {
@@ -208,9 +208,10 @@ func TestIntegration_CompleteAndUncomplete(t *testing.T) {
 
 func TestIntegration_SetupAppFailure(t *testing.T) {
 	// Test with unsupported driver
-	os.Setenv("DB_DRIVER", "mysql")
-	os.Setenv("DB_DSN", "invalid")
-	os.Setenv("GIN_MODE", "test")
+	t.Setenv("DB_DRIVER", "mysql")
+	t.Setenv("DB_DSN", "invalid")
+	t.Setenv("GIN_MODE", "test")
+	t.Setenv("AUTH_JWT_SECRET", "integration-test-secret-at-least-32-bytes")
 
 	router, logger, err := SetupApp()
 	if router != nil {
@@ -220,4 +221,31 @@ func TestIntegration_SetupAppFailure(t *testing.T) {
 		t.Error("expected error for unsupported driver")
 	}
 	_ = logger
+}
+
+func TestIntegration_AuthRejectsWeakJWTSecret(t *testing.T) {
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("DB_DSN", ":memory:")
+	t.Setenv("GIN_MODE", "test")
+	t.Setenv("AUTH_JWT_SECRET", "short")
+
+	router, logger, err := SetupApp()
+	if err == nil || router != nil {
+		t.Fatalf("expected weak AUTH_JWT_SECRET startup failure, router=%v err=%v", router, err)
+	}
+	if logger != nil {
+		_ = logger.Sync()
+	}
+}
+
+func TestIntegration_AuthRoutesAreWired(t *testing.T) {
+	ts := setupIntegrationApp(t)
+	defer ts.Close()
+
+	register := doRequest(ts, http.MethodPost, "/api/auth/register", bytes.NewBufferString(`{"name":"A","email":"a@example.com","password":"password8"}`))
+	if register.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(register.Body)
+		register.Body.Close()
+		t.Fatalf("expected auth registration 201, got %d: %s", register.StatusCode, body)
+	}
 }

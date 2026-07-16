@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
     id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     email           CITEXT       UNIQUE NOT NULL,
     display_name    VARCHAR(120) NOT NULL,
+    timezone        VARCHAR(100) NOT NULL DEFAULT 'Asia/Shanghai (UTC+8)',
     password_hash   TEXT         NOT NULL,
     created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()

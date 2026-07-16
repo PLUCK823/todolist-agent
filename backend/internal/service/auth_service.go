@@ -49,6 +49,9 @@ type AuthRepository interface {
 	CreateUser(context.Context, *model.User) error
 	FindUserByEmail(context.Context, string) (*model.User, error)
 	FindUserByID(context.Context, string) (*model.User, error)
+	UpdateUserProfile(context.Context, string, string, string, string) (*model.User, error)
+	CountTodos(context.Context) (int64, error)
+	CountAgentSessions(context.Context, string) (int64, error)
 	CreateSession(context.Context, *model.AuthSession) error
 	FindActiveSessionByID(context.Context, string, time.Time) (*model.AuthSession, error)
 	RotateSession(context.Context, string, time.Time, *model.AuthSession) error
@@ -76,6 +79,27 @@ type RegisterRequest struct {
 	Name     string
 	Email    string
 	Password string
+}
+
+type AccountUpdateRequest struct {
+	Name     *string
+	Email    *string
+	Timezone *string
+}
+
+type AvatarPreset struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
+type Account struct {
+	ID                string       `json:"id"`
+	Name              string       `json:"name"`
+	Email             string       `json:"email"`
+	Timezone          string       `json:"timezone"`
+	Avatar            AvatarPreset `json:"avatar"`
+	TaskCount         int64        `json:"taskCount"`
+	AgentSessionCount int64        `json:"agentSessionCount"`
 }
 
 type AuthResult struct {
@@ -154,6 +178,9 @@ func parsePasswordHash(encoded string) (PasswordParams, []byte, []byte, bool) {
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &iterations, &parallelism); err != nil {
 		return params, nil, nil, false
 	}
+	if parts[3] != fmt.Sprintf("m=%d,t=%d,p=%d", memory, iterations, parallelism) {
+		return params, nil, nil, false
+	}
 	salt, err := base64.RawStdEncoding.Strict().DecodeString(parts[4])
 	if err != nil {
 		return params, nil, nil, false
@@ -192,7 +219,7 @@ func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*model
 	if err != nil {
 		return nil, err
 	}
-	user := &model.User{ID: uuid.NewString(), Email: email, DisplayName: name, PasswordHash: hash}
+	user := &model.User{ID: uuid.NewString(), Email: email, DisplayName: name, Timezone: "Asia/Shanghai (UTC+8)", PasswordHash: hash}
 	if err := s.repo.CreateUser(ctx, user); err != nil {
 		if isDuplicateError(err) {
 			return nil, ErrEmailExists
@@ -200,6 +227,76 @@ func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*model
 		return nil, fmt.Errorf("%w: create user: %v", ErrAuthenticationStore, err)
 	}
 	return user, nil
+}
+
+func (s *AuthService) GetAccount(ctx context.Context, userID string) (*Account, error) {
+	user, err := s.repo.FindUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("%w: find account: %v", ErrAuthenticationStore, err)
+	}
+	return s.accountFromUser(ctx, user)
+}
+
+func (s *AuthService) UpdateAccount(ctx context.Context, userID string, req AccountUpdateRequest) (*Account, error) {
+	user, err := s.repo.FindUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("%w: find account: %v", ErrAuthenticationStore, err)
+	}
+	if req.Name == nil && req.Email == nil && req.Timezone == nil {
+		return nil, ErrInvalidInput
+	}
+	name, email, timezone := user.DisplayName, user.Email, user.Timezone
+	if req.Name != nil {
+		name = strings.TrimSpace(*req.Name)
+	}
+	if req.Email != nil {
+		email = strings.ToLower(strings.TrimSpace(*req.Email))
+	}
+	if req.Timezone != nil {
+		timezone = strings.TrimSpace(*req.Timezone)
+	}
+	if len([]rune(name)) < 1 || len([]rune(name)) > 120 || !validEmail(email) || len([]rune(timezone)) < 1 || len([]rune(timezone)) > 100 {
+		return nil, ErrInvalidInput
+	}
+	if email != user.Email {
+		existing, findErr := s.repo.FindUserByEmail(ctx, email)
+		if findErr == nil && existing.ID != user.ID {
+			return nil, ErrEmailExists
+		}
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("%w: check email: %v", ErrAuthenticationStore, findErr)
+		}
+	}
+	updated, err := s.repo.UpdateUserProfile(ctx, user.ID, name, email, timezone)
+	if err != nil {
+		if isDuplicateError(err) {
+			return nil, ErrEmailExists
+		}
+		return nil, fmt.Errorf("%w: update account: %v", ErrAuthenticationStore, err)
+	}
+	return s.accountFromUser(ctx, updated)
+}
+
+func (s *AuthService) accountFromUser(ctx context.Context, user *model.User) (*Account, error) {
+	taskCount, err := s.repo.CountTodos(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: count todos: %v", ErrAuthenticationStore, err)
+	}
+	agentSessionCount, err := s.repo.CountAgentSessions(ctx, user.ID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: count agent sessions: %v", ErrAuthenticationStore, err)
+	}
+	return &Account{
+		ID: user.ID, Name: user.DisplayName, Email: user.Email, Timezone: user.Timezone,
+		Avatar:    AvatarPreset{Kind: "preset", Value: "amber"},
+		TaskCount: taskCount, AgentSessionCount: agentSessionCount,
+	}, nil
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthResult, error) {

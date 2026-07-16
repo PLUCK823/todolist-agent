@@ -59,6 +59,10 @@ func TestPasswordRoundTripAndMalformedHash(t *testing.T) {
 			t.Fatalf("VerifyPassword() accepted malformed hash %q", malformed)
 		}
 	}
+	tamperedParameters := strings.Replace(hash, "$m=65536,t=3,p=2$", "$m=65536,t=3,p=2garbage$", 1)
+	if service.VerifyPassword(tamperedParameters, password) {
+		t.Fatal("VerifyPassword() accepted a PHC string with trailing parameter garbage")
+	}
 }
 
 func TestAuthServiceRejectsShortJWTSecret(t *testing.T) {
@@ -70,7 +74,7 @@ func TestAuthServiceRejectsShortJWTSecret(t *testing.T) {
 
 func TestAuthServiceRegisterLoginClaimsAndRefreshRotation(t *testing.T) {
 	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
-	svc, _ := newAuthService(t, now)
+	svc, repo := newAuthService(t, now)
 	ctx := context.Background()
 
 	user, err := svc.Register(ctx, service.RegisterRequest{
@@ -96,6 +100,17 @@ func TestAuthServiceRegisterLoginClaimsAndRefreshRotation(t *testing.T) {
 	}
 	if _, err := uuid.Parse(parts[0]); err != nil {
 		t.Fatalf("refresh token session ID is not a UUID: %v", err)
+	}
+	persisted, err := repo.FindActiveSessionByID(ctx, parts[0], now)
+	if err != nil {
+		t.Fatalf("FindActiveSessionByID() failed: %v", err)
+	}
+	if len(persisted.RefreshTokenHash) != 64 || strings.Contains(result.RefreshToken, persisted.RefreshTokenHash) || strings.Contains(persisted.RefreshTokenHash, parts[1]) {
+		t.Fatalf("refresh credential was not persisted as an isolated SHA-256 digest")
+	}
+	wrongSecret := parts[0] + "." + strings.Repeat("A", 43)
+	if _, err := svc.Refresh(ctx, wrongSecret); !errors.Is(err, service.ErrInvalidCredentials) {
+		t.Fatalf("Refresh() accepted a wrong secret for a valid session UUID: %v", err)
 	}
 
 	claims, err := svc.ValidateAccess(result.AccessToken)

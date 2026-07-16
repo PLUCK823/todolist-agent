@@ -52,6 +52,8 @@ services:
       AUTH_ACCESS_COOKIE: ${AUTH_ACCESS_COOKIE:-todolist_access}
       AUTH_REFRESH_COOKIE: ${AUTH_REFRESH_COOKIE:-todolist_refresh}
       AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-http://localhost:3000}
+      AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      AUTH_COOKIE_DOMAIN: ${AUTH_COOKIE_DOMAIN:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/api/health"]

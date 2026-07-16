@@ -8,6 +8,7 @@ type User struct {
 	ID           string    `gorm:"type:uuid;primaryKey" json:"id"`
 	Email        string    `gorm:"type:citext;uniqueIndex;not null" json:"email"`
 	DisplayName  string    `gorm:"size:120;not null" json:"name"`
+	Timezone     string    `gorm:"size:100;not null" json:"timezone"`
 	PasswordHash string    `gorm:"not null" json:"-"`
 	CreatedAt    time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"autoUpdateTime" json:"updated_at"`

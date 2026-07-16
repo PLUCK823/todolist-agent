@@ -22,10 +22,16 @@ import (
 )
 
 func initConfig() {
+	viper.Reset()
 	viper.SetDefault("SERVER_PORT", "8080")
 	viper.SetDefault("DB_DRIVER", "postgres")
 	viper.SetDefault("DB_DSN", "host=localhost user=todolist password=todolist123 dbname=todolist port=5432 sslmode=disable TimeZone=Asia/Shanghai")
 	viper.SetDefault("GIN_MODE", "release")
+	viper.SetDefault("AUTH_ACCESS_COOKIE", "todolist_access")
+	viper.SetDefault("AUTH_REFRESH_COOKIE", "todolist_refresh")
+	viper.SetDefault("AUTH_ALLOWED_ORIGINS", "http://localhost:3000")
+	viper.SetDefault("AUTH_COOKIE_SECURE", false)
+	viper.SetDefault("AUTH_COOKIE_DOMAIN", "")
 
 	viper.AutomaticEnv()
 
@@ -37,9 +43,6 @@ func initConfig() {
 	}
 	if v := os.Getenv("DB_DSN"); v != "" {
 		viper.Set("DB_DSN", v)
-	}
-	if v := os.Getenv("GIN_MODE"); v != "" {
-		viper.Set("GIN_MODE", v)
 	}
 
 	gin.SetMode(viper.GetString("GIN_MODE"))
@@ -57,6 +60,10 @@ func SetupApp() (*gin.Engine, *zap.Logger, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to initialize logger: %w", err)
 	}
+	jwtSecret := viper.GetString("AUTH_JWT_SECRET")
+	if len([]byte(jwtSecret)) < 32 {
+		return nil, logger, service.ErrWeakJWTSecret
+	}
 
 	db, err := database.InitDB(database.Config{
 		Driver: viper.GetString("DB_DRIVER"),
@@ -70,12 +77,24 @@ func SetupApp() (*gin.Engine, *zap.Logger, error) {
 
 	todoRepo := repository.NewTodoRepository(db)
 	todoSvc := service.NewTodoService(todoRepo)
+	authRepo := repository.NewAuthRepository(db)
+	authSvc, err := service.NewAuthService(authRepo, service.AuthConfig{JWTSecret: []byte(jwtSecret)})
+	if err != nil {
+		return nil, logger, fmt.Errorf("initialize authentication service: %w", err)
+	}
+	authHandler := handler.NewAuthHandler(authSvc, handler.CookieConfig{
+		AccessName:  viper.GetString("AUTH_ACCESS_COOKIE"),
+		RefreshName: viper.GetString("AUTH_REFRESH_COOKIE"),
+		Secure:      viper.GetBool("AUTH_COOKIE_SECURE"),
+		Domain:      viper.GetString("AUTH_COOKIE_DOMAIN"),
+	})
 
 	router := gin.New()
 	router.Use(middleware.CORS())
 	router.Use(middleware.Logger(logger))
 	router.Use(gin.Recovery())
 	handler.RegisterRoutes(router, todoSvc)
+	handler.RegisterAuthRoutes(router, authHandler, viper.GetString("AUTH_ALLOWED_ORIGINS"))
 
 	return router, logger, nil
 }
