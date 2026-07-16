@@ -36,8 +36,8 @@ func InitDB(cfg Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	if err := db.AutoMigrate(&model.Todo{}); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	if err := db.AutoMigrate(&model.Todo{}, &model.User{}, &model.AuthSession{}); err != nil {
+		return nil, fmt.Errorf("failed to migrate database models Todo, User, AuthSession: %w", err)
 	}
 
 	log.Printf("Database connected with driver: %s", cfg.Driver)

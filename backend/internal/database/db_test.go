@@ -56,6 +56,19 @@ func TestInitDB_CreatesDueDateIDCompositeIndex(t *testing.T) {
 	t.Fatal("expected id to remain the primary key")
 }
 
+func TestInitDBMigratesAuthModels(t *testing.T) {
+	db, err := InitDB(Config{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB() failed: %v", err)
+	}
+
+	for _, table := range []string{"users", "auth_sessions"} {
+		if !db.Migrator().HasTable(table) {
+			t.Errorf("expected %s table to exist", table)
+		}
+	}
+}
+
 func TestInitDB_UnsupportedDriver(t *testing.T) {
 	_, err := InitDB(Config{
 		Driver: "mysql",

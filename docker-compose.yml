@@ -48,6 +48,10 @@ services:
       DB_DSN: "host=postgres port=5432 user=${POSTGRES_USER:-todolist} password=${POSTGRES_PASSWORD:-changeme} dbname=${POSTGRES_DB:-todolist} sslmode=disable TimeZone=Asia/Shanghai"
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET is required}
+      AUTH_ACCESS_COOKIE: ${AUTH_ACCESS_COOKIE:-todolist_access}
+      AUTH_REFRESH_COOKIE: ${AUTH_REFRESH_COOKIE:-todolist_refresh}
+      AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-http://localhost:3000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/api/health"]
@@ -66,8 +70,15 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
       BACKEND_URL: http://backend:8080/api
+      DATABASE_URL: postgresql://${POSTGRES_USER:-todolist}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-todolist}
+      AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET is required}
+      AUTH_ACCESS_COOKIE: ${AUTH_ACCESS_COOKIE:-todolist_access}
+      AUTH_REFRESH_COOKIE: ${AUTH_REFRESH_COOKIE:-todolist_refresh}
+      AUTH_ALLOWED_ORIGINS: ${AUTH_ALLOWED_ORIGINS:-http://localhost:3000}
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-gpt-4o}

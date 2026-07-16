@@ -1,34 +1,12 @@
--- Agent TodoList fresh-database schema.
--- Existing installations must apply scripts/migrate.sql instead.
+-- Idempotent migration for an existing Agent TodoList PostgreSQL database.
+-- The legacy conversations table is removed only after every replacement table
+-- and index has been created successfully in the same transaction.
 
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+BEGIN;
+
 CREATE EXTENSION IF NOT EXISTS citext;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- ==========================================
--- 1. todos — tasks
--- ==========================================
-CREATE TABLE IF NOT EXISTS todos (
-    id          BIGSERIAL       PRIMARY KEY,
-    title       VARCHAR(200)    NOT NULL,
-    description TEXT            DEFAULT '',
-    priority    VARCHAR(10)     NOT NULL DEFAULT 'medium'
-                                CHECK (priority IN ('high', 'medium', 'low')),
-    completed   BOOLEAN         NOT NULL DEFAULT false,
-    due_date    TIMESTAMPTZ,
-    created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_todos_completed ON todos(completed);
-CREATE INDEX IF NOT EXISTS idx_todos_priority ON todos(priority);
-CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
-CREATE INDEX IF NOT EXISTS idx_todos_created_at ON todos(created_at);
-CREATE INDEX IF NOT EXISTS idx_todos_title_trgm ON todos USING GIN (title gin_trgm_ops);
-
--- ==========================================
--- 2. users and revocable refresh sessions
--- ==========================================
 CREATE TABLE IF NOT EXISTS users (
     id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     email           CITEXT       UNIQUE NOT NULL,
@@ -55,9 +33,6 @@ CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires_at
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_active_user
     ON auth_sessions(user_id, expires_at DESC) WHERE revoked_at IS NULL;
 
--- ==========================================
--- 3. durable, user-owned Agent history
--- ==========================================
 CREATE TABLE IF NOT EXISTS agent_sessions (
     id                UUID         PRIMARY KEY,
     owner_id          UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -145,3 +120,7 @@ CREATE TABLE IF NOT EXISTS agent_steps (
 
 CREATE INDEX IF NOT EXISTS idx_agent_steps_turn_started
     ON agent_steps(turn_id, started_at);
+
+DROP TABLE IF EXISTS conversations;
+
+COMMIT;
