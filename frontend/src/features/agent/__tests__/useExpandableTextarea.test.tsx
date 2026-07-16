@@ -5,17 +5,22 @@ import { useExpandableTextarea } from '../useExpandableTextarea'
 
 function Harness() {
   const [value, setValue] = useState('')
-  const sizing = useExpandableTextarea(value)
+  const {
+    ref,
+    reset,
+    onPointerDown,
+    onPointerUp,
+  } = useExpandableTextarea(value)
   return <>
     <textarea
-      ref={sizing.ref}
+      ref={ref}
       aria-label="sized"
       value={value}
       onChange={(event) => setValue(event.target.value)}
-      onPointerDown={sizing.onPointerDown}
-      onPointerUp={sizing.onPointerUp}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
     />
-    <button type="button" onClick={sizing.reset}>reset</button>
+    <button type="button" onClick={reset}>reset</button>
   </>
 }
 

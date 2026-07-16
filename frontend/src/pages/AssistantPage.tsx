@@ -13,7 +13,12 @@ export default function AssistantPage() {
   const { agentExpanded, setAgentExpanded } = useShell()
   const restoreExpanded = useRef(agentExpanded)
   const [draft, setDraft] = useState('')
-  const composer = useExpandableTextarea(draft)
+  const {
+    ref: composerRef,
+    reset: resetComposer,
+    onPointerDown: handleComposerPointerDown,
+    onPointerUp: handleComposerPointerUp,
+  } = useExpandableTextarea(draft)
   const [clearError, setClearError] = useState('')
   const agentStatus = getAgentStatusPresentation(session.status, session.steps)
   const todoStatus = getTodoToolPresentation(session.steps)
@@ -34,7 +39,7 @@ export default function AssistantPage() {
     if (!message || !session.canSend) return
     if (session.send(message)) {
       setDraft('')
-      composer.reset()
+      resetComposer()
     }
   }
 
@@ -78,13 +83,13 @@ export default function AssistantPage() {
         </div>
         <form className="assistant-composer" onSubmit={submit}>
           <textarea
-            ref={composer.ref}
+            ref={composerRef}
             className="assistant-composer__input"
             aria-label="智能助手消息"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            onPointerDown={composer.onPointerDown}
-            onPointerUp={composer.onPointerUp}
+            onPointerDown={handleComposerPointerDown}
+            onPointerUp={handleComposerPointerUp}
             placeholder="告诉智能助手你想完成什么…"
             rows={2}
             disabled={!session.canSend}
