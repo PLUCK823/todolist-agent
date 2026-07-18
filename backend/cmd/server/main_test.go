@@ -252,6 +252,22 @@ func TestIntegration_AuthRejectsWeakJWTSecret(t *testing.T) {
 	}
 }
 
+func TestIntegration_AuthRejectsInvalidTrustedProxyCIDR(t *testing.T) {
+	t.Setenv("DB_DRIVER", "sqlite")
+	t.Setenv("DB_DSN", ":memory:")
+	t.Setenv("GIN_MODE", "test")
+	t.Setenv("AUTH_JWT_SECRET", "integration-test-secret-at-least-32-bytes")
+	t.Setenv("AUTH_TRUSTED_PROXY_CIDRS", "not-a-cidr")
+
+	router, logger, err := SetupApp()
+	if err == nil || router != nil {
+		t.Fatalf("expected invalid proxy CIDR startup failure, router=%v err=%v", router, err)
+	}
+	if logger != nil {
+		_ = logger.Sync()
+	}
+}
+
 func TestIntegration_AuthRoutesAreWired(t *testing.T) {
 	ts := setupIntegrationApp(t)
 	defer ts.Close()

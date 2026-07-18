@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,7 +20,7 @@ type Principal struct {
 }
 
 type AccessValidator interface {
-	ValidateAccess(string) (*service.AccessClaims, error)
+	ValidateAccess(context.Context, string) (*service.AccessClaims, error)
 }
 
 func Authenticate(accessCookieName string, validator AccessValidator) gin.HandlerFunc {
@@ -28,14 +30,24 @@ func Authenticate(accessCookieName string, validator AccessValidator) gin.Handle
 			unauthorized(c)
 			return
 		}
-		claims, err := validator.ValidateAccess(raw)
+		claims, err := validator.ValidateAccess(c.Request.Context(), raw)
 		if err != nil {
+			if errors.Is(err, service.ErrAuthenticationStore) {
+				authUnavailable(c)
+				return
+			}
 			unauthorized(c)
 			return
 		}
 		c.Set(PrincipalKey, Principal{UserID: claims.Subject, SessionID: claims.SessionID})
 		c.Next()
 	}
+}
+
+func authUnavailable(c *gin.Context) {
+	c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+		"code": 50301, "message": "认证服务暂时不可用", "data": nil,
+	})
 }
 
 func PrincipalFromContext(c *gin.Context) (Principal, bool) {

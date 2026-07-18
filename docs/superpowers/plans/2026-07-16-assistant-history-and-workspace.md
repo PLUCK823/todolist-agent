@@ -466,7 +466,7 @@ git push origin codex/assistant-history-workspace
 
 - [ ] **Step 1: Write JWT, Origin and ownership tests**
 
-Cover no Cookie `401`, expired JWT `401`, non-HS256 rejection, bad Origin `403`, valid owner list/detail, cross-owner detail/rename/delete `404`, grouped ordered list, title validation, and deletion callback invocation.
+Cover no Cookie `401`, expired JWT `401`, non-HS256 rejection, revoked/rotated `auth_sessions` access Cookie `401`, bad Origin `403`, valid owner list/detail, cross-owner detail/rename/delete `404`, grouped ordered list, title validation, and deletion callback invocation.
 
 - [ ] **Step 2: Verify RED**
 
@@ -486,6 +486,11 @@ def decode_access_cookie(request: Request, settings: AuthSettings) -> AuthPrinci
     payload = jwt.decode(token, settings.secret, algorithms=["HS256"], issuer="todolist-backend")
     return AuthPrincipal(user_id=UUID(payload["sub"]), session_id=UUID(payload["sid"]))
 ```
+
+After signature validation, query `auth_sessions` by `sid`; accept it only when
+it is active, unexpired, and owned by `sub`. This must mirror the Backend
+access-session check so refresh/logout immediately invalidates old Browser
+Cookies for Agent HTTP and WebSocket routes too.
 
 For WebSockets, close with `4401` for auth failure and `4403` for Origin/ownership failure before reading a client frame.
 

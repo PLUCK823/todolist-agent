@@ -37,6 +37,7 @@ func initConfig() {
 	viper.SetDefault("AUTH_LOGIN_ACCOUNT_LIMIT", 10)
 	viper.SetDefault("AUTH_LOGIN_RATE_WINDOW_SECONDS", 60)
 	viper.SetDefault("AUTH_LOGIN_RATE_CAPACITY", 4096)
+	viper.SetDefault("AUTH_TRUSTED_PROXY_CIDRS", "")
 
 	viper.AutomaticEnv()
 
@@ -69,6 +70,10 @@ func SetupApp() (*gin.Engine, *zap.Logger, error) {
 	if len([]byte(jwtSecret)) < 32 {
 		return nil, logger, service.ErrWeakJWTSecret
 	}
+	clientIPResolver, err := handler.NewTrustedProxyClientIPResolver(viper.GetString("AUTH_TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, logger, fmt.Errorf("configure trusted proxy CIDRs: %w", err)
+	}
 
 	db, err := database.InitDB(database.Config{
 		Driver: viper.GetString("DB_DRIVER"),
@@ -94,12 +99,12 @@ func SetupApp() (*gin.Engine, *zap.Logger, error) {
 	if err != nil {
 		return nil, logger, fmt.Errorf("initialize authentication service: %w", err)
 	}
-	authHandler := handler.NewAuthHandler(authSvc, handler.CookieConfig{
+	authHandler := handler.NewAuthHandlerWithOptions(authSvc, handler.CookieConfig{
 		AccessName:  viper.GetString("AUTH_ACCESS_COOKIE"),
 		RefreshName: viper.GetString("AUTH_REFRESH_COOKIE"),
 		Secure:      viper.GetBool("AUTH_COOKIE_SECURE"),
 		Domain:      viper.GetString("AUTH_COOKIE_DOMAIN"),
-	})
+	}, handler.AuthHandlerOptions{ClientIPResolver: clientIPResolver})
 
 	router := gin.New()
 	router.Use(middleware.CORS())

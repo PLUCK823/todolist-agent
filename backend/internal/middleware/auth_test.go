@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,15 +14,15 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-type accessValidatorFunc func(string) (*service.AccessClaims, error)
+type accessValidatorFunc func(context.Context, string) (*service.AccessClaims, error)
 
-func (fn accessValidatorFunc) ValidateAccess(token string) (*service.AccessClaims, error) {
-	return fn(token)
+func (fn accessValidatorFunc) ValidateAccess(ctx context.Context, token string) (*service.AccessClaims, error) {
+	return fn(ctx, token)
 }
 
 func TestAuthMiddlewareRequiresValidAccessCookieAndStoresPrincipal(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	validator := accessValidatorFunc(func(token string) (*service.AccessClaims, error) {
+	validator := accessValidatorFunc(func(_ context.Context, token string) (*service.AccessClaims, error) {
 		if token != "valid-access" {
 			return nil, service.ErrInvalidAccessToken
 		}
@@ -58,6 +59,22 @@ func TestAuthMiddlewareRequiresValidAccessCookieAndStoresPrincipal(t *testing.T)
 	router.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusOK || recorder.Body.String() != `{"userID":"user-id","sessionID":"session-id"}` {
 		t.Fatalf("unexpected authenticated response %d %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAuthMiddlewareMapsSessionStoreFailuresToServiceUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(middleware.Authenticate("access", accessValidatorFunc(func(context.Context, string) (*service.AccessClaims, error) {
+		return nil, service.ErrAuthenticationStore
+	})))
+	router.GET("/private", func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/private", nil)
+	req.AddCookie(&http.Cookie{Name: "access", Value: "validly-shaped-token"})
+	router.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Body.String() != `{"code":50301,"data":null,"message":"认证服务暂时不可用"}` {
+		t.Fatalf("unexpected store failure response %d %s", recorder.Code, recorder.Body.String())
 	}
 }
 

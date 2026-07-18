@@ -468,7 +468,7 @@ func TestAuthServiceRegisterLoginClaimsAndRefreshRotation(t *testing.T) {
 		t.Fatalf("Refresh() accepted a wrong secret for a valid session UUID: %v", err)
 	}
 
-	claims, err := svc.ValidateAccess(result.AccessToken)
+	claims, err := svc.ValidateAccess(ctx, result.AccessToken)
 	if err != nil {
 		t.Fatalf("ValidateAccess() failed: %v", err)
 	}
@@ -492,7 +492,7 @@ func TestAuthServiceRegisterLoginClaimsAndRefreshRotation(t *testing.T) {
 	if _, err := svc.Refresh(ctx, result.RefreshToken); !errors.Is(err, service.ErrInvalidCredentials) {
 		t.Fatalf("old refresh credential was reusable: %v", err)
 	}
-	if _, err := svc.ValidateAccess(rotated.AccessToken); err != nil {
+	if _, err := svc.ValidateAccess(ctx, rotated.AccessToken); err != nil {
 		t.Fatalf("rotated access token failed validation: %v", err)
 	}
 }
@@ -546,7 +546,7 @@ func TestAuthServiceRejectsExpiredWrongIssuerAndNonHS256AccessTokens(t *testing.
 		"future issued-at":  sign(jwt.SigningMethodHS256, futureIssuedAt),
 		"none alg":          sign(jwt.SigningMethodNone, base),
 	} {
-		if _, err := svc.ValidateAccess(token); err == nil {
+		if _, err := svc.ValidateAccess(context.Background(), token); err == nil {
 			t.Fatalf("ValidateAccess() accepted %s token", name)
 		}
 	}

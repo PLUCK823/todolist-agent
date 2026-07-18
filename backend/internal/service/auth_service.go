@@ -569,7 +569,7 @@ func (s *AuthService) Logout(ctx context.Context, refreshToken string) error {
 	return nil
 }
 
-func (s *AuthService) ValidateAccess(raw string) (*AccessClaims, error) {
+func (s *AuthService) ValidateAccess(ctx context.Context, raw string) (*AccessClaims, error) {
 	claims := &AccessClaims{}
 	token, err := jwt.ParseWithClaims(raw, claims, func(token *jwt.Token) (any, error) {
 		if token.Method != jwt.SigningMethodHS256 {
@@ -584,6 +584,19 @@ func (s *AuthService) ValidateAccess(raw string) (*AccessClaims, error) {
 		return nil, ErrInvalidAccessToken
 	}
 	if _, err := uuid.Parse(claims.SessionID); err != nil {
+		return nil, ErrInvalidAccessToken
+	}
+	// Session state is part of access-token validity. The Agent's Task 6
+	// authentication path must perform this same active-session/owner lookup
+	// after validating the JWT signature before it accepts a browser Cookie.
+	session, err := s.repo.FindActiveSessionByID(ctx, claims.SessionID, s.now().UTC())
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrInvalidAccessToken
+		}
+		return nil, fmt.Errorf("%w: find access session: %v", ErrAuthenticationStore, err)
+	}
+	if session.UserID != claims.Subject {
 		return nil, ErrInvalidAccessToken
 	}
 	return claims, nil

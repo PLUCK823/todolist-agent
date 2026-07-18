@@ -182,7 +182,7 @@ func TestAuthRegisterDuplicateAndLoginBadPasswordUseSafeErrors(t *testing.T) {
 
 func TestAuthRefreshRotatesAtomicallyAndOldCookieCannotBeReused(t *testing.T) {
 	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "todolist_access", RefreshName: "todolist_refresh"})
-	_, _, oldRefresh := registerAndLogin(t, fixture, "Alice", "alice@example.com")
+	_, oldAccess, oldRefresh := registerAndLogin(t, fixture, "Alice", "alice@example.com")
 	rotated := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "http://localhost:3000", oldRefresh)
 	if rotated.Code != http.StatusOK {
 		t.Fatalf("refresh failed: %d %s", rotated.Code, rotated.Body.String())
@@ -194,6 +194,9 @@ func TestAuthRefreshRotatesAtomicallyAndOldCookieCannotBeReused(t *testing.T) {
 	}
 	if reused := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "http://localhost:3000", oldRefresh); reused.Code != http.StatusUnauthorized {
 		t.Fatalf("old refresh Cookie was reusable: %d %s", reused.Code, reused.Body.String())
+	}
+	if replayed := jsonCall(fixture.router, http.MethodGet, "/api/auth/me", "", "", oldAccess); replayed.Code != http.StatusUnauthorized {
+		t.Fatalf("old access remained valid after refresh: %d %s", replayed.Code, replayed.Body.String())
 	}
 	if me := jsonCall(fixture.router, http.MethodGet, "/api/auth/me", "", "", newAccess); me.Code != http.StatusOK {
 		t.Fatalf("rotated access Cookie was invalid: %d %s", me.Code, me.Body.String())
@@ -215,6 +218,9 @@ func TestAuthLogoutRevokesRefreshAndClearsMatchingCookieAttributes(t *testing.T)
 	}
 	if me := jsonCall(fixture.router, http.MethodGet, "/api/auth/me", "", ""); me.Code != http.StatusUnauthorized {
 		t.Fatalf("client after Cookie deletion remained authenticated: %d %s", me.Code, me.Body.String())
+	}
+	if replayed := jsonCall(fixture.router, http.MethodGet, "/api/auth/me", "", "", access); replayed.Code != http.StatusUnauthorized {
+		t.Fatalf("old access remained valid after logout: %d %s", replayed.Code, replayed.Body.String())
 	}
 	if reused := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "http://localhost:3000", refresh); reused.Code != http.StatusUnauthorized {
 		t.Fatalf("logout did not revoke refresh: %d %s", reused.Code, reused.Body.String())
@@ -342,7 +348,7 @@ func (logoutFailureService) GetAccount(context.Context, string) (*service.Accoun
 func (logoutFailureService) UpdateAccount(context.Context, string, service.AccountUpdateRequest) (*service.Account, error) {
 	return nil, service.ErrAuthenticationStore
 }
-func (logoutFailureService) ValidateAccess(string) (*service.AccessClaims, error) {
+func (logoutFailureService) ValidateAccess(context.Context, string) (*service.AccessClaims, error) {
 	return nil, service.ErrInvalidAccessToken
 }
 
@@ -374,6 +380,107 @@ func TestAuthLoginMapsBoundedPasswordErrorsWithoutCredentialDisclosure(t *testin
 			}
 		})
 	}
+}
+
+func TestTrustedProxyClientIPResolverAcceptsOnlyConfiguredPeersAndValidSingleIPHeader(t *testing.T) {
+	resolver, err := handler.NewTrustedProxyClientIPResolver("172.16.0.0/12,fc00::/7")
+	if err != nil {
+		t.Fatalf("NewTrustedProxyClientIPResolver() failed: %v", err)
+	}
+	for _, tc := range []struct {
+		name, remoteAddr, realIP, want string
+	}{
+		{"trusted peer", "172.18.0.2:8080", "203.0.113.8", "203.0.113.8"},
+		{"untrusted peer ignores forged header", "198.51.100.8:8080", "203.0.113.8", "198.51.100.8"},
+		{"trusted peer ignores malformed header", "172.18.0.2:8080", "not-an-ip", "172.18.0.2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+			req.RemoteAddr = tc.remoteAddr
+			req.Header.Set("X-Real-IP", tc.realIP)
+			if got := resolver.Resolve(req); got != tc.want {
+				t.Fatalf("Resolve() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTrustedProxyClientIPResolverRejectsInvalidCIDR(t *testing.T) {
+	if _, err := handler.NewTrustedProxyClientIPResolver("172.16.0.0/not-a-mask"); err == nil {
+		t.Fatal("NewTrustedProxyClientIPResolver() accepted invalid CIDR")
+	}
+}
+
+func TestTrustedProxyClientIPResolverRejectsMultipleRealIPValues(t *testing.T) {
+	resolver, err := handler.NewTrustedProxyClientIPResolver("172.16.0.0/12")
+	if err != nil {
+		t.Fatalf("NewTrustedProxyClientIPResolver() failed: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	req.RemoteAddr = "172.18.0.2:8080"
+	req.Header.Add("X-Real-IP", "203.0.113.1")
+	req.Header.Add("X-Real-IP", "203.0.113.2")
+	if got := resolver.Resolve(req); got != "172.18.0.2" {
+		t.Fatalf("multiple X-Real-IP values resolved to %q", got)
+	}
+}
+
+func TestLoginRateLimitingUsesTrustedProxyResolvedIP(t *testing.T) {
+	newRouter := func(t *testing.T, trustedCIDRs string) *gin.Engine {
+		t.Helper()
+		db, err := database.InitDB(database.Config{Driver: "sqlite", DSN: ":memory:"})
+		if err != nil {
+			t.Fatalf("InitDB() failed: %v", err)
+		}
+		if err := db.Exec(`CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL)`).Error; err != nil {
+			t.Fatalf("create agent_sessions: %v", err)
+		}
+		resolver, err := handler.NewTrustedProxyClientIPResolver(trustedCIDRs)
+		if err != nil {
+			t.Fatalf("resolver: %v", err)
+		}
+		svc, err := service.NewAuthService(repository.NewAuthRepository(db), service.AuthConfig{
+			JWTSecret: []byte(handlerJWTSecret), LoginIPLimit: 1, LoginAccountLimit: 10,
+			PasswordVerifier: func(string, string) bool { return false },
+		})
+		if err != nil {
+			t.Fatalf("NewAuthService() failed: %v", err)
+		}
+		router := gin.New()
+		handler.RegisterAuthRoutes(router, handler.NewAuthHandlerWithOptions(svc, handler.CookieConfig{}, handler.AuthHandlerOptions{ClientIPResolver: resolver}), "http://localhost:3000")
+		return router
+	}
+	call := func(router http.Handler, remoteAddr, realIP, email string) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/login", bytes.NewBufferString(`{"email":"`+email+`","password":"password8"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://localhost:3000")
+		req.Header.Set("X-Real-IP", realIP)
+		req.RemoteAddr = remoteAddr
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w.Code
+	}
+	t.Run("trusted proxy separates real client addresses", func(t *testing.T) {
+		router := newRouter(t, "172.16.0.0/12")
+		if got := call(router, "172.18.0.2:8080", "203.0.113.1", "one@example.com"); got != http.StatusUnauthorized {
+			t.Fatalf("first request = %d", got)
+		}
+		if got := call(router, "172.18.0.2:8080", "203.0.113.2", "two@example.com"); got != http.StatusUnauthorized {
+			t.Fatalf("distinct X-Real-IP unexpectedly limited: %d", got)
+		}
+		if got := call(router, "172.18.0.2:8080", "203.0.113.1", "three@example.com"); got != http.StatusTooManyRequests {
+			t.Fatalf("repeated X-Real-IP = %d, want 429", got)
+		}
+	})
+	t.Run("untrusted peer cannot rotate forwarded headers", func(t *testing.T) {
+		router := newRouter(t, "172.16.0.0/12")
+		if got := call(router, "198.51.100.1:8080", "203.0.113.1", "one@example.com"); got != http.StatusUnauthorized {
+			t.Fatalf("first request = %d", got)
+		}
+		if got := call(router, "198.51.100.1:8080", "203.0.113.2", "two@example.com"); got != http.StatusTooManyRequests {
+			t.Fatalf("forged header bypassed limiter: %d", got)
+		}
+	})
 }
 
 func TestAuthLogoutClearsBothCookiesWhenSessionStoreFails(t *testing.T) {

@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"errors"
-	"net"
 	"net/http"
 	"time"
 
@@ -33,18 +32,26 @@ type CookieConfig struct {
 }
 
 type AuthHandler struct {
-	svc     AuthServiceInterface
-	cookies CookieConfig
+	svc      AuthServiceInterface
+	cookies  CookieConfig
+	clientIP ClientIPResolver
 }
 
 func NewAuthHandler(svc AuthServiceInterface, cookies CookieConfig) *AuthHandler {
+	return NewAuthHandlerWithOptions(svc, cookies, AuthHandlerOptions{})
+}
+
+func NewAuthHandlerWithOptions(svc AuthServiceInterface, cookies CookieConfig, options AuthHandlerOptions) *AuthHandler {
 	if cookies.AccessName == "" {
 		cookies.AccessName = "todolist_access"
 	}
 	if cookies.RefreshName == "" {
 		cookies.RefreshName = "todolist_refresh"
 	}
-	return &AuthHandler{svc: svc, cookies: cookies}
+	if options.ClientIPResolver == nil {
+		options.ClientIPResolver, _ = NewTrustedProxyClientIPResolver("")
+	}
+	return &AuthHandler{svc: svc, cookies: cookies, clientIP: options.ClientIPResolver}
 }
 
 func RegisterAuthRoutes(router *gin.Engine, h *AuthHandler, allowedOrigins string) {
@@ -87,7 +94,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	if !bindAuthJSON(c, &request) {
 		return
 	}
-	result, err := h.svc.Login(service.WithLoginClientIP(c.Request.Context(), requestClientIP(c.Request)), request.Email, request.Password)
+	result, err := h.svc.Login(service.WithLoginClientIP(c.Request.Context(), h.clientIP.Resolve(c.Request)), request.Email, request.Password)
 	if err != nil {
 		h.writeServiceError(c, err)
 		return
@@ -221,15 +228,4 @@ func bindAuthJSON(c *gin.Context, target any) bool {
 		return false
 	}
 	return true
-}
-
-// requestClientIP deliberately uses the direct transport peer. Trusting
-// X-Forwarded-For without an explicitly configured trusted-proxy boundary
-// would let callers rotate headers to evade failed-login throttling.
-func requestClientIP(request *http.Request) string {
-	host, _, err := net.SplitHostPort(request.RemoteAddr)
-	if err == nil && host != "" {
-		return host
-	}
-	return request.RemoteAddr
 }
