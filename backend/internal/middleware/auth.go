@@ -54,9 +54,8 @@ func unauthorized(c *gin.Context) {
 }
 
 // OriginGuard protects Cookie-authenticated state-changing routes from CSRF.
-// Browsers that send Origin must match an explicitly configured origin.
-// Requests without Origin remain supported for non-browser clients; SameSite=Lax
-// Cookies provide the browser fallback for those requests.
+// State-changing Cookie requests must provide an explicitly configured Origin.
+// API clients outside the browser Cookie contract must use another mechanism.
 func OriginGuard(rawAllowedOrigins string) gin.HandlerFunc {
 	allowed := parseAllowedOrigins(rawAllowedOrigins)
 	return func(c *gin.Context) {
@@ -66,7 +65,7 @@ func OriginGuard(rawAllowedOrigins string) gin.HandlerFunc {
 		}
 		origin := c.GetHeader("Origin")
 		if origin == "" {
-			c.Next()
+			forbidden(c)
 			return
 		}
 		normalized, ok := normalizeOrigin(origin)

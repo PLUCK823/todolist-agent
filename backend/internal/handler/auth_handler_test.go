@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -163,16 +164,16 @@ func responseDataJSON(t *testing.T, value any) []byte {
 func TestAuthRegisterDuplicateAndLoginBadPasswordUseSafeErrors(t *testing.T) {
 	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "access", RefreshName: "refresh"})
 	register := `{"name":"Alice","email":"alice@example.com","password":"password8"}`
-	if got := jsonCall(fixture.router, http.MethodPost, "/api/auth/register", register, ""); got.Code != http.StatusCreated {
+	if got := jsonCall(fixture.router, http.MethodPost, "/api/auth/register", register, "http://localhost:3000"); got.Code != http.StatusCreated {
 		t.Fatalf("first register failed: %d %s", got.Code, got.Body.String())
 	}
-	duplicate := jsonCall(fixture.router, http.MethodPost, "/api/auth/register", register, "")
+	duplicate := jsonCall(fixture.router, http.MethodPost, "/api/auth/register", register, "http://localhost:3000")
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate register: expected 409, got %d %s", duplicate.Code, duplicate.Body.String())
 	}
 	for _, email := range []string{"alice@example.com", "missing@example.com"} {
 		bad := jsonCall(fixture.router, http.MethodPost, "/api/auth/login",
-			`{"email":"`+email+`","password":"wrong-password"}`, "")
+			`{"email":"`+email+`","password":"wrong-password"}`, "http://localhost:3000")
 		if bad.Code != http.StatusUnauthorized || !strings.Contains(bad.Body.String(), `"code":40102`) {
 			t.Fatalf("unsafe login error for %s: %d %s", email, bad.Code, bad.Body.String())
 		}
@@ -182,7 +183,7 @@ func TestAuthRegisterDuplicateAndLoginBadPasswordUseSafeErrors(t *testing.T) {
 func TestAuthRefreshRotatesAtomicallyAndOldCookieCannotBeReused(t *testing.T) {
 	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "todolist_access", RefreshName: "todolist_refresh"})
 	_, _, oldRefresh := registerAndLogin(t, fixture, "Alice", "alice@example.com")
-	rotated := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "", oldRefresh)
+	rotated := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "http://localhost:3000", oldRefresh)
 	if rotated.Code != http.StatusOK {
 		t.Fatalf("refresh failed: %d %s", rotated.Code, rotated.Body.String())
 	}
@@ -191,7 +192,7 @@ func TestAuthRefreshRotatesAtomicallyAndOldCookieCannotBeReused(t *testing.T) {
 	if newRefresh.Value == oldRefresh.Value {
 		t.Fatal("refresh endpoint reused the old credential")
 	}
-	if reused := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "", oldRefresh); reused.Code != http.StatusUnauthorized {
+	if reused := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "http://localhost:3000", oldRefresh); reused.Code != http.StatusUnauthorized {
 		t.Fatalf("old refresh Cookie was reusable: %d %s", reused.Code, reused.Body.String())
 	}
 	if me := jsonCall(fixture.router, http.MethodGet, "/api/auth/me", "", "", newAccess); me.Code != http.StatusOK {
@@ -202,7 +203,7 @@ func TestAuthRefreshRotatesAtomicallyAndOldCookieCannotBeReused(t *testing.T) {
 func TestAuthLogoutRevokesRefreshAndClearsMatchingCookieAttributes(t *testing.T) {
 	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "access", RefreshName: "refresh", Secure: true, Domain: "example.com"})
 	_, access, refresh := registerAndLogin(t, fixture, "Alice", "alice@example.com")
-	logout := jsonCall(fixture.router, http.MethodPost, "/api/auth/logout", "", "", access, refresh)
+	logout := jsonCall(fixture.router, http.MethodPost, "/api/auth/logout", "", "http://localhost:3000", access, refresh)
 	if logout.Code != http.StatusNoContent {
 		t.Fatalf("logout failed: %d %s", logout.Code, logout.Body.String())
 	}
@@ -215,8 +216,23 @@ func TestAuthLogoutRevokesRefreshAndClearsMatchingCookieAttributes(t *testing.T)
 	if me := jsonCall(fixture.router, http.MethodGet, "/api/auth/me", "", ""); me.Code != http.StatusUnauthorized {
 		t.Fatalf("client after Cookie deletion remained authenticated: %d %s", me.Code, me.Body.String())
 	}
-	if reused := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "", refresh); reused.Code != http.StatusUnauthorized {
+	if reused := jsonCall(fixture.router, http.MethodPost, "/api/auth/refresh", "", "http://localhost:3000", refresh); reused.Code != http.StatusUnauthorized {
 		t.Fatalf("logout did not revoke refresh: %d %s", reused.Code, reused.Body.String())
+	}
+}
+
+func TestAuthLogoutClearsBothCookiesForInvalidRefreshCredential(t *testing.T) {
+	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "access", RefreshName: "refresh", Secure: true, Domain: "example.com"})
+	response := jsonCall(fixture.router, http.MethodPost, "/api/auth/logout", "", "http://localhost:3000",
+		&http.Cookie{Name: "access", Value: "stale"}, &http.Cookie{Name: "refresh", Value: "malformed"})
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("invalid logout expected 204, got %d: %s", response.Code, response.Body.String())
+	}
+	for _, name := range []string{"access", "refresh"} {
+		cookie := responseCookie(t, response, name)
+		if cookie.Value != "" || cookie.MaxAge >= 0 || !cookie.HttpOnly || !cookie.Secure || cookie.Domain != "example.com" || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
+			t.Fatalf("Cookie %s was not cleared for invalid refresh: %#v", name, cookie)
+		}
 	}
 }
 
@@ -245,7 +261,7 @@ func TestAuthPatchPersistsProfileCountsAndRejectsDuplicateEmail(t *testing.T) {
 		t.Fatalf("unexpected account counts: %#v", updated)
 	}
 
-	duplicate := jsonCall(fixture.router, http.MethodPatch, "/api/auth/me", `{"email":"bob@example.com"}`, "", firstAccess)
+	duplicate := jsonCall(fixture.router, http.MethodPatch, "/api/auth/me", `{"email":"bob@example.com"}`, "http://localhost:3000", firstAccess)
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate profile email: expected 409, got %d %s", duplicate.Code, duplicate.Body.String())
 	}
@@ -266,5 +282,115 @@ func TestAuthStateChangesRejectUntrustedOrigin(t *testing.T) {
 	response := jsonCall(fixture.router, http.MethodPatch, "/api/auth/me", `{}`, "https://evil.example")
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("PATCH /me accepted untrusted Origin: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAuthJSONBodiesHaveAStrictSizeLimit(t *testing.T) {
+	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "access", RefreshName: "refresh"})
+	_, access, _ := registerAndLogin(t, fixture, "Alice", "alice@example.com")
+	oversized := `{"name":"` + strings.Repeat("x", 16*1024) + `"}`
+	for _, tc := range []struct {
+		method, path string
+		cookies      []*http.Cookie
+	}{
+		{http.MethodPost, "/api/auth/register", nil},
+		{http.MethodPost, "/api/auth/login", nil},
+		{http.MethodPatch, "/api/auth/me", []*http.Cookie{access}},
+	} {
+		response := jsonCall(fixture.router, tc.method, tc.path, oversized, "http://localhost:3000", tc.cookies...)
+		if response.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("%s %s: expected 413, got %d: %s", tc.method, tc.path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestAuthRegistrationReturnsServerErrorWhenAgentSessionStoreIsMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db, err := database.InitDB(database.Config{Driver: "sqlite", DSN: ":memory:"})
+	if err != nil {
+		t.Fatalf("InitDB() failed: %v", err)
+	}
+	svc, err := service.NewAuthService(repository.NewAuthRepository(db), service.AuthConfig{JWTSecret: []byte(handlerJWTSecret)})
+	if err != nil {
+		t.Fatalf("NewAuthService() failed: %v", err)
+	}
+	router := gin.New()
+	handler.RegisterAuthRoutes(router, handler.NewAuthHandler(svc, handler.CookieConfig{}), "http://localhost:3000")
+	response := jsonCall(router, http.MethodPost, "/api/auth/register", `{"name":"Alice","email":"alice@example.com","password":"password8"}`, "http://localhost:3000")
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("missing agent_sessions expected 500, got %d: %s", response.Code, response.Body.String())
+	}
+}
+
+type logoutFailureService struct{}
+
+func (logoutFailureService) Register(context.Context, service.RegisterRequest) (*service.Account, error) {
+	return nil, service.ErrAuthenticationStore
+}
+func (logoutFailureService) Login(context.Context, string, string) (*service.AuthResult, error) {
+	return nil, service.ErrAuthenticationStore
+}
+func (logoutFailureService) Refresh(context.Context, string) (*service.AuthResult, error) {
+	return nil, service.ErrAuthenticationStore
+}
+func (logoutFailureService) Logout(context.Context, string) error {
+	return service.ErrAuthenticationStore
+}
+func (logoutFailureService) GetAccount(context.Context, string) (*service.Account, error) {
+	return nil, service.ErrAuthenticationStore
+}
+func (logoutFailureService) UpdateAccount(context.Context, string, service.AccountUpdateRequest) (*service.Account, error) {
+	return nil, service.ErrAuthenticationStore
+}
+func (logoutFailureService) ValidateAccess(string) (*service.AccessClaims, error) {
+	return nil, service.ErrInvalidAccessToken
+}
+
+type loginErrorService struct {
+	logoutFailureService
+	err error
+}
+
+func (s loginErrorService) Login(context.Context, string, string) (*service.AuthResult, error) {
+	return nil, s.err
+}
+
+func TestAuthLoginMapsBoundedPasswordErrorsWithoutCredentialDisclosure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err    error
+		status int
+	}{
+		"rate limited": {service.ErrLoginRateLimited, http.StatusTooManyRequests},
+		"busy":         {service.ErrPasswordBusy, http.StatusTooManyRequests},
+		"cancelled":    {service.ErrPasswordCancelled, http.StatusServiceUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			handler.RegisterAuthRoutes(router, handler.NewAuthHandler(loginErrorService{err: tc.err}, handler.CookieConfig{}), "http://localhost:3000")
+			response := jsonCall(router, http.MethodPost, "/api/auth/login", `{"email":"alice@example.com","password":"password8"}`, "http://localhost:3000")
+			if response.Code != tc.status || strings.Contains(strings.ToLower(response.Body.String()), "alice") {
+				t.Fatalf("Login() error mapping unsafe: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuthLogoutClearsBothCookiesWhenSessionStoreFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler.RegisterAuthRoutes(router, handler.NewAuthHandler(logoutFailureService{}, handler.CookieConfig{
+		AccessName: "access", RefreshName: "refresh", Secure: true, Domain: "example.com",
+	}), "http://localhost:3000")
+	response := jsonCall(router, http.MethodPost, "/api/auth/logout", "", "http://localhost:3000",
+		&http.Cookie{Name: "access", Value: "access-value"}, &http.Cookie{Name: "refresh", Value: "refresh-value"})
+	if response.Code != http.StatusInternalServerError {
+		t.Fatalf("logout store error expected 500, got %d: %s", response.Code, response.Body.String())
+	}
+	for _, name := range []string{"access", "refresh"} {
+		cookie := responseCookie(t, response, name)
+		if cookie.Value != "" || cookie.MaxAge >= 0 || !cookie.HttpOnly || !cookie.Secure || cookie.Domain != "example.com" || cookie.Path != "/" || cookie.SameSite != http.SameSiteLaxMode {
+			t.Fatalf("Cookie %s was not cleared after logout store failure: %#v", name, cookie)
+		}
 	}
 }

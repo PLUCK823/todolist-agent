@@ -7,14 +7,28 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
+
+	"backend/internal/database"
 )
 
 func setupIntegrationApp(t *testing.T) *httptest.Server {
 	t.Helper()
 
 	t.Setenv("DB_DRIVER", "sqlite")
-	t.Setenv("DB_DSN", ":memory:")
+	dsn := filepath.Join(t.TempDir(), "integration.db")
+	// agent_sessions belongs to the Agent schema, so SetupApp intentionally
+	// does not migrate it. Pre-create the external table in the same SQLite
+	// file to mirror the compose deployment before exercising auth endpoints.
+	db, err := database.InitDB(database.Config{Driver: "sqlite", DSN: dsn})
+	if err != nil {
+		t.Fatalf("create integration database: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, title TEXT NOT NULL)`).Error; err != nil {
+		t.Fatalf("create agent_sessions fixture: %v", err)
+	}
+	t.Setenv("DB_DSN", dsn)
 	t.Setenv("GIN_MODE", "test")
 	t.Setenv("AUTH_JWT_SECRET", "integration-test-secret-at-least-32-bytes")
 
@@ -242,7 +256,16 @@ func TestIntegration_AuthRoutesAreWired(t *testing.T) {
 	ts := setupIntegrationApp(t)
 	defer ts.Close()
 
-	register := doRequest(ts, http.MethodPost, "/api/auth/register", bytes.NewBufferString(`{"name":"A","email":"a@example.com","password":"password8"}`))
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/auth/register", bytes.NewBufferString(`{"name":"A","email":"a@example.com","password":"password8"}`))
+	if err != nil {
+		t.Fatalf("new register request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://localhost:3000")
+	register, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("send register request: %v", err)
+	}
 	if register.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(register.Body)
 		register.Body.Close()

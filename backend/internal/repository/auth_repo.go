@@ -52,17 +52,21 @@ func (r *AuthRepository) FindUserByID(ctx context.Context, id string) (*model.Us
 
 func (r *AuthRepository) UpdateUserProfile(
 	ctx context.Context,
-	id, displayName, email, timezone string,
+	id string,
+	patch model.ProfilePatch,
 ) error {
+	updates := patch.Updates()
+	if len(updates) == 0 {
+		return nil
+	}
+	if email, ok := updates["email"].(string); ok {
+		updates["email"] = normalizeEmail(email)
+	}
+	updates["updated_at"] = time.Now().UTC()
 	result := r.db.WithContext(ctx).
 		Model(&model.User{}).
 		Where("id = ?", id).
-		Updates(map[string]any{
-			"display_name": displayName,
-			"email":        normalizeEmail(email),
-			"timezone":     timezone,
-			"updated_at":   time.Now().UTC(),
-		})
+		Updates(updates)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -81,9 +85,6 @@ func (r *AuthRepository) CountTodos(ctx context.Context) (int64, error) {
 }
 
 func (r *AuthRepository) CountAgentSessions(ctx context.Context, ownerID string) (int64, error) {
-	if !r.db.Migrator().HasTable("agent_sessions") {
-		return 0, nil
-	}
 	var count int64
 	if err := r.db.WithContext(ctx).Table("agent_sessions").Where("owner_id = ?", ownerID).Count(&count).Error; err != nil {
 		return 0, err

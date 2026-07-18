@@ -61,7 +61,7 @@ func TestAuthMiddlewareRequiresValidAccessCookieAndStoresPrincipal(t *testing.T)
 	}
 }
 
-func TestOriginGuardUsesExactAllowedOriginsAndAllowsNonBrowserRequests(t *testing.T) {
+func TestOriginGuardFailsClosedAndUsesExactAllowedOrigins(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	router.Use(middleware.OriginGuard(" http://localhost:3000, https://app.example.com "))
@@ -75,7 +75,7 @@ func TestOriginGuardUsesExactAllowedOriginsAndAllowsNonBrowserRequests(t *testin
 		{"exact", http.MethodPost, "https://app.example.com", http.StatusNoContent},
 		{"prefix attack", http.MethodPost, "https://app.example.com.attacker.test", http.StatusForbidden},
 		{"unknown", http.MethodPost, "https://evil.example", http.StatusForbidden},
-		{"non-browser", http.MethodPost, "", http.StatusNoContent},
+		{"missing origin", http.MethodPost, "", http.StatusForbidden},
 		{"safe method", http.MethodGet, "https://evil.example", http.StatusNoContent},
 	} {
 		recorder := httptest.NewRecorder()

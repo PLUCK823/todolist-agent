@@ -75,6 +75,72 @@ func TestAuthRepositoryReturnsRecordNotFoundUnchanged(t *testing.T) {
 	}
 }
 
+func TestAuthRepositoryCountAgentSessionsPropagatesMissingTable(t *testing.T) {
+	repo := NewAuthRepository(setupAuthTestDB(t))
+	if _, err := repo.CountAgentSessions(context.Background(), uuid.NewString()); err == nil {
+		t.Fatal("CountAgentSessions() hid the missing agent_sessions table")
+	}
+}
+
+func TestAuthRepositoryProfilePatchOnlyMutatesRequestedFields(t *testing.T) {
+	ctx := context.Background()
+	repo := NewAuthRepository(setupAuthTestDB(t))
+	user := &model.User{Email: "patch@example.com", DisplayName: "Before", Timezone: "Asia/Shanghai", PasswordHash: "password-hash"}
+	if err := repo.CreateUser(ctx, user); err != nil {
+		t.Fatalf("CreateUser() failed: %v", err)
+	}
+	name := "After"
+	if err := repo.UpdateUserProfile(ctx, user.ID, model.ProfilePatch{DisplayName: &name}); err != nil {
+		t.Fatalf("UpdateUserProfile() failed: %v", err)
+	}
+	updated, err := repo.FindUserByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindUserByID() failed: %v", err)
+	}
+	if updated.DisplayName != "After" || updated.Email != "patch@example.com" || updated.Timezone != "Asia/Shanghai" {
+		t.Fatalf("partial profile patch overwrote unrelated fields: %#v", updated)
+	}
+}
+
+func TestAuthRepositoryConcurrentDisjointProfilePatchesPreserveBothFields(t *testing.T) {
+	ctx := context.Background()
+	db := setupAuthTestDB(t)
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB() failed: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	repo := NewAuthRepository(db)
+	user := &model.User{Email: "concurrent-patch@example.com", DisplayName: "Before", Timezone: "Asia/Shanghai", PasswordHash: "password-hash"}
+	if err := repo.CreateUser(ctx, user); err != nil {
+		t.Fatalf("CreateUser() failed: %v", err)
+	}
+	name, timezone := "After", "Europe/Paris"
+	patches := []model.ProfilePatch{{DisplayName: &name}, {Timezone: &timezone}}
+	errs := make(chan error, len(patches))
+	start := make(chan struct{})
+	for _, patch := range patches {
+		patch := patch
+		go func() {
+			<-start
+			errs <- repo.UpdateUserProfile(ctx, user.ID, patch)
+		}()
+	}
+	close(start)
+	for range patches {
+		if err := <-errs; err != nil {
+			t.Fatalf("UpdateUserProfile() failed: %v", err)
+		}
+	}
+	updated, err := repo.FindUserByID(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("FindUserByID() failed: %v", err)
+	}
+	if updated.DisplayName != name || updated.Timezone != timezone {
+		t.Fatalf("concurrent disjoint patches lost data: %#v", updated)
+	}
+}
+
 func TestAuthRepositoryFindsActiveRefreshSessionAndRevokesIt(t *testing.T) {
 	ctx := context.Background()
 	repo := NewAuthRepository(setupAuthTestDB(t))

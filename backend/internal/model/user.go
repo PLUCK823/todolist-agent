@@ -16,6 +16,29 @@ type User struct {
 
 func (User) TableName() string { return "users" }
 
+// ProfilePatch represents only the profile fields the caller explicitly
+// intends to change. Pointer fields keep omitted JSON properties distinct from
+// empty values and prevent stale read-modify-write updates.
+type ProfilePatch struct {
+	DisplayName *string
+	Email       *string
+	Timezone    *string
+}
+
+func (p ProfilePatch) Updates() map[string]any {
+	updates := make(map[string]any, 3)
+	if p.DisplayName != nil {
+		updates["display_name"] = *p.DisplayName
+	}
+	if p.Email != nil {
+		updates["email"] = *p.Email
+	}
+	if p.Timezone != nil {
+		updates["timezone"] = *p.Timezone
+	}
+	return updates
+}
+
 // AuthSession stores only the digest of an opaque refresh secret. Access and
 // refresh token values are never persisted in plaintext.
 type AuthSession struct {

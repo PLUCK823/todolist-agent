@@ -29,9 +29,23 @@ var (
 	ErrInvalidCredentials  = errors.New("invalid credentials")
 	ErrInvalidAccessToken  = errors.New("invalid access token")
 	ErrAuthenticationStore = errors.New("authentication store failure")
+	ErrPasswordBusy        = errors.New("password work is busy")
+	ErrPasswordCancelled   = errors.New("password work cancelled")
+	ErrLoginRateLimited    = errors.New("login rate limited")
 )
 
 const defaultIssuer = "todolist-backend"
+
+const (
+	defaultPasswordConcurrency = 4
+	defaultPasswordQueueLimit  = 32
+	defaultLoginIPLimit        = 30
+	defaultLoginAccountLimit   = 10
+	defaultLoginRateCapacity   = 4096
+	maxPHCLength               = 512
+	maxPHCSaltEncodingLength   = 128
+	maxPHCDigestEncodingLength = 128
+)
 
 type PasswordParams struct {
 	Memory      uint32
@@ -49,7 +63,7 @@ type AuthRepository interface {
 	CreateUser(context.Context, *model.User) error
 	FindUserByEmail(context.Context, string) (*model.User, error)
 	FindUserByID(context.Context, string) (*model.User, error)
-	UpdateUserProfile(context.Context, string, string, string, string) error
+	UpdateUserProfile(context.Context, string, model.ProfilePatch) error
 	CountTodos(context.Context) (int64, error)
 	CountAgentSessions(context.Context, string) (int64, error)
 	CreateSession(context.Context, *model.AuthSession) error
@@ -59,13 +73,19 @@ type AuthRepository interface {
 }
 
 type AuthConfig struct {
-	JWTSecret        []byte
-	AccessTTL        time.Duration
-	RefreshTTL       time.Duration
-	Issuer           string
-	Now              func() time.Time
-	PasswordHasher   func(string) (string, error)
-	PasswordVerifier func(string, string) bool
+	JWTSecret           []byte
+	AccessTTL           time.Duration
+	RefreshTTL          time.Duration
+	Issuer              string
+	Now                 func() time.Time
+	PasswordHasher      func(string) (string, error)
+	PasswordVerifier    func(string, string) bool
+	PasswordConcurrency int
+	PasswordQueueLimit  int
+	LoginIPLimit        int
+	LoginAccountLimit   int
+	LoginRateWindow     time.Duration
+	LoginRateCapacity   int
 }
 
 type AuthService struct {
@@ -78,6 +98,9 @@ type AuthService struct {
 	hashPassword   func(string) (string, error)
 	verifyPassword func(string, string) bool
 	dummyHash      string
+	passwordSem    chan struct{}
+	passwordQueue  chan struct{}
+	loginLimiter   *loginFailureLimiter
 }
 
 type RegisterRequest struct {
@@ -145,6 +168,27 @@ func NewAuthService(repo AuthRepository, cfg AuthConfig) (*AuthService, error) {
 	if cfg.PasswordVerifier == nil {
 		cfg.PasswordVerifier = VerifyPassword
 	}
+	if cfg.PasswordConcurrency <= 0 {
+		cfg.PasswordConcurrency = defaultPasswordConcurrency
+	}
+	if cfg.PasswordQueueLimit <= 0 {
+		cfg.PasswordQueueLimit = defaultPasswordQueueLimit
+	}
+	if cfg.PasswordQueueLimit < cfg.PasswordConcurrency {
+		cfg.PasswordQueueLimit = cfg.PasswordConcurrency
+	}
+	if cfg.LoginIPLimit <= 0 {
+		cfg.LoginIPLimit = defaultLoginIPLimit
+	}
+	if cfg.LoginAccountLimit <= 0 {
+		cfg.LoginAccountLimit = defaultLoginAccountLimit
+	}
+	if cfg.LoginRateWindow <= 0 {
+		cfg.LoginRateWindow = time.Minute
+	}
+	if cfg.LoginRateCapacity <= 0 {
+		cfg.LoginRateCapacity = defaultLoginRateCapacity
+	}
 	dummyHash, err := cfg.PasswordHasher("authentication-timing-dummy-password")
 	if err != nil {
 		return nil, fmt.Errorf("%w: initialize password verifier: %v", ErrAuthenticationStore, err)
@@ -153,6 +197,9 @@ func NewAuthService(repo AuthRepository, cfg AuthConfig) (*AuthService, error) {
 		repo: repo, jwtSecret: append([]byte(nil), cfg.JWTSecret...),
 		accessTTL: cfg.AccessTTL, refreshTTL: cfg.RefreshTTL, issuer: cfg.Issuer, now: cfg.Now,
 		hashPassword: cfg.PasswordHasher, verifyPassword: cfg.PasswordVerifier, dummyHash: dummyHash,
+		passwordSem:   make(chan struct{}, cfg.PasswordConcurrency),
+		passwordQueue: make(chan struct{}, cfg.PasswordQueueLimit),
+		loginLimiter:  newLoginFailureLimiter(cfg.Now, cfg.LoginRateWindow, cfg.LoginIPLimit, cfg.LoginAccountLimit, cfg.LoginRateCapacity),
 	}, nil
 }
 
@@ -185,8 +232,14 @@ func VerifyPassword(encodedHash, password string) bool {
 
 func parsePasswordHash(encoded string) (PasswordParams, []byte, []byte, bool) {
 	var params PasswordParams
+	if len(encoded) == 0 || len(encoded) > maxPHCLength {
+		return params, nil, nil, false
+	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" || parts[2] != "v="+strconv.Itoa(argon2.Version) {
+		return params, nil, nil, false
+	}
+	if len(parts[4]) > maxPHCSaltEncodingLength || len(parts[5]) > maxPHCDigestEncodingLength {
 		return params, nil, nil, false
 	}
 	var memory, iterations uint32
@@ -223,7 +276,7 @@ func validPasswordParams(params PasswordParams) bool {
 func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*Account, error) {
 	name := strings.TrimSpace(req.Name)
 	email := strings.ToLower(strings.TrimSpace(req.Email))
-	if len([]rune(name)) < 1 || len([]rune(name)) > 120 || !validEmail(email) || len(req.Password) < 8 || len(req.Password) > 128 {
+	if len([]rune(name)) < 1 || len([]rune(name)) > 120 || !validEmail(email) || !validPasswordLength(req.Password) {
 		return nil, ErrInvalidInput
 	}
 	if _, err := s.repo.FindUserByEmail(ctx, email); err == nil {
@@ -231,7 +284,7 @@ func (s *AuthService) Register(ctx context.Context, req RegisterRequest) (*Accou
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("%w: find email: %v", ErrAuthenticationStore, err)
 	}
-	hash, err := s.hashPassword(req.Password)
+	hash, err := s.hash(ctx, req.Password)
 	if err != nil {
 		return nil, err
 	}
@@ -301,7 +354,17 @@ func (s *AuthService) UpdateAccount(ctx context.Context, userID string, req Acco
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateUserProfile(ctx, user.ID, name, email, timezone); err != nil {
+	patch := model.ProfilePatch{}
+	if req.Name != nil {
+		patch.DisplayName = &name
+	}
+	if req.Email != nil {
+		patch.Email = &email
+	}
+	if req.Timezone != nil {
+		patch.Timezone = &timezone
+	}
+	if err := s.repo.UpdateUserProfile(ctx, user.ID, patch); err != nil {
 		if isDuplicateError(err) {
 			return nil, ErrEmailExists
 		}
@@ -327,23 +390,92 @@ func (s *AuthService) accountFromUser(ctx context.Context, user *model.User) (*A
 }
 
 func (s *AuthService) Login(ctx context.Context, email, password string) (*AuthResult, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if !validEmail(email) || !validPasswordLength(password) {
+		return nil, ErrInvalidCredentials
+	}
+	clientIP := loginClientIPFromContext(ctx)
+	if !s.loginLimiter.allow(clientIP, email) {
+		return nil, ErrLoginRateLimited
+	}
 	user, err := s.repo.FindUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// Keep an unknown account on the same single password-verification path.
-			_ = s.verifyPassword(s.dummyHash, password)
+			if _, err := s.verify(ctx, s.dummyHash, password); err != nil {
+				return nil, err
+			}
+			s.loginLimiter.recordFailure(clientIP, email)
 			return nil, ErrInvalidCredentials
 		}
 		return nil, fmt.Errorf("%w: find user: %v", ErrAuthenticationStore, err)
 	}
-	if !s.verifyPassword(user.PasswordHash, password) {
+	valid, err := s.verify(ctx, user.PasswordHash, password)
+	if err != nil {
+		return nil, err
+	}
+	if !valid {
+		s.loginLimiter.recordFailure(clientIP, email)
 		return nil, ErrInvalidCredentials
 	}
 	account, err := s.accountFromUser(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	return s.createLoginSession(ctx, user, account)
+	result, err := s.createLoginSession(ctx, user, account)
+	if err == nil {
+		s.loginLimiter.clearAccount(email)
+	}
+	return result, err
+}
+
+func validPasswordLength(password string) bool {
+	return len(password) >= 8 && len(password) <= 128
+}
+
+func (s *AuthService) hash(ctx context.Context, password string) (string, error) {
+	if err := s.acquirePasswordSlot(ctx); err != nil {
+		return "", err
+	}
+	defer s.releasePasswordSlot()
+	return s.hashPassword(password)
+}
+
+func (s *AuthService) verify(ctx context.Context, encodedHash, password string) (bool, error) {
+	if err := s.acquirePasswordSlot(ctx); err != nil {
+		return false, err
+	}
+	defer s.releasePasswordSlot()
+	return s.verifyPassword(encodedHash, password), nil
+}
+
+func (s *AuthService) acquirePasswordSlot(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("%w: %v", ErrPasswordCancelled, ctx.Err())
+	case s.passwordQueue <- struct{}{}:
+	default:
+		return ErrPasswordBusy
+	}
+	select {
+	case s.passwordSem <- struct{}{}:
+		select {
+		case <-ctx.Done():
+			<-s.passwordSem
+			<-s.passwordQueue
+			return fmt.Errorf("%w: %v", ErrPasswordCancelled, ctx.Err())
+		default:
+			return nil
+		}
+	case <-ctx.Done():
+		<-s.passwordQueue
+		return fmt.Errorf("%w: %v", ErrPasswordCancelled, ctx.Err())
+	}
+}
+
+func (s *AuthService) releasePasswordSlot() {
+	<-s.passwordSem
+	<-s.passwordQueue
 }
 
 func (s *AuthService) createLoginSession(ctx context.Context, user *model.User, account *Account) (*AuthResult, error) {

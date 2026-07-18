@@ -32,6 +32,11 @@ func initConfig() {
 	viper.SetDefault("AUTH_ALLOWED_ORIGINS", "http://localhost:3000")
 	viper.SetDefault("AUTH_COOKIE_SECURE", false)
 	viper.SetDefault("AUTH_COOKIE_DOMAIN", "")
+	viper.SetDefault("AUTH_PASSWORD_CONCURRENCY", 4)
+	viper.SetDefault("AUTH_LOGIN_IP_LIMIT", 30)
+	viper.SetDefault("AUTH_LOGIN_ACCOUNT_LIMIT", 10)
+	viper.SetDefault("AUTH_LOGIN_RATE_WINDOW_SECONDS", 60)
+	viper.SetDefault("AUTH_LOGIN_RATE_CAPACITY", 4096)
 
 	viper.AutomaticEnv()
 
@@ -78,7 +83,14 @@ func SetupApp() (*gin.Engine, *zap.Logger, error) {
 	todoRepo := repository.NewTodoRepository(db)
 	todoSvc := service.NewTodoService(todoRepo)
 	authRepo := repository.NewAuthRepository(db)
-	authSvc, err := service.NewAuthService(authRepo, service.AuthConfig{JWTSecret: []byte(jwtSecret)})
+	authSvc, err := service.NewAuthService(authRepo, service.AuthConfig{
+		JWTSecret:           []byte(jwtSecret),
+		PasswordConcurrency: viper.GetInt("AUTH_PASSWORD_CONCURRENCY"),
+		LoginIPLimit:        viper.GetInt("AUTH_LOGIN_IP_LIMIT"),
+		LoginAccountLimit:   viper.GetInt("AUTH_LOGIN_ACCOUNT_LIMIT"),
+		LoginRateWindow:     time.Duration(viper.GetInt("AUTH_LOGIN_RATE_WINDOW_SECONDS")) * time.Second,
+		LoginRateCapacity:   viper.GetInt("AUTH_LOGIN_RATE_CAPACITY"),
+	})
 	if err != nil {
 		return nil, logger, fmt.Errorf("initialize authentication service: %w", err)
 	}
