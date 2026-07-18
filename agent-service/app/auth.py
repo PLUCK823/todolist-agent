@@ -52,15 +52,27 @@ class AuthSettings:
         )
         if not origins or "*" in origins:
             raise RuntimeError("AUTH_ALLOWED_ORIGINS must be a non-wildcard allowlist")
+        try:
+            pool_min_size = int(os.getenv("AGENT_DB_POOL_MIN_SIZE", "1"))
+            pool_max_size = int(os.getenv("AGENT_DB_POOL_MAX_SIZE", "10"))
+            command_timeout = float(os.getenv("AGENT_DB_COMMAND_TIMEOUT_SECONDS", "5"))
+        except ValueError as exc:
+            raise RuntimeError("Agent database pool settings must be numeric") from exc
+        if pool_min_size < 1:
+            raise RuntimeError("AGENT_DB_POOL_MIN_SIZE must be at least 1")
+        if pool_max_size < pool_min_size:
+            raise RuntimeError("AGENT_DB_POOL_MIN_SIZE must not exceed AGENT_DB_POOL_MAX_SIZE")
+        if command_timeout <= 0:
+            raise RuntimeError("AGENT_DB_COMMAND_TIMEOUT_SECONDS must be positive")
         return cls(
             secret=secret,
             access_cookie=os.getenv("AUTH_ACCESS_COOKIE", "todolist_access").strip() or "todolist_access",
             allowed_origins=origins,
             issuer=os.getenv("AUTH_JWT_ISSUER", "todolist-backend").strip() or "todolist-backend",
             database_url=database_url,
-            pool_min_size=max(1, int(os.getenv("AGENT_DB_POOL_MIN_SIZE", "1"))),
-            pool_max_size=max(1, int(os.getenv("AGENT_DB_POOL_MAX_SIZE", "10"))),
-            command_timeout=max(0.1, float(os.getenv("AGENT_DB_COMMAND_TIMEOUT_SECONDS", "5"))),
+            pool_min_size=pool_min_size,
+            pool_max_size=pool_max_size,
+            command_timeout=command_timeout,
         )
 
 

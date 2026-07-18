@@ -80,3 +80,13 @@ async def test_http_routes_reject_missing_cookie_and_cross_site_mutation():
         # Cookie present but no allowlisted Origin: state mutation is still denied.
         assert (await client.post("/api/agent/sessions", json={})).status_code == 403
         assert (await client.post("/api/agent/sessions", headers={"Origin": "http://evil.test"}, json={})).status_code == 403
+
+
+def test_settings_fail_fast_when_pool_minimum_exceeds_maximum(monkeypatch):
+    monkeypatch.setenv("AUTH_JWT_SECRET", "x" * 32)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://example")
+    monkeypatch.setenv("AGENT_DB_POOL_MIN_SIZE", "11")
+    monkeypatch.setenv("AGENT_DB_POOL_MAX_SIZE", "10")
+
+    with pytest.raises(RuntimeError, match="AGENT_DB_POOL_MIN_SIZE"):
+        AuthSettings.from_env()

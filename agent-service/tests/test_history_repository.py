@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.history_models import PersistedStepEvent
-from app.history_repository import HistoryRepository
+from app.history_repository import HistoryConflictError, HistoryRepository
 
 
 pytestmark = pytest.mark.asyncio
@@ -133,3 +133,37 @@ async def test_rename_fail_and_interrupt_open_turns(repo):
     assert by_id[failed.id].status == "failed"
     assert by_id[failed.id].result_uncertain is True
     assert by_id[interrupted.id].status == "interrupted"
+
+
+async def test_complete_turn_rejects_message_id_owned_by_another_turn_and_rolls_back(repo):
+    """A forged/reused message ID cannot complete a turn without its reply."""
+    repository, alice, bob = repo
+    now = datetime.now(timezone.utc)
+    alice_session = await repository.create_session(alice, "Alice")
+    bob_session = await repository.create_session(bob, "Bob")
+    alice_turn = await repository.start_turn(alice, alice_session.id, uuid.uuid4(), uuid.uuid4(), "alice", now)
+    reply_id = uuid.uuid4()
+    await repository.complete_turn(alice, alice_turn.id, reply_id, "Alice reply", now)
+
+    bob_turn = await repository.start_turn(bob, bob_session.id, uuid.uuid4(), uuid.uuid4(), "bob", now)
+    with pytest.raises(HistoryConflictError, match="completion message conflict"):
+        await repository.complete_turn(bob, bob_turn.id, reply_id, "Bob reply", now)
+
+    detail = await repository.get_session(bob, bob_session.id)
+    assert detail.turns[0].status == "running"
+    assert [message.content for message in detail.turns[0].messages] == ["bob"]
+
+
+async def test_complete_turn_allows_exact_same_turn_assistant_retry_without_duplication(repo):
+    repository, alice, _ = repo
+    now = datetime.now(timezone.utc)
+    session = await repository.create_session(alice, "Idempotent completion")
+    turn = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now)
+    reply_id = uuid.uuid4()
+
+    await repository.complete_turn(alice, turn.id, reply_id, "same reply", now)
+    await repository.complete_turn(alice, turn.id, reply_id, "same reply", now)
+
+    detail = await repository.get_session(alice, session.id)
+    assert detail.turns[0].status == "completed"
+    assert [message.content for message in detail.turns[0].messages] == ["request", "same reply"]

@@ -34,6 +34,10 @@ class HistoryNotFoundError(LookupError):
     """A session or turn is absent for this owner (without leaking ownership)."""
 
 
+class HistoryConflictError(RuntimeError):
+    """A caller reused an immutable message identity for a different reply."""
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         raise ValueError("timestamps must be timezone-aware")
@@ -325,14 +329,28 @@ class HistoryRepository:
             if row is None:
                 raise HistoryNotFoundError("turn not found")
             session_id = row["session_id"]
-            ordinal = await conn.fetchval(
-                "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM agent_messages WHERE session_id=$1", session_id
+            existing_message = await conn.fetchrow(
+                """SELECT id, session_id, turn_id, role, content
+                   FROM agent_messages WHERE id=$1 FOR UPDATE""",
+                message_id,
             )
-            await conn.execute(
-                """INSERT INTO agent_messages (id, session_id, turn_id, role, content, ordinal, created_at)
-                   VALUES ($1,$2,$3,'assistant',$4,$5,$6) ON CONFLICT (id) DO NOTHING""",
-                message_id, session_id, turn_id, content, ordinal, now,
-            )
+            if existing_message is not None:
+                if not (
+                    existing_message["session_id"] == session_id
+                    and existing_message["turn_id"] == turn_id
+                    and existing_message["role"] == "assistant"
+                    and existing_message["content"] == content
+                ):
+                    raise HistoryConflictError("completion message conflict")
+            else:
+                ordinal = await conn.fetchval(
+                    "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM agent_messages WHERE session_id=$1", session_id
+                )
+                await conn.execute(
+                    """INSERT INTO agent_messages (id, session_id, turn_id, role, content, ordinal, created_at)
+                       VALUES ($1,$2,$3,'assistant',$4,$5,$6)""",
+                    message_id, session_id, turn_id, content, ordinal, now,
+                )
             await conn.execute(
                 """UPDATE agent_turns SET status='completed', completed_at=$3,
                        failure_code=NULL, failure_message=NULL, result_uncertain=false
