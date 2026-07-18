@@ -69,6 +69,21 @@ vim .env
 
 默认模型分别为 OpenAI `gpt-4o`、Anthropic `claude-sonnet-4-5`、Google `gemini-2.5-flash` 和 DeepSeek `deepseek-v4-flash`。变更模型配置后运行 `docker compose up -d --force-recreate agent frontend`。服务会在启动时验证配置，但健康检查不会调用模型 API。
 
+### 1.4 认证代理网络
+
+Compose 会创建内部 `auth_proxy` 网络（`172.30.10.0/29`）。只有 `frontend`
+（固定为 `172.30.10.2`）和 `backend`（固定为 `172.30.10.3`）加入其中；Nginx
+通过仅在该网络可解析的 `backend-proxy` 别名转发普通 `/api/` 请求。后端因此只信任
+`172.30.10.2/32` 发出的 `X-Real-IP`，Agent 和其他应用容器不能伪造该头绕过登录限流。
+
+此 Compose 安全边界是固定配置，故不会读取 `.env` 中的
+`AUTH_TRUSTED_PROXY_CIDRS`。该变量仅适用于手动部署后端时，且必须填写受控反向代理的
+精确 `/32`（或 IPv6 `/128`）地址，不能填写宽泛 Docker 网段。部署或变更 Compose 时运行：
+
+```bash
+python3 scripts/verify-compose-security.py
+```
+
 ---
 
 ## 2. Docker Compose 一键部署

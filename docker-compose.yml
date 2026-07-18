@@ -59,8 +59,16 @@ services:
       AUTH_LOGIN_ACCOUNT_LIMIT: ${AUTH_LOGIN_ACCOUNT_LIMIT:-10}
       AUTH_LOGIN_RATE_WINDOW_SECONDS: ${AUTH_LOGIN_RATE_WINDOW_SECONDS:-60}
       AUTH_LOGIN_RATE_CAPACITY: ${AUTH_LOGIN_RATE_CAPACITY:-4096}
-      AUTH_TRUSTED_PROXY_CIDRS: ${AUTH_TRUSTED_PROXY_CIDRS:-172.16.0.0/12,fc00::/7}
+      # Only nginx on auth_proxy can set the authoritative X-Real-IP header.
+      # This is intentionally not configurable from the deployment .env.
+      AUTH_TRUSTED_PROXY_CIDRS: 172.30.10.2/32
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks:
+      default: {}
+      auth_proxy:
+        ipv4_address: 172.30.10.3
+        aliases:
+          - backend-proxy
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/api/health"]
       interval: 5s
@@ -109,12 +117,27 @@ services:
     environment:
       VITE_API_BASE_URL: http://backend:8080
       VITE_WS_URL: ws://agent:8000
+    networks:
+      default: {}
+      auth_proxy:
+        ipv4_address: 172.30.10.2
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 5s
+
+# The agent and infrastructure remain on the default application network.
+# Backend is explicitly on both networks: agent traffic uses "backend" on
+# default, while browser Todo API traffic goes through this isolated alias.
+# It must stay unavailable to any service other than frontend and backend.
+networks:
+  auth_proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.30.10.0/29
 
 volumes:
   postgres_data:

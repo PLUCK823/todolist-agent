@@ -383,16 +383,17 @@ func TestAuthLoginMapsBoundedPasswordErrorsWithoutCredentialDisclosure(t *testin
 }
 
 func TestTrustedProxyClientIPResolverAcceptsOnlyConfiguredPeersAndValidSingleIPHeader(t *testing.T) {
-	resolver, err := handler.NewTrustedProxyClientIPResolver("172.16.0.0/12,fc00::/7")
+	resolver, err := handler.NewTrustedProxyClientIPResolver("172.30.10.2/32")
 	if err != nil {
 		t.Fatalf("NewTrustedProxyClientIPResolver() failed: %v", err)
 	}
 	for _, tc := range []struct {
 		name, remoteAddr, realIP, want string
 	}{
-		{"trusted peer", "172.18.0.2:8080", "203.0.113.8", "203.0.113.8"},
+		{"isolated frontend proxy", "172.30.10.2:8080", "203.0.113.8", "203.0.113.8"},
+		{"agent peer ignores forged header", "172.18.0.4:8080", "203.0.113.8", "172.18.0.4"},
 		{"untrusted peer ignores forged header", "198.51.100.8:8080", "203.0.113.8", "198.51.100.8"},
-		{"trusted peer ignores malformed header", "172.18.0.2:8080", "not-an-ip", "172.18.0.2"},
+		{"isolated frontend proxy ignores malformed header", "172.30.10.2:8080", "not-an-ip", "172.30.10.2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
