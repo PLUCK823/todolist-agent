@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -123,3 +124,33 @@ class ConversationMessage(BaseModel):
     content: str
     metadata: dict = Field(default_factory=dict)
     created_at: datetime
+
+
+# === Durable Agent session HTTP schemas ===
+
+
+class SessionCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    first_message: str | None = Field(default=None, min_length=1, max_length=10_000)
+
+    @field_validator("title", "first_message")
+    @classmethod
+    def optional_text_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+
+class SessionRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    title: str = Field(min_length=1, max_length=160)
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("title must not be blank")
+        return value

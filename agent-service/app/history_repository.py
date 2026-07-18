@@ -251,25 +251,53 @@ class HistoryRepository:
             )
             if owned_turn is None:
                 return False
-            existing = await conn.fetchrow("SELECT turn_id FROM agent_steps WHERE event_id = $1", event.event_id)
+            existing = await conn.fetchrow(
+                """SELECT st.turn_id FROM agent_steps st
+                   JOIN agent_turns t ON t.id = st.turn_id
+                   JOIN agent_sessions s ON s.id = t.session_id
+                   WHERE st.event_id = $1 AND s.owner_id = $2""",
+                event.event_id, owner_id,
+            )
             if existing is not None and existing["turn_id"] != turn_id:
                 return False
             if existing is None:
                 ordinal = await conn.fetchval(
                     "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM agent_steps WHERE turn_id = $1", turn_id
                 )
-                await conn.execute(
+                inserted = await conn.fetchval(
                     """INSERT INTO agent_steps (
                          id, turn_id, event_id, ordinal, label, tool, status, args, result,
                          result_preview, result_truncated, duration_ms, error_code, error_message,
                          retryable, confirmation_id, confirmation_message, confirmation_approved,
                          started_at, completed_at)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)""",
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+                       ON CONFLICT (event_id) DO NOTHING RETURNING id""",
                     uuid4(), turn_id, event.event_id, ordinal, event.label, event.tool, event.status,
                     args_json, stored_result, preview, truncated, event.duration_ms, event.error_code,
                     event.error_message, event.retryable, event.confirmation_id,
                     event.confirmation_message, event.confirmation_approved, started_at, completed_at,
                 )
+                if inserted is None:
+                    existing = await conn.fetchrow(
+                        """SELECT st.turn_id FROM agent_steps st
+                           JOIN agent_turns t ON t.id = st.turn_id
+                           JOIN agent_sessions s ON s.id = t.session_id
+                           WHERE st.event_id = $1 AND s.owner_id = $2""",
+                        event.event_id, owner_id,
+                    )
+                    if existing is None or existing["turn_id"] != turn_id:
+                        return False
+                    await conn.execute(
+                        """UPDATE agent_steps SET label=$3, tool=$4, status=$5, args=$6::jsonb,
+                             result=$7::jsonb, result_preview=$8, result_truncated=$9, duration_ms=$10,
+                             error_code=$11, error_message=$12, retryable=$13, confirmation_id=$14,
+                             confirmation_message=$15, confirmation_approved=$16, started_at=$17, completed_at=$18
+                           WHERE event_id=$1 AND turn_id=$2""",
+                        event.event_id, turn_id, event.label, event.tool, event.status, args_json,
+                        stored_result, preview, truncated, event.duration_ms, event.error_code,
+                        event.error_message, event.retryable, event.confirmation_id,
+                        event.confirmation_message, event.confirmation_approved, started_at, completed_at,
+                    )
             else:
                 await conn.execute(
                     """UPDATE agent_steps SET label=$3, tool=$4, status=$5, args=$6::jsonb,

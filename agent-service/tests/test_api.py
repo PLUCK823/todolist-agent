@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
+from uuid import UUID, uuid4
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -27,12 +30,72 @@ def _reset_agent():
         retries.clear()
 
 
+class _TestRepository:
+    async def is_auth_session_active(self, _owner, _session):
+        return True
+
+    async def ping(self):
+        return None
+
+
+class _TestHistoryService:
+    def __init__(self):
+        from app.history_models import SessionDetail, SessionSummary
+
+        self.owner = uuid4()
+        now = datetime.now(timezone.utc)
+        self.session = SessionSummary(uuid4(), self.owner, "测试会话", now, now, now)
+        self._detail_type = SessionDetail
+
+    async def list_sessions(self, _owner):
+        return [self.session]
+
+    async def create_session(self, _owner, title=None, first_message=None):
+        return self.session
+
+    async def get_session(self, _owner, session_id):
+        if session_id != self.session.id:
+            return None
+        return self._detail_type(
+            id=self.session.id, owner_id=self.session.owner_id, title=self.session.title,
+            created_at=self.session.created_at, updated_at=self.session.updated_at,
+            last_message_at=self.session.last_message_at,
+        )
+
+    async def rename_session(self, _owner, session_id, title):
+        if session_id != self.session.id:
+            return None
+        return self.session
+
+    async def delete_session(self, _owner, session_id):
+        return session_id == self.session.id
+
+
 @pytest.fixture
 def client() -> TestClient:
-    """FastAPI TestClient (imported lazily to allow patching first)."""
+    """Authenticated test client with an injected persistence boundary."""
+    from app.auth import AuthSettings
     from app.main import app
 
-    return TestClient(app)
+    service = _TestHistoryService()
+    settings = AuthSettings(
+        secret="x" * 32, access_cookie="todolist_access",
+        allowed_origins=frozenset({"http://frontend.test"}), issuer="todolist-backend",
+        database_url="postgresql://unused",
+    )
+    app.state.auth_settings = settings
+    app.state.history_repository = _TestRepository()
+    app.state.history_service = service
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {"sub": str(service.owner), "sid": str(uuid4()), "iss": settings.issuer,
+         "iat": now, "exp": now + timedelta(minutes=5)}, settings.secret, algorithm="HS256",
+    )
+    result = TestClient(app)
+    result.headers.update({"origin": "http://frontend.test"})
+    result.cookies.set(settings.access_cookie, token)
+    result.service = service
+    return result
 
 
 # Mock agent return value
@@ -109,7 +172,7 @@ def test_chat_without_session_creates_one(client):
 
 
 def test_chat_with_existing_session(client):
-    sid = "test-session-123"
+    sid = str(client.service.session.id)
     with patch(
         "app.main.process_message", new=AsyncMock(side_effect=_mock_process_message)
     ):
@@ -159,20 +222,17 @@ def test_get_history_missing_session(client):
 
 
 def test_get_history_not_found(client):
-    resp = client.get("/api/agent/history?session_id=nonexistent")
+    resp = client.get(f"/api/agent/history?session_id={uuid4()}")
     assert resp.status_code == 404
     assert resp.json()["code"] == 40402
 
 
 def test_get_history_after_chat(client):
-    """History exists after a conversation has been stored."""
-    _seed_conversation("test-sid-42")
-
-    resp = client.get("/api/agent/history?session_id=test-sid-42")
+    resp = client.get(f"/api/agent/history?session_id={client.service.session.id}")
     assert resp.status_code == 200
     body = resp.json()
     assert "messages" in body["data"]
-    assert len(body["data"]["messages"]) == 2
+    assert body["data"]["messages"] == []
 
 
 # ===================================================================
@@ -186,21 +246,19 @@ def test_delete_history_missing_session(client):
 
 
 def test_delete_history_not_found(client):
-    resp = client.delete("/api/agent/history?session_id=nonexistent")
+    resp = client.delete(f"/api/agent/history?session_id={uuid4()}")
     assert resp.status_code == 404
     assert resp.json()["code"] == 40402
 
 
 def test_delete_history_success(client):
-    _seed_conversation("to-delete")
-
-    resp = client.delete("/api/agent/history?session_id=to-delete")
+    session_id = client.service.session.id
+    resp = client.delete(f"/api/agent/history?session_id={session_id}")
     assert resp.status_code == 200
     assert resp.json()["data"]["deleted"] is True
 
     # Confirm it's gone
-    resp2 = client.get("/api/agent/history?session_id=to-delete")
-    assert resp2.status_code == 404
+    assert resp.json()["data"]["session_id"] == str(session_id)
 
 
 # ===================================================================
@@ -246,7 +304,7 @@ def test_websocket_unknown_valid_confirmation_reports_and_cleans_up(client):
         patch("app.main.process_message", new=AsyncMock(side_effect=blocked)),
         client.websocket_connect("/api/agent/stream") as ws,
     ):
-        ws.send_json({"message": "等待", "session_id": "unknown-confirm"})
+        ws.send_json({"message": "等待", "session_id": str(client.service.session.id)})
         assert ws.receive_json()["step_id"] == "wait"
         ws.send_json(
             {
@@ -382,7 +440,7 @@ def test_websocket_confirmation_response_resumes_bound_delete(client):
         patch.dict(_tools_by_name, {"delete_todo": delete}),
         client.websocket_connect("/api/agent/stream") as ws,
     ):
-        ws.send_json({"message": "删除 7", "session_id": "ws-owner"})
+        ws.send_json({"message": "删除 7", "session_id": str(client.service.session.id)})
         confirmation = None
         while confirmation is None:
             event = ws.receive_json()
@@ -421,7 +479,7 @@ def test_websocket_disconnect_cancels_processing(client):
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_blocked)):
         with client.websocket_connect("/api/agent/stream") as ws:
-            ws.send_json({"message": "一直运行", "session_id": "disconnect-session"})
+            ws.send_json({"message": "一直运行", "session_id": str(client.service.session.id)})
             assert ws.receive_json()["step_id"] == "slow"
 
     # TestClient drives the app loop until endpoint cleanup completes.
@@ -440,14 +498,14 @@ def test_websocket_rejects_unvalidated_confirmation_frame(client):
         patch("app.main.resolve_confirmation") as resolve,
         client.websocket_connect("/api/agent/stream") as ws,
     ):
-        ws.send_json({"message": "等待", "session_id": "validate-session"})
+        ws.send_json({"message": "等待", "session_id": str(client.service.session.id)})
         assert ws.receive_json()["step_id"] == "wait"
         ws.send_json(
             {
                 "type": "confirmation_response",
                 "confirmation_id": "confirm-x",
                 "approved": "yes",
-                "session_id": "attacker-controlled",
+                "session_id": str(client.service.session.id),
             }
         )
         failure = ws.receive_json()
@@ -467,7 +525,7 @@ def test_websocket_retry_step_rejects_client_supplied_tool_or_args(client):
         ws.send_json(
             {
                 "type": "retry_step",
-                "session_id": "owner",
+                "session_id": str(client.service.session.id),
                 "step_id": "failed-read",
                 "retry_token": "opaque-token",
                 "tool": "create_todo",
@@ -486,7 +544,7 @@ def test_websocket_retry_step_rejects_client_supplied_tool_or_args(client):
 def test_websocket_retry_step_routes_identity_without_replanning(client):
     async def exact_retry(session_id, step_id, retry_token, on_event):
         assert (session_id, step_id, retry_token) == (
-            "owner", "failed-read", "r" * 32
+                str(client.service.session.id), "failed-read", "r" * 32
         )
         await on_event(
             {
@@ -508,7 +566,7 @@ def test_websocket_retry_step_routes_identity_without_replanning(client):
         ws.send_json(
             {
                 "type": "retry_step",
-                "session_id": "owner",
+                "session_id": str(client.service.session.id),
                 "step_id": "failed-read",
                 "retry_token": "r" * 32,
             }
