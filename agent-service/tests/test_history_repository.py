@@ -24,7 +24,9 @@ pytestmark = pytest.mark.asyncio
 async def repo():
     database_url = os.getenv("TEST_DATABASE_URL")
     if not database_url:
-        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL history integration tests")
+        pytest.skip(
+            "TEST_DATABASE_URL is required for PostgreSQL history integration tests"
+        )
 
     import asyncpg
 
@@ -34,7 +36,10 @@ async def repo():
     alice = uuid.uuid4()
     bob = uuid.uuid4()
     async with pool.acquire() as conn:
-        for user, email in ((alice, f"alice-{suffix}@example.test"), (bob, f"bob-{suffix}@example.test")):
+        for user, email in (
+            (alice, f"alice-{suffix}@example.test"),
+            (bob, f"bob-{suffix}@example.test"),
+        ):
             await conn.execute(
                 """INSERT INTO users (id, email, display_name, password_hash)
                    VALUES ($1, $2, 'Test User', 'not-a-real-password')""",
@@ -45,7 +50,9 @@ async def repo():
         yield repository, alice, bob
     finally:
         async with pool.acquire() as conn:
-            await conn.execute("DELETE FROM users WHERE email LIKE $1", f"%-{suffix}@example.test")
+            await conn.execute(
+                "DELETE FROM users WHERE email LIKE $1", f"%-{suffix}@example.test"
+            )
         await pool.close()
 
 
@@ -62,14 +69,23 @@ async def test_detail_is_ordered_and_cascade_delete_removes_turns(repo):
     repository, alice, _ = repo
     session = await repository.create_session(alice, "Ordered")
     now = datetime.now(timezone.utc)
-    turn_one = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "first", now)
+    turn_one = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "first", now
+    )
     await repository.complete_turn(alice, turn_one.id, uuid.uuid4(), "first reply", now)
-    turn_two = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "second", now)
-    await repository.complete_turn(alice, turn_two.id, uuid.uuid4(), "second reply", now)
+    turn_two = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "second", now
+    )
+    await repository.complete_turn(
+        alice, turn_two.id, uuid.uuid4(), "second reply", now
+    )
 
     detail = await repository.get_session(alice, session.id)
     assert [turn.ordinal for turn in detail.turns] == [1, 2]
-    assert [message.content for message in detail.turns[0].messages] == ["first", "first reply"]
+    assert [message.content for message in detail.turns[0].messages] == [
+        "first",
+        "first reply",
+    ]
     assert await repository.delete_session(alice, session.id) is True
     assert await repository.get_session(alice, session.id) is None
 
@@ -79,12 +95,41 @@ async def test_concurrent_start_turns_allocate_distinct_ordinals(repo):
     session = await repository.create_session(alice, "Concurrent")
     now = datetime.now(timezone.utc)
 
-    turns = await asyncio.gather(*[
-        repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), f"message {index}", now)
-        for index in range(10)
-    ])
+    turns = await asyncio.gather(
+        *[
+            repository.start_turn(
+                alice, session.id, uuid.uuid4(), uuid.uuid4(), f"message {index}", now
+            )
+            for index in range(10)
+        ]
+    )
 
     assert sorted(turn.ordinal for turn in turns) == list(range(1, 11))
+
+
+async def test_start_turn_is_idempotent_for_same_stable_turn_and_user_message(repo):
+    repository, alice, _ = repo
+    session = await repository.create_session(alice, "Reconnect")
+    now = datetime.now(timezone.utc)
+    turn_id = uuid.uuid4()
+    message_id = uuid.uuid4()
+
+    first = await repository.start_turn(
+        alice, session.id, turn_id, message_id, "same request", now
+    )
+    second = await repository.start_turn(
+        alice,
+        session.id,
+        turn_id,
+        message_id,
+        "same request",
+        now + timedelta(seconds=1),
+    )
+
+    detail = await repository.get_session(alice, session.id)
+    assert second == first
+    assert len(detail.turns) == 1
+    assert [message.content for message in detail.turns[0].messages] == ["same request"]
 
 
 async def test_upsert_step_is_idempotent_and_rejects_cross_owner_collision(repo):
@@ -92,10 +137,20 @@ async def test_upsert_step_is_idempotent_and_rejects_cross_owner_collision(repo)
     alice_session = await repository.create_session(alice, "Alice")
     bob_session = await repository.create_session(bob, "Bob")
     now = datetime.now(timezone.utc)
-    alice_turn = await repository.start_turn(alice, alice_session.id, uuid.uuid4(), uuid.uuid4(), "hello", now)
-    bob_turn = await repository.start_turn(bob, bob_session.id, uuid.uuid4(), uuid.uuid4(), "hello", now)
+    alice_turn = await repository.start_turn(
+        alice, alice_session.id, uuid.uuid4(), uuid.uuid4(), "hello", now
+    )
+    bob_turn = await repository.start_turn(
+        bob, bob_session.id, uuid.uuid4(), uuid.uuid4(), "hello", now
+    )
     event_id = uuid.uuid4()
-    event = PersistedStepEvent(event_id=event_id, label="Call Todo API", status="completed", args={"b": 2, "a": 1}, result={"ok": True})
+    event = PersistedStepEvent(
+        event_id=event_id,
+        label="Call Todo API",
+        status="completed",
+        args={"b": 2, "a": 1},
+        result={"ok": True},
+    )
 
     assert await repository.upsert_step(alice, alice_turn.id, event) is True
     assert await repository.upsert_step(alice, alice_turn.id, event) is True
@@ -109,11 +164,18 @@ async def test_result_is_bounded_by_utf8_bytes_with_preview(repo, monkeypatch):
     monkeypatch.setattr("app.history_repository.RESULT_MAX_BYTES", 48)
     session = await repository.create_session(alice, "Results")
     now = datetime.now(timezone.utc)
-    turn = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "hello", now)
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "hello", now
+    )
     await repository.upsert_step(
         alice,
         turn.id,
-        PersistedStepEvent(event_id=uuid.uuid4(), label="Big", status="completed", result={"text": "你" * 100}),
+        PersistedStepEvent(
+            event_id=uuid.uuid4(),
+            label="Big",
+            status="completed",
+            result={"text": "你" * 100},
+        ),
     )
     detail = await repository.get_session(alice, session.id)
     step = detail.turns[0].steps[0]
@@ -128,9 +190,15 @@ async def test_rename_fail_and_interrupt_open_turns(repo):
     renamed = await repository.rename_session(alice, session.id, "  New name  ")
     assert renamed.title == "New name"
     now = datetime.now(timezone.utc)
-    failed = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "fail", now)
-    await repository.fail_turn(alice, failed.id, "MODEL_FAILED", "model unavailable", uncertain=True)
-    interrupted = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "open", now)
+    failed = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "fail", now
+    )
+    await repository.fail_turn(
+        alice, failed.id, "MODEL_FAILED", "model unavailable", uncertain=True
+    )
+    interrupted = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "open", now
+    )
     assert await repository.interrupt_open_turns() >= 1
     detail = await repository.get_session(alice, session.id)
     by_id = {turn.id: turn for turn in detail.turns}
@@ -139,17 +207,23 @@ async def test_rename_fail_and_interrupt_open_turns(repo):
     assert by_id[interrupted.id].status == "interrupted"
 
 
-async def test_complete_turn_rejects_message_id_owned_by_another_turn_and_rolls_back(repo):
+async def test_complete_turn_rejects_message_id_owned_by_another_turn_and_rolls_back(
+    repo,
+):
     """A forged/reused message ID cannot complete a turn without its reply."""
     repository, alice, bob = repo
     now = datetime.now(timezone.utc)
     alice_session = await repository.create_session(alice, "Alice")
     bob_session = await repository.create_session(bob, "Bob")
-    alice_turn = await repository.start_turn(alice, alice_session.id, uuid.uuid4(), uuid.uuid4(), "alice", now)
+    alice_turn = await repository.start_turn(
+        alice, alice_session.id, uuid.uuid4(), uuid.uuid4(), "alice", now
+    )
     reply_id = uuid.uuid4()
     await repository.complete_turn(alice, alice_turn.id, reply_id, "Alice reply", now)
 
-    bob_turn = await repository.start_turn(bob, bob_session.id, uuid.uuid4(), uuid.uuid4(), "bob", now)
+    bob_turn = await repository.start_turn(
+        bob, bob_session.id, uuid.uuid4(), uuid.uuid4(), "bob", now
+    )
     with pytest.raises(HistoryConflictError, match="completion message conflict"):
         await repository.complete_turn(bob, bob_turn.id, reply_id, "Bob reply", now)
 
@@ -158,11 +232,15 @@ async def test_complete_turn_rejects_message_id_owned_by_another_turn_and_rolls_
     assert [message.content for message in detail.turns[0].messages] == ["bob"]
 
 
-async def test_complete_turn_allows_exact_same_turn_assistant_retry_without_duplication(repo):
+async def test_complete_turn_allows_exact_same_turn_assistant_retry_without_duplication(
+    repo,
+):
     repository, alice, _ = repo
     now = datetime.now(timezone.utc)
     session = await repository.create_session(alice, "Idempotent completion")
-    turn = await repository.start_turn(alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now)
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now
+    )
     reply_id = uuid.uuid4()
 
     await repository.complete_turn(alice, turn.id, reply_id, "same reply", now)
@@ -173,7 +251,10 @@ async def test_complete_turn_allows_exact_same_turn_assistant_retry_without_dupl
 
     detail = await repository.get_session(alice, session.id)
     assert detail.turns[0].status == "completed"
-    assert [message.content for message in detail.turns[0].messages] == ["request", "same reply"]
+    assert [message.content for message in detail.turns[0].messages] == [
+        "request",
+        "same reply",
+    ]
     assert detail.turns[0].completed_at == first.turns[0].completed_at
     assert detail.updated_at == first.updated_at
     assert detail.last_message_at == first.last_message_at
@@ -212,9 +293,7 @@ async def test_failed_turn_rejects_late_completion_without_mutation(repo):
     before = await repository.get_session(alice, session.id)
 
     with pytest.raises(HistoryConflictError, match="terminal"):
-        await repository.complete_turn(
-            alice, turn.id, uuid.uuid4(), "late reply", now
-        )
+        await repository.complete_turn(alice, turn.id, uuid.uuid4(), "late reply", now)
 
     after = await repository.get_session(alice, session.id)
     assert after == before
@@ -231,16 +310,16 @@ async def test_interrupted_turn_rejects_late_completion_without_mutation(repo):
     before = await repository.get_session(alice, session.id)
 
     with pytest.raises(HistoryConflictError, match="terminal"):
-        await repository.complete_turn(
-            alice, turn.id, uuid.uuid4(), "late reply", now
-        )
+        await repository.complete_turn(alice, turn.id, uuid.uuid4(), "late reply", now)
 
     after = await repository.get_session(alice, session.id)
     assert after == before
 
 
 @pytest.mark.parametrize("terminal_status", ["completed", "failed", "interrupted"])
-async def test_terminal_turn_rejects_late_step_create_and_mutation(repo, terminal_status):
+async def test_terminal_turn_rejects_late_step_create_and_mutation(
+    repo, terminal_status
+):
     repository, alice, _ = repo
     now = datetime.now(timezone.utc)
     session = await repository.create_session(alice, f"Terminal {terminal_status}")
@@ -260,21 +339,27 @@ async def test_terminal_turn_rejects_late_step_create_and_mutation(repo, termina
         await repository.interrupt_open_turns()
     before = await repository.get_session(alice, session.id)
 
-    assert await repository.upsert_step(
-        alice,
-        turn.id,
-        PersistedStepEvent(
-            event_id=event_id,
-            label="Mutated",
-            status="completed",
-            args={"version": 2},
-        ),
-    ) is False
-    assert await repository.upsert_step(
-        alice,
-        turn.id,
-        PersistedStepEvent(event_id=uuid.uuid4(), label="Late", status="running"),
-    ) is False
+    assert (
+        await repository.upsert_step(
+            alice,
+            turn.id,
+            PersistedStepEvent(
+                event_id=event_id,
+                label="Mutated",
+                status="completed",
+                args={"version": 2},
+            ),
+        )
+        is False
+    )
+    assert (
+        await repository.upsert_step(
+            alice,
+            turn.id,
+            PersistedStepEvent(event_id=uuid.uuid4(), label="Late", status="running"),
+        )
+        is False
+    )
 
     after = await repository.get_session(alice, session.id)
     assert after == before
@@ -394,9 +479,12 @@ async def test_terminated_lock_holder_fails_closed_and_successor_recovers(
             )
 
             async with pool_b.acquire() as killer:
-                assert await killer.fetchval(
-                    "SELECT pg_terminate_backend($1)", ownership.holder_pid
-                ) is True
+                assert (
+                    await killer.fetchval(
+                        "SELECT pg_terminate_backend($1)", ownership.holder_pid
+                    )
+                    is True
+                )
             await asyncio.wait_for(lost.wait(), timeout=2)
 
             assert ownership.ready is False

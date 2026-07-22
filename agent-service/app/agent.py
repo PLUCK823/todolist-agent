@@ -13,7 +13,8 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Protocol
+from uuid import NAMESPACE_URL, uuid5
 
 from langchain_core.messages import (
     AIMessage,
@@ -83,6 +84,31 @@ class InvalidRetryStep(RuntimeError):
     """A retry identity is missing, consumed, stale, or bound elsewhere."""
 
 
+@dataclass(frozen=True, slots=True)
+class DurableTurnRequest:
+    """Stable identities required to atomically persist a user turn."""
+
+    turn_id: str
+    message_id: str
+    assistant_message_id: str
+    message: str
+    created_at: datetime
+
+
+class TurnPersistence(Protocol):
+    """Durable history boundary injected into the shared Agent loop."""
+
+    async def start(self, request: DurableTurnRequest) -> None: ...
+
+    async def checkpoint(self, event: dict[str, Any]) -> None: ...
+
+    async def complete(self, reply: str) -> None: ...
+
+    async def fail(self, code: str, message: str, *, uncertain: bool) -> None: ...
+
+    def mark_write_applied(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class ProcessResult:
     """Streaming metadata with legacy three-value unpacking compatibility."""
@@ -118,29 +144,42 @@ class _DeterministicE2ELLM:
 
     async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
         last_human_index = max(
-            (index for index, message in enumerate(messages) if isinstance(message, HumanMessage)),
+            (
+                index
+                for index, message in enumerate(messages)
+                if isinstance(message, HumanMessage)
+            ),
             default=-1,
         )
-        prompt = str(messages[last_human_index].content) if last_human_index >= 0 else ""
-        if any(isinstance(message, ToolMessage) for message in messages[last_human_index + 1:]):
+        prompt = (
+            str(messages[last_human_index].content) if last_human_index >= 0 else ""
+        )
+        if any(
+            isinstance(message, ToolMessage)
+            for message in messages[last_human_index + 1 :]
+        ):
             title = self._create_title(prompt)
             return AIMessage(content=f"已创建高优先级任务「{title}」。")
 
         title = self._create_title(prompt)
         return AIMessage(
             content="",
-            tool_calls=[{
-                "name": "create_todo",
-                "args": {"title": title, "priority": "high"},
-                "id": "e2e-create-todo",
-                "type": "tool_call",
-            }],
+            tool_calls=[
+                {
+                    "name": "create_todo",
+                    "args": {"title": title, "priority": "high"},
+                    "id": "e2e-create-todo",
+                    "type": "tool_call",
+                }
+            ],
         )
 
     @staticmethod
     def _create_title(prompt: str) -> str:
         match = re.search(r"(?:任务|待办)\s*[：:]\s*(.+)$", prompt.strip())
-        title = match.group(1).strip(" \t\r\n。.!！?？\"'「」") if match else prompt.strip()
+        title = (
+            match.group(1).strip(" \t\r\n。.!！?？\"'「」") if match else prompt.strip()
+        )
         return title or "真实联调任务"
 
 
@@ -211,6 +250,10 @@ _session_slots: dict[str, _SessionSlot] = {}
 class _PendingEntry:
     binding: PendingConfirmation
     future: asyncio.Future[bool]
+    owner_id: str | None = None
+    turn_id: str = ""
+    generation: int = 0
+    runtime_generation: int | None = None
 
 
 _pending_confirmations: dict[str, _PendingEntry] = {}
@@ -218,20 +261,20 @@ _pending_confirmations: dict[str, _PendingEntry] = {}
 
 @dataclass(frozen=True)
 class _PendingRetry:
+    owner_id: str | None
     session_id: str
     step_id: str
     tool: str
     args: dict[str, Any]
     turn_id: str
     generation: int
+    runtime_generation: int | None
 
 
 _pending_retries: dict[str, _PendingRetry] = {}
 
 
-def _clear_retries_for_session(
-    session_id: str, *, turn_id: str | None = None
-) -> None:
+def _clear_retries_for_session(session_id: str, *, turn_id: str | None = None) -> None:
     for token, retry in list(_pending_retries.items()):
         if retry.session_id == session_id and (
             turn_id is None or retry.turn_id == turn_id
@@ -242,6 +285,8 @@ def _clear_retries_for_session(
 def _register_retry(
     session_id: str,
     generation: int,
+    owner_id: str | None,
+    runtime_generation: int | None,
     state: dict[str, Any],
     step_id: str,
     tool: str,
@@ -249,12 +294,14 @@ def _register_retry(
 ) -> str:
     token = secrets.token_urlsafe(32)
     _pending_retries[token] = _PendingRetry(
+        owner_id=owner_id,
         session_id=session_id,
         step_id=step_id,
         tool=tool,
         args=copy.deepcopy(args),
         turn_id=state["turn_id"],
         generation=generation,
+        runtime_generation=runtime_generation,
     )
     return token
 
@@ -262,6 +309,22 @@ def _register_retry(
 def _clear_pending_for_session(session_id: str) -> None:
     for confirmation_id, entry in list(_pending_confirmations.items()):
         if entry.binding.session_id == session_id:
+            _pending_confirmations.pop(confirmation_id, None)
+            if not entry.future.done():
+                entry.future.cancel()
+
+
+def invalidate_turn_tokens(
+    session_id: str, turn_id: str | None, generation: int | None
+) -> None:
+    """Disable retry and confirmation capabilities after a terminal fault."""
+    _clear_retries_for_session(session_id, turn_id=turn_id)
+    for confirmation_id, entry in list(_pending_confirmations.items()):
+        if (
+            entry.binding.session_id == session_id
+            and (turn_id is None or entry.turn_id == turn_id)
+            and (generation is None or entry.generation == generation)
+        ):
             _pending_confirmations.pop(confirmation_id, None)
             if not entry.future.done():
                 entry.future.cancel()
@@ -418,9 +481,31 @@ async def delete_history(session_id: str) -> bool:
     return existed
 
 
-def resolve_confirmation(session_id: str, confirmation_id: str, approved: bool) -> bool:
+def resolve_confirmation(
+    session_id: str,
+    confirmation_id: str,
+    approved: bool,
+    *,
+    owner_id: str | None = None,
+    runtime_generation: int | None = None,
+) -> bool:
     entry = _pending_confirmations.get(confirmation_id)
-    if entry is None or entry.binding.session_id != session_id:
+    slot = _session_slots.get(session_id)
+    record = _conversations.get(session_id)
+    state = record.get("incomplete") if record is not None else None
+    if (
+        entry is None
+        or entry.binding.session_id != session_id
+        or slot is None
+        or slot.epoch != entry.generation
+        or state is None
+        or state.get("turn_id") != entry.turn_id
+        or (entry.owner_id is not None and entry.owner_id != owner_id)
+        or (
+            entry.runtime_generation is not None
+            and entry.runtime_generation != runtime_generation
+        )
+    ):
         return False
     _pending_confirmations.pop(confirmation_id, None)
     if entry.future.done():
@@ -434,6 +519,9 @@ async def retry_failed_step(
     step_id: str,
     retry_token: str,
     on_event: Optional[AgentEventSink] = None,
+    *,
+    owner_id: str | None = None,
+    runtime_generation: int | None = None,
 ) -> dict[str, Any]:
     """Execute one exact server-recorded read-only call without invoking the LLM."""
     slot = _session_slots.get(session_id)
@@ -444,13 +532,20 @@ async def retry_failed_step(
         record = _conversations.get(session_id)
         if (
             pending is None
+            or (pending.owner_id is not None and pending.owner_id != owner_id)
             or pending.session_id != session_id
             or pending.step_id != step_id
             or pending.generation != slot.epoch
+            or (
+                pending.runtime_generation is not None
+                and pending.runtime_generation != runtime_generation
+            )
             or pending.tool not in READ_ONLY_RETRY_TOOLS
             or record is None
         ):
-            raise InvalidRetryStep("retry step does not exist or is no longer available")
+            raise InvalidRetryStep(
+                "retry step does not exist or is no longer available"
+            )
         state = record.get("incomplete")
         if state is not None:
             if (
@@ -466,21 +561,27 @@ async def retry_failed_step(
             record["pending_terminal_ack_turn_id"] = pending.turn_id
             _save_record(session_id, pending.generation, record)
             record = _conversations.get(session_id)
-        if (
-            record is None
-            or record.get("last_completed_turn_id") != pending.turn_id
-        ):
+        if record is None or record.get("last_completed_turn_id") != pending.turn_id:
             raise InvalidRetryStep("retry step is not bound to the completed turn")
         tool = _tools_by_name.get(pending.tool)
         if tool is None:
             raise InvalidRetryStep("retry tool is no longer available")
         if _pending_retries.pop(retry_token, None) is not pending:
-            raise InvalidRetryStep("retry step does not exist or is no longer available")
+            raise InvalidRetryStep(
+                "retry step does not exist or is no longer available"
+            )
         started = time.monotonic()
+        event_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"agent:{pending.turn_id}:retry:{pending.step_id}",
+            )
+        )
         await _emit(
             on_event,
             {
                 "type": "step_started",
+                "event_id": event_id,
                 "step_id": step_id,
                 "label": "重试 Todo API 查询",
                 "tool": pending.tool,
@@ -496,6 +597,7 @@ async def retry_failed_step(
                 on_event,
                 {
                     "type": "step_failed",
+                    "event_id": event_id,
                     "step_id": step_id,
                     "error_code": error_code,
                     "message": str(exc),
@@ -508,6 +610,7 @@ async def retry_failed_step(
             ) from exc
         event = {
             "type": "action_completed",
+            "event_id": event_id,
             "step_id": step_id,
             "action": pending.tool,
             "result": result,
@@ -520,6 +623,22 @@ async def retry_failed_step(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_event_id(event: dict[str, Any], turn_id: str) -> dict[str, Any]:
+    """Give all visible transitions one stable identity per logical step."""
+    if event.get("type") in {
+        "step_started",
+        "step_completed",
+        "action_completed",
+        "step_failed",
+        "confirmation_required",
+    }:
+        step_id = str(event.get("step_id", event["type"]))
+        event.setdefault(
+            "event_id", str(uuid5(NAMESPACE_URL, f"agent:{turn_id}:{step_id}"))
+        )
+    return event
 
 
 async def _emit(on_event: Optional[AgentEventSink], event: dict[str, Any]) -> None:
@@ -566,9 +685,12 @@ def _save_record(session_id: str, generation: int, record: dict[str, Any]) -> No
 
 
 def _new_incomplete(message: str, committed: list[BaseMessage]) -> dict[str, Any]:
+    turn_id = str(uuid.uuid4())
     return {
         "request": message,
-        "turn_id": str(uuid.uuid4()),
+        "turn_id": turn_id,
+        "user_message_id": str(uuid5(NAMESPACE_URL, f"agent:{turn_id}:user")),
+        "assistant_message_id": str(uuid5(NAMESPACE_URL, f"agent:{turn_id}:assistant")),
         "messages": list(committed) + [HumanMessage(content=message)],
         "actions": [],
         "journal": {},
@@ -595,6 +717,7 @@ async def _deliver_checkpointed_event(
     kind: str = "event",
 ) -> None:
     """Persist the exact event before crossing the fallible stream boundary."""
+    _ensure_event_id(event, state["turn_id"])
     state["pending_event"] = copy.deepcopy(event)
     state["pending_event_kind"] = kind
     record["incomplete"] = state
@@ -615,6 +738,7 @@ async def _replay_pending_event(
     event = state.get("pending_event")
     if event is None or state.get("pending_event_kind") == "confirmation":
         return
+    _ensure_event_id(event, state["turn_id"])
     await _emit(on_event, copy.deepcopy(event))
     state["pending_event"] = None
     state["pending_event_kind"] = None
@@ -736,6 +860,11 @@ async def process_message(
     session_id: Optional[str],
     message: str,
     on_event: Optional[AgentEventSink] = None,
+    *,
+    persistence: TurnPersistence | None = None,
+    initial_history: list[BaseMessage] | None = None,
+    owner_id: str | None = None,
+    runtime_generation: int | None = None,
 ) -> ProcessResult:
     session_id = session_id or str(uuid.uuid4())
     slot = _slot_for(session_id)
@@ -766,9 +895,18 @@ async def process_message(
         try:
             _prune_sessions(protected=session_id)
             existing = copy.deepcopy(_conversations.get(session_id, {}))
-            committed = list(
-                existing.get("messages", [SystemMessage(content=SYSTEM_PROMPT)])
+            hydrated = [SystemMessage(content=SYSTEM_PROMPT)] + list(
+                initial_history or []
             )
+            committed = list(existing.get("messages", _trim_messages(hydrated)))
+            original_event_sink = on_event
+
+            async def durable_event_sink(event: dict[str, Any]) -> None:
+                assert persistence is not None
+                await persistence.checkpoint(event)
+                await _emit(original_event_sink, event)
+
+            event_sink = durable_event_sink if persistence is not None else on_event
             state = existing.get("incomplete")
             if state is not None:
                 if state["request"] != message:
@@ -777,7 +915,7 @@ async def process_message(
                     )
                 if state.get("error_code") == "AGENT_LIMIT_EXCEEDED":
                     await _raise_limit(
-                        session_id, generation, existing, state, on_event
+                        session_id, generation, existing, state, event_sink
                     )
                 state["error_code"] = None
             else:
@@ -786,20 +924,50 @@ async def process_message(
 
             # Forward-compatible defaults for journals created by older workers.
             state.setdefault("turn_id", str(uuid.uuid4()))
+            state.setdefault(
+                "user_message_id",
+                str(uuid5(NAMESPACE_URL, f"agent:{state['turn_id']}:user")),
+            )
+            state.setdefault(
+                "assistant_message_id",
+                str(
+                    uuid5(
+                        NAMESPACE_URL,
+                        f"agent:{state['turn_id']}:assistant",
+                    )
+                ),
+            )
             state.setdefault("tool_steps", {})
             state.setdefault("confirmations", {})
             state.setdefault("pending_event", None)
             state.setdefault("pending_event_kind", None)
 
+            # Journal stable durable identities before the database call. If
+            # the commit succeeds but its acknowledgement is lost, reconnect
+            # retries the exact same turn/user identities idempotently.
             record = dict(existing)
             record["messages"] = committed
             record["incomplete"] = state
             _save_record(session_id, generation, record)
-            await _replay_pending_event(session_id, generation, record, state, on_event)
+
+            if persistence is not None:
+                await persistence.start(
+                    DurableTurnRequest(
+                        turn_id=state["turn_id"],
+                        message_id=state["user_message_id"],
+                        assistant_message_id=state["assistant_message_id"],
+                        message=message,
+                        created_at=datetime.now(timezone.utc),
+                    )
+                )
+
+            await _replay_pending_event(
+                session_id, generation, record, state, event_sink
+            )
             if state["phase"] == "ready_reply":
                 reply = state["reply"]
                 actions = list(state["actions"])
-                if on_event is None:
+                if event_sink is None:
                     _commit_state(session_id, generation, record, state)
                 return ProcessResult(
                     reply,
@@ -820,7 +988,7 @@ async def process_message(
                         generation,
                         record,
                         state,
-                        on_event,
+                        event_sink,
                         {
                             "type": "step_started",
                             "step_id": "understand",
@@ -844,7 +1012,7 @@ async def process_message(
                             generation,
                             record,
                             state,
-                            on_event,
+                            event_sink,
                             step_id,
                             exc,
                         )
@@ -859,7 +1027,7 @@ async def process_message(
                         state["tool_rounds"] += 1
                         if state["tool_rounds"] > MAX_TOOL_ROUNDS:
                             await _raise_limit(
-                                session_id, generation, record, state, on_event
+                                session_id, generation, record, state, event_sink
                             )
                         state["response"] = response
                         state["phase"] = "executing_tools"
@@ -872,7 +1040,7 @@ async def process_message(
                             generation,
                             record,
                             state,
-                            on_event,
+                            event_sink,
                             {
                                 "type": "step_completed",
                                 "step_id": "understand",
@@ -901,9 +1069,7 @@ async def process_message(
                     for action in state["actions"]
                 )
                 if not turn_is_read_only:
-                    _clear_retries_for_session(
-                        session_id, turn_id=state["turn_id"]
-                    )
+                    _clear_retries_for_session(session_id, turn_id=state["turn_id"])
                 tool_messages: list[ToolMessage] = []
                 for tool_call in response.tool_calls:
                     call_id = str(tool_call["id"])
@@ -915,7 +1081,7 @@ async def process_message(
                     if journal_key not in state["attempted_calls"]:
                         if state["tool_calls"] >= MAX_TOOL_CALLS:
                             await _raise_limit(
-                                session_id, generation, record, state, on_event
+                                session_id, generation, record, state, event_sink
                             )
                         state["tool_calls"] += 1
                         state["attempted_calls"].add(journal_key)
@@ -939,7 +1105,7 @@ async def process_message(
                             generation,
                             record,
                             state,
-                            on_event,
+                            event_sink,
                             {
                                 "type": "step_started",
                                 "step_id": step_id,
@@ -950,6 +1116,7 @@ async def process_message(
                             },
                         )
                     tool = _tools_by_name.get(name)
+                    confirmation_id: str | None = None
                     if tool is None:
                         action = {
                             "type": name,
@@ -969,7 +1136,7 @@ async def process_message(
                         }
                     else:
                         approved = name != "delete_todo"
-                        if name == "delete_todo" and on_event is not None:
+                        if name == "delete_todo" and event_sink is not None:
                             confirmation = state["confirmations"].setdefault(
                                 journal_key,
                                 {
@@ -995,12 +1162,19 @@ async def process_message(
                             future: asyncio.Future[bool] = (
                                 asyncio.get_running_loop().create_future()
                             )
-                            entry = _PendingEntry(binding=binding, future=future)
+                            entry = _PendingEntry(
+                                binding=binding,
+                                future=future,
+                                owner_id=owner_id,
+                                turn_id=state["turn_id"],
+                                generation=generation,
+                                runtime_generation=runtime_generation,
+                            )
                             _pending_confirmations[confirmation_id] = entry
                             try:
                                 if state.get("pending_event_kind") == "confirmation":
                                     await _emit(
-                                        on_event,
+                                        event_sink,
                                         copy.deepcopy(confirmation["event"]),
                                     )
                                     state["pending_event"] = None
@@ -1012,7 +1186,7 @@ async def process_message(
                                         generation,
                                         record,
                                         state,
-                                        on_event,
+                                        event_sink,
                                         confirmation["event"],
                                         kind="confirmation",
                                     )
@@ -1052,7 +1226,7 @@ async def process_message(
                                     generation,
                                     record,
                                     state,
-                                    on_event,
+                                    event_sink,
                                     event,
                                 )
                                 tool_messages.append(tool_message)
@@ -1078,6 +1252,14 @@ async def process_message(
                             try:
                                 result = await tool.ainvoke(args)
                             except Exception as exc:
+                                if (
+                                    persistence is not None
+                                    and name not in READ_ONLY_RETRY_TOOLS
+                                    and isinstance(
+                                        exc, (TimeoutError, asyncio.TimeoutError)
+                                    )
+                                ):
+                                    persistence.mark_write_applied()
                                 error_code, retryable = _failure_metadata(exc)
                                 retryable = (
                                     retryable
@@ -1102,12 +1284,19 @@ async def process_message(
                                     event["retry_token"] = _register_retry(
                                         session_id,
                                         generation,
+                                        owner_id,
+                                        runtime_generation,
                                         state,
                                         step_id,
                                         name,
                                         args,
                                     )
                             else:
+                                if (
+                                    persistence is not None
+                                    and name not in READ_ONLY_RETRY_TOOLS
+                                ):
+                                    persistence.mark_write_applied()
                                 action = {"type": name, "args": args, "result": result}
                                 tool_message = ToolMessage(
                                     content=str(result), tool_call_id=call_id
@@ -1121,6 +1310,10 @@ async def process_message(
                                         (time.monotonic() - started) * 1000
                                     ),
                                 }
+
+                    if confirmation_id is not None:
+                        event["confirmation_id"] = confirmation_id
+                        event["confirmation_approved"] = approved
 
                     # Journal before emitting: a send/model failure can resume
                     # without replaying a successful side effect.
@@ -1137,7 +1330,7 @@ async def process_message(
                         generation,
                         record,
                         state,
-                        on_event,
+                        event_sink,
                         event,
                     )
                     tool_messages.append(tool_message)
@@ -1149,7 +1342,7 @@ async def process_message(
                 _save_record(session_id, generation, record)
 
             reply = _reply_from(state["messages"])
-            if on_event is not None:
+            if event_sink is not None:
                 state["phase"] = "ready_reply"
                 state["reply"] = reply
                 record["incomplete"] = state

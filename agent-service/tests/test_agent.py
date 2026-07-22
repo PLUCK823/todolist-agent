@@ -121,7 +121,9 @@ async def test_agent_creates_session_when_none_provided():
 
 
 @pytest.mark.asyncio
-async def test_deterministic_e2e_provider_creates_requested_high_priority_todo(httpx_mock, monkeypatch):
+async def test_deterministic_e2e_provider_creates_requested_high_priority_todo(
+    httpx_mock, monkeypatch
+):
     """The opt-in E2E provider must exercise the real tool loop without a network LLM."""
     from app.agent import process_message
 
@@ -216,7 +218,9 @@ def test_deterministic_provider_fails_closed_without_both_e2e_gates(
     else:
         monkeypatch.setenv("ENABLE_E2E_PROVIDER", enabled)
 
-    with pytest.raises(RuntimeError, match="disabled outside the isolated E2E environment"):
+    with pytest.raises(
+        RuntimeError, match="disabled outside the isolated E2E environment"
+    ):
         _build_llm()
 
 
@@ -724,12 +728,14 @@ async def test_write_timeout_never_issues_a_retry_token(tool_name):
         ]
     )
     tool = StubTool(side_effect=TimeoutError("写入超时"))
+
     def record(event):
         events.append(event)
         if event["type"] == "confirmation_required":
             assert resolve_confirmation(
                 f"unsafe-{tool_name}", event["confirmation_id"], True
             )
+
     with (
         patch("app.agent._build_llm", return_value=llm),
         patch.dict(_tools_by_name, {tool_name: tool}),
@@ -826,9 +832,12 @@ async def test_retry_before_turn_terminal_is_rejected_without_consuming_token():
             failure["retry_token"],
             retry_events.append,
         )
-        assert await complete_turn(
-            "terminal-gate", processed.turn_id, processed.generation
-        ) is True
+        assert (
+            await complete_turn(
+                "terminal-gate", processed.turn_id, processed.generation
+            )
+            is True
+        )
         llm.responses = [_aim("新请求完成")]
         llm._call_count = 0
         reply, _, _ = await process_message("terminal-gate", "下一条消息")
@@ -1121,9 +1130,12 @@ async def test_retry_after_action_event_send_failure_reuses_journaled_side_effec
         ]
     )
     create = StubTool(result={"id": 89, "title": "已写入"})
+    first_delivery = []
+    replayed = []
 
     async def fail_after_action(event: dict[str, Any]) -> None:
         if event["type"] == "action_completed":
+            first_delivery.append(dict(event))
             raise RuntimeError("socket send failed")
 
     with (
@@ -1132,11 +1144,15 @@ async def test_retry_after_action_event_send_failure_reuses_journaled_side_effec
     ):
         with pytest.raises(RuntimeError, match="socket send failed"):
             await process_message("send-resume", "创建", fail_after_action)
-        reply, actions, _ = await process_message("send-resume", "创建")
+        reply, actions, _ = await process_message(
+            "send-resume", "创建", replayed.append
+        )
 
     create.ainvoke.assert_awaited_once_with({"title": "已写入"})
     assert reply == "恢复回复"
     assert actions[0]["result"]["id"] == 89
+    assert replayed[0]["type"] == "action_completed"
+    assert replayed[0]["event_id"] == first_delivery[0]["event_id"]
 
 
 @pytest.mark.asyncio

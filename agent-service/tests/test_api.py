@@ -32,10 +32,28 @@ def _reset_agent():
 
 
 class _TestRepository:
+    def __init__(self):
+        self.turns = set()
+
     async def is_auth_session_active(self, _owner, _session):
         return True
 
     async def ping(self):
+        return None
+
+    async def start_turn(
+        self, owner, session_id, turn_id, message_id, content, created_at
+    ):
+        self.turns.add(turn_id)
+        return object()
+
+    async def upsert_step(self, owner, turn_id, event):
+        return turn_id in self.turns
+
+    async def complete_turn(self, owner, turn_id, message_id, content, created_at):
+        assert turn_id in self.turns
+
+    async def fail_turn(self, owner, turn_id, code, message, uncertain):
         return None
 
 
@@ -58,8 +76,11 @@ class _TestHistoryService:
         if session_id != self.session.id:
             return None
         return self._detail_type(
-            id=self.session.id, owner_id=self.session.owner_id, title=self.session.title,
-            created_at=self.session.created_at, updated_at=self.session.updated_at,
+            id=self.session.id,
+            owner_id=self.session.owner_id,
+            title=self.session.title,
+            created_at=self.session.created_at,
+            updated_at=self.session.updated_at,
             last_message_at=self.session.last_message_at,
         )
 
@@ -76,22 +97,32 @@ class _TestHistoryService:
 def client() -> TestClient:
     """Authenticated test client with an injected persistence boundary."""
     from app.auth import AuthSettings
-    from app.main import app
+    from app.main import SessionRuntimeCoordinator, app
 
     service = _TestHistoryService()
     settings = AuthSettings(
-        secret="x" * 32, access_cookie="todolist_access",
-        allowed_origins=frozenset({"http://frontend.test"}), issuer="todolist-backend",
+        secret="x" * 32,
+        access_cookie="todolist_access",
+        allowed_origins=frozenset({"http://frontend.test"}),
+        issuer="todolist-backend",
         database_url="postgresql://unused",
     )
     app.state.auth_settings = settings
     app.state.history_repository = _TestRepository()
     app.state.history_service = service
+    app.state.runtime_coordinator = SessionRuntimeCoordinator()
     app.state.recovery_ready = True
     now = datetime.now(timezone.utc)
     token = jwt.encode(
-        {"sub": str(service.owner), "sid": str(uuid4()), "iss": settings.issuer,
-         "iat": now, "exp": now + timedelta(minutes=5)}, settings.secret, algorithm="HS256",
+        {
+            "sub": str(service.owner),
+            "sid": str(uuid4()),
+            "iss": settings.issuer,
+            "iat": now,
+            "exp": now + timedelta(minutes=5),
+        },
+        settings.secret,
+        algorithm="HS256",
     )
     result = TestClient(app)
     result.headers.update({"origin": "http://frontend.test"})
@@ -320,6 +351,7 @@ def test_websocket_invalid_initial_envelope_fails_and_closes(client):
         done = ws.receive_json()
 
     assert failure["error_code"] == "INVALID_CLIENT_EVENT"
+    assert UUID(failure["event_id"])
     assert done == {"type": "done"}
     process.assert_not_awaited()
 
@@ -475,7 +507,9 @@ def test_websocket_confirmation_response_resumes_bound_delete(client):
         patch.dict(_tools_by_name, {"delete_todo": delete}),
         client.websocket_connect(_stream_url(client)) as ws,
     ):
-        ws.send_json({"message": "删除 7", "session_id": str(client.service.session.id)})
+        ws.send_json(
+            {"message": "删除 7", "session_id": str(client.service.session.id)}
+        )
         confirmation = None
         while confirmation is None:
             event = ws.receive_json()
@@ -514,7 +548,9 @@ def test_websocket_disconnect_cancels_processing(client):
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_blocked)):
         with client.websocket_connect(_stream_url(client)) as ws:
-            ws.send_json({"message": "一直运行", "session_id": str(client.service.session.id)})
+            ws.send_json(
+                {"message": "一直运行", "session_id": str(client.service.session.id)}
+            )
             assert ws.receive_json()["step_id"] == "slow"
 
     # TestClient drives the app loop until endpoint cleanup completes.
@@ -579,7 +615,9 @@ def test_websocket_retry_step_rejects_client_supplied_tool_or_args(client):
 def test_websocket_retry_step_routes_identity_without_replanning(client):
     async def exact_retry(session_id, step_id, retry_token, on_event):
         assert (session_id, step_id, retry_token) == (
-                str(client.service.session.id), "failed-read", "r" * 32
+            str(client.service.session.id),
+            "failed-read",
+            "r" * 32,
         )
         await on_event(
             {
@@ -595,7 +633,9 @@ def test_websocket_retry_step_routes_identity_without_replanning(client):
     process = AsyncMock()
     with (
         patch("app.main.process_message", new=process),
-        patch("app.main.retry_failed_step", new=AsyncMock(side_effect=exact_retry)) as retry,
+        patch(
+            "app.main.retry_failed_step", new=AsyncMock(side_effect=exact_retry)
+        ) as retry,
         client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json(
@@ -610,9 +650,7 @@ def test_websocket_retry_step_routes_identity_without_replanning(client):
 
     process.assert_not_awaited()
     retry.assert_awaited_once()
-    assert [event["type"] for event in events] == [
-        "action_completed", "reply", "done"
-    ]
+    assert [event["type"] for event in events] == ["action_completed", "reply", "done"]
 
 
 @pytest.mark.parametrize("raw", ["null", "123", '"hello"'])
@@ -743,9 +781,7 @@ async def test_terminal_send_failure_keeps_checkpoint_and_retry_reuses_side_effe
             assert state["phase"] == "ready_reply"
             retry = _TerminalWebSocket(session_id=f"fail-{fail_event}")
             await stream(retry)
-            assert [event["type"] for event in retry.events[-2:]] == [
-                "reply", "done"
-            ]
+            assert [event["type"] for event in retry.events[-2:]] == ["reply", "done"]
             assert _conversations[f"fail-{fail_event}"]["incomplete"] is None
         else:
             assert state is None
@@ -823,9 +859,7 @@ async def test_done_is_not_sent_until_turn_commit_finishes():
 
     ws = _TerminalWebSocket(session_id="terminal-order")
     process = AsyncMock(
-        return_value=ProcessResult(
-            "完成", [], "terminal-order", "turn-terminal", 0
-        )
+        return_value=ProcessResult("完成", [], "terminal-order", "turn-terminal", 0)
     )
     with (
         patch("app.main.process_message", new=process),

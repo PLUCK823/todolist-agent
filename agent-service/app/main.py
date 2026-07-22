@@ -10,23 +10,34 @@ import os
 import signal
 import uuid
 from contextlib import asynccontextmanager, suppress
-from dataclasses import asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 from uuid import UUID
+from uuid import NAMESPACE_URL, uuid5
 
 import asyncpg
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from .agent import (
-    AgentExecutionError,
+    DurableTurnRequest,
     InvalidRetryStep,
     ProcessResult,
     complete_turn,
     delete_history,
+    invalidate_turn_tokens,
     process_message,
     resolve_confirmation,
     retry_failed_step,
@@ -40,7 +51,7 @@ from .auth import (
     authenticate_request,
     authenticate_websocket,
 )
-from .history_models import SessionDetail, SessionSummary
+from .history_models import PersistedStepEvent, SessionDetail, SessionSummary
 from .history_repository import HistoryRepository
 from .history_service import HistoryService
 from .schemas import (
@@ -57,9 +68,322 @@ AGENT_RECOVERY_LOCK_KEY = 0x4147454E54524543  # Stable bigint key: "AGENTREC".
 OwnershipLostHandler = Callable[[], Awaitable[None] | None]
 
 
+class HistoryPersistenceError(RuntimeError):
+    """A durable write failed; ``uncertain`` tracks an applied Todo mutation."""
+
+    def __init__(self, message: str, *, uncertain: bool):
+        super().__init__(message)
+        self.uncertain = uncertain
+
+
+@dataclass(frozen=True, slots=True)
+class SessionRuntimeLease:
+    owner_id: UUID
+    session_id: UUID
+    generation: int
+
+
+class SessionRuntimeCoordinator:
+    """Owner-scoped generation barrier for active streams and late writes."""
+
+    def __init__(self) -> None:
+        self._state_lock = asyncio.Lock()
+        self._operation_locks: dict[tuple[UUID, UUID], asyncio.Lock] = {}
+        self._generations: dict[tuple[UUID, UUID], int] = {}
+        self._tombstones: set[tuple[UUID, UUID]] = set()
+        self._tasks: dict[tuple[UUID, UUID], set[asyncio.Task[Any]]] = {}
+
+    async def acquire(self, owner_id: UUID, session_id: UUID) -> SessionRuntimeLease:
+        key = (owner_id, session_id)
+        async with self._state_lock:
+            if key in self._tombstones:
+                raise HistoryPersistenceError(
+                    "session is being deleted", uncertain=False
+                )
+            self._operation_locks.setdefault(key, asyncio.Lock())
+            return SessionRuntimeLease(
+                owner_id, session_id, self._generations.get(key, 0)
+            )
+
+    async def attach(self, lease: SessionRuntimeLease, task: asyncio.Task[Any]) -> None:
+        key = (lease.owner_id, lease.session_id)
+        async with self._state_lock:
+            self._assert_current(lease)
+            self._tasks.setdefault(key, set()).add(task)
+
+    async def release(
+        self, lease: SessionRuntimeLease, task: asyncio.Task[Any]
+    ) -> None:
+        key = (lease.owner_id, lease.session_id)
+        async with self._state_lock:
+            tasks = self._tasks.get(key)
+            if tasks is not None:
+                tasks.discard(task)
+                if not tasks:
+                    self._tasks.pop(key, None)
+
+    async def run(
+        self, lease: SessionRuntimeLease, operation: Callable[[], Awaitable[Any]]
+    ) -> Any:
+        key = (lease.owner_id, lease.session_id)
+        async with self._state_lock:
+            lock = self._operation_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            async with self._state_lock:
+                self._assert_current(lease)
+            return await operation()
+
+    async def delete_barrier(self, owner_id: UUID, session_id: UUID) -> bool:
+        """Tombstone, cancel and drain before the repository cascade executes."""
+        key = (owner_id, session_id)
+        async with self._state_lock:
+            lock = self._operation_locks.setdefault(key, asyncio.Lock())
+            generation = self._generations.get(key, 0) + 1
+            self._generations[key] = generation
+            self._tombstones.add(key)
+            tasks = tuple(self._tasks.get(key, ()))
+        current = asyncio.current_task()
+        for task in tasks:
+            if task is not current:
+                await _cancel_and_drain(task)
+        # A repository operation already past the generation check must leave
+        # the per-session critical section before the cascade delete begins.
+        async with lock:
+            pass
+        await delete_history(str(session_id))
+        return True
+
+    async def cancel_all(self) -> None:
+        async with self._state_lock:
+            tasks = tuple({task for values in self._tasks.values() for task in values})
+            for key in self._operation_locks:
+                self._generations[key] = self._generations.get(key, 0) + 1
+                self._tombstones.add(key)
+        current = asyncio.current_task()
+        for task in tasks:
+            if task is not current:
+                await _cancel_and_drain(task)
+
+    def _assert_current(self, lease: SessionRuntimeLease) -> None:
+        key = (lease.owner_id, lease.session_id)
+        if key in self._tombstones or self._generations.get(key, 0) != lease.generation:
+            raise HistoryPersistenceError(
+                "session generation is stale", uncertain=False
+            )
+
+
+class RepositoryTurnPersistence:
+    """Owner/session/turn-bound implementation of the durable sink protocol."""
+
+    def __init__(
+        self,
+        repository: HistoryRepository,
+        coordinator: SessionRuntimeCoordinator,
+        lease: SessionRuntimeLease,
+    ) -> None:
+        self._repository = repository
+        self._coordinator = coordinator
+        self._lease = lease
+        self.turn_id: UUID | None = None
+        self._message_id: UUID | None = None
+        self._assistant_message_id: UUID | None = None
+        self._started = False
+        self._write_applied = False
+        self._step_context: dict[UUID, dict[str, Any]] = {}
+
+    @property
+    def uncertain(self) -> bool:
+        return self._write_applied
+
+    def mark_write_applied(self) -> None:
+        self._write_applied = True
+
+    async def start(self, request: DurableTurnRequest) -> None:
+        turn_id = UUID(str(request.turn_id))
+        message_id = UUID(str(request.message_id))
+        assistant_message_id = UUID(str(request.assistant_message_id))
+        if self._started:
+            if self.turn_id != turn_id:
+                raise HistoryPersistenceError(
+                    "turn identity changed", uncertain=self.uncertain
+                )
+            return
+
+        async def operation():
+            return await self._repository.start_turn(
+                self._lease.owner_id,
+                self._lease.session_id,
+                turn_id,
+                message_id,
+                request.message,
+                request.created_at,
+            )
+
+        try:
+            await self._coordinator.run(self._lease, operation)
+        except HistoryPersistenceError:
+            raise
+        except Exception as exc:
+            raise HistoryPersistenceError(str(exc), uncertain=self.uncertain) from exc
+        self.turn_id = turn_id
+        self._message_id = message_id
+        self._assistant_message_id = assistant_message_id
+        self._started = True
+
+    async def checkpoint(self, event: dict[str, Any]) -> None:
+        if self.turn_id is None:
+            raise HistoryPersistenceError(
+                "turn was not started", uncertain=self.uncertain
+            )
+        event_id = UUID(str(event["event_id"]))
+        context = self._step_context.setdefault(event_id, {})
+        context.update(
+            {
+                key: event[key]
+                for key in ("label", "tool", "args", "started_at")
+                if key in event and event[key] is not None
+            }
+        )
+        event_type = event.get("type")
+        if event_type == "confirmation_required":
+            context["confirmation_id"] = event.get("confirmation_id")
+            context["confirmation_message"] = event.get("message")
+        if "confirmation_approved" in event:
+            context["confirmation_approved"] = event["confirmation_approved"]
+        status = {
+            "step_started": "running",
+            "confirmation_required": "waiting_confirmation",
+            "step_completed": "completed",
+            "action_completed": "completed",
+            "step_failed": "failed",
+        }.get(event_type)
+        if status is None:
+            return
+        started_at = _parse_event_time(context.get("started_at"))
+        completed_at = (
+            datetime.now(timezone.utc) if status in {"completed", "failed"} else None
+        )
+        persisted = PersistedStepEvent(
+            event_id=event_id,
+            label=str(
+                context.get("label")
+                or event.get("action")
+                or event.get("step_id")
+                or "Agent step"
+            ),
+            status=status,
+            tool=context.get("tool") or event.get("action"),
+            args=dict(context.get("args") or {}),
+            result=event.get("result"),
+            duration_ms=event.get("duration_ms"),
+            error_code=event.get("error_code"),
+            error_message=event.get("message") if event_type == "step_failed" else None,
+            retryable=bool(event.get("retryable", False)) and not self.uncertain,
+            confirmation_id=context.get("confirmation_id"),
+            confirmation_message=context.get("confirmation_message"),
+            confirmation_approved=context.get("confirmation_approved"),
+            started_at=started_at,
+            completed_at=completed_at,
+        )
+
+        async def operation():
+            return await self._repository.upsert_step(
+                self._lease.owner_id, self.turn_id, persisted
+            )
+
+        try:
+            accepted = await self._coordinator.run(self._lease, operation)
+            if not accepted:
+                raise HistoryPersistenceError(
+                    "step checkpoint rejected", uncertain=self.uncertain
+                )
+        except HistoryPersistenceError as exc:
+            if exc.uncertain == self.uncertain:
+                raise
+            raise HistoryPersistenceError(str(exc), uncertain=self.uncertain) from exc
+        except Exception as exc:
+            raise HistoryPersistenceError(str(exc), uncertain=self.uncertain) from exc
+
+    async def complete(self, reply: str) -> None:
+        if self.turn_id is None:
+            raise HistoryPersistenceError(
+                "turn was not started", uncertain=self.uncertain
+            )
+        assistant_id = self._assistant_message_id or uuid5(
+            NAMESPACE_URL, f"agent:{self.turn_id}:assistant"
+        )
+
+        async def operation():
+            await self._repository.complete_turn(
+                self._lease.owner_id,
+                self.turn_id,
+                assistant_id,
+                reply,
+                datetime.now(timezone.utc),
+            )
+
+        try:
+            await self._coordinator.run(self._lease, operation)
+        except HistoryPersistenceError as exc:
+            raise HistoryPersistenceError(str(exc), uncertain=self.uncertain) from exc
+        except Exception as exc:
+            raise HistoryPersistenceError(str(exc), uncertain=self.uncertain) from exc
+
+    async def fail(self, code: str, message: str, *, uncertain: bool) -> None:
+        if self.turn_id is None:
+            return
+
+        async def operation():
+            await self._repository.fail_turn(
+                self._lease.owner_id,
+                self.turn_id,
+                code,
+                message,
+                uncertain or self.uncertain,
+            )
+
+        await self._coordinator.run(self._lease, operation)
+
+
+def _parse_event_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _completed_history_messages(
+    detail: SessionDetail | dict[str, Any],
+) -> list[BaseMessage]:
+    """Hydrate only completed chat pairs, ordered by durable ordinal."""
+    if isinstance(detail, dict):
+        return []
+    messages = [
+        message
+        for turn in detail.turns
+        if turn.status == "completed"
+        for message in turn.messages
+        if message.role in {"user", "assistant"}
+    ]
+    messages.sort(key=lambda item: item.ordinal)
+    return [
+        HumanMessage(content=message.content)
+        if message.role == "user"
+        else AIMessage(content=message.content)
+        for message in messages
+    ]
+
+
 def _cors_origins() -> list[str]:
     """Read a harmless import-time CORS default; auth config validates at startup."""
-    origins = [item.strip() for item in os.getenv("AUTH_ALLOWED_ORIGINS", "http://localhost:3000").split(",") if item.strip()]
+    origins = [
+        item.strip()
+        for item in os.getenv("AUTH_ALLOWED_ORIGINS", "http://localhost:3000").split(
+            ","
+        )
+        if item.strip()
+    ]
     return [origin for origin in origins if origin != "*"] or ["http://localhost:3000"]
 
 
@@ -68,17 +392,47 @@ def _ok(data: object = None) -> dict[str, object]:
 
 
 def _err(code: int, message: str, status: int = 400) -> HTTPException:
-    return HTTPException(status_code=status, detail={"code": code, "message": message, "data": None})
+    return HTTPException(
+        status_code=status, detail={"code": code, "message": message, "data": None}
+    )
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _history_failure_event() -> dict[str, Any]:
+    return {
+        "type": "step_failed",
+        "event_id": str(uuid.uuid4()),
+        "step_id": "history",
+        "error_code": "HISTORY_PERSISTENCE_FAILED",
+        "message": "Conversation history could not be saved",
+        "retryable": False,
+        "duration_ms": 0,
+    }
+
+
+def _protocol_failure_event(
+    step_id: str, error_code: str, message: str
+) -> dict[str, Any]:
+    return {
+        "type": "step_failed",
+        "event_id": str(uuid.uuid4()),
+        "step_id": step_id,
+        "error_code": error_code,
+        "message": message,
+        "retryable": False,
+        "duration_ms": 0,
+    }
+
+
 def _session_payload(session: SessionSummary) -> dict[str, object]:
     return {
-        "id": str(session.id), "title": session.title,
-        "created_at": session.created_at.isoformat(), "updated_at": session.updated_at.isoformat(),
+        "id": str(session.id),
+        "title": session.title,
+        "created_at": session.created_at.isoformat(),
+        "updated_at": session.updated_at.isoformat(),
         "last_message_at": session.last_message_at.isoformat(),
     }
 
@@ -89,29 +443,56 @@ def _detail_payload(detail: SessionDetail | dict[str, Any]) -> dict[str, object]
         return {"session": _session_payload(session), "turns": detail.get("turns", [])}
     turns: list[dict[str, object]] = []
     for turn in detail.turns:
-        turns.append({
-            "id": str(turn.id), "ordinal": turn.ordinal, "status": turn.status,
-            "started_at": turn.started_at.isoformat(),
-            "completed_at": turn.completed_at.isoformat() if turn.completed_at else None,
-            "failure_code": turn.failure_code, "failure_message": turn.failure_message,
-            "result_uncertain": turn.result_uncertain,
-            "messages": [{
-                "id": str(message.id), "role": message.role, "content": message.content,
-                "ordinal": message.ordinal, "created_at": message.created_at.isoformat(),
-            } for message in turn.messages],
-            "steps": [{
-                "id": str(step.id), "event_id": str(step.event_id), "ordinal": step.ordinal,
-                "label": step.label, "tool": step.tool, "status": step.status, "args": step.args,
-                "result": step.result, "result_preview": step.result_preview,
-                "result_truncated": step.result_truncated, "duration_ms": step.duration_ms,
-                "error_code": step.error_code, "error_message": step.error_message,
-                "retryable": step.retryable, "confirmation_id": step.confirmation_id,
-                "confirmation_message": step.confirmation_message,
-                "confirmation_approved": step.confirmation_approved,
-                "started_at": step.started_at.isoformat(),
-                "completed_at": step.completed_at.isoformat() if step.completed_at else None,
-            } for step in turn.steps],
-        })
+        turns.append(
+            {
+                "id": str(turn.id),
+                "ordinal": turn.ordinal,
+                "status": turn.status,
+                "started_at": turn.started_at.isoformat(),
+                "completed_at": turn.completed_at.isoformat()
+                if turn.completed_at
+                else None,
+                "failure_code": turn.failure_code,
+                "failure_message": turn.failure_message,
+                "result_uncertain": turn.result_uncertain,
+                "messages": [
+                    {
+                        "id": str(message.id),
+                        "role": message.role,
+                        "content": message.content,
+                        "ordinal": message.ordinal,
+                        "created_at": message.created_at.isoformat(),
+                    }
+                    for message in turn.messages
+                ],
+                "steps": [
+                    {
+                        "id": str(step.id),
+                        "event_id": str(step.event_id),
+                        "ordinal": step.ordinal,
+                        "label": step.label,
+                        "tool": step.tool,
+                        "status": step.status,
+                        "args": step.args,
+                        "result": step.result,
+                        "result_preview": step.result_preview,
+                        "result_truncated": step.result_truncated,
+                        "duration_ms": step.duration_ms,
+                        "error_code": step.error_code,
+                        "error_message": step.error_message,
+                        "retryable": step.retryable,
+                        "confirmation_id": step.confirmation_id,
+                        "confirmation_message": step.confirmation_message,
+                        "confirmation_approved": step.confirmation_approved,
+                        "started_at": step.started_at.isoformat(),
+                        "completed_at": step.completed_at.isoformat()
+                        if step.completed_at
+                        else None,
+                    }
+                    for step in turn.steps
+                ],
+            }
+        )
     return {"session": _session_payload(detail), "turns": turns}
 
 
@@ -136,7 +517,9 @@ async def get_current_principal(request: Request) -> AuthPrincipal:
     except AuthDatabaseFailure as exc:
         raise _err(50301, "Agent authentication is unavailable", 503) from exc
     except AuthFailure as exc:
-        raise _err(40301 if exc.status_code == 403 else 40101, str(exc), exc.status_code) from exc
+        raise _err(
+            40301 if exc.status_code == 403 else 40101, str(exc), exc.status_code
+        ) from exc
 
 
 class _WebSocketWriter:
@@ -149,7 +532,9 @@ class _WebSocketWriter:
             await self._ws.send_json(event)
 
 
-async def _cancel_and_drain(task: asyncio.Task[Any] | None, timeout: float = 0.1) -> None:
+async def _cancel_and_drain(
+    task: asyncio.Task[Any] | None, timeout: float = 0.1
+) -> None:
     if task is None:
         return
     if task.done():
@@ -162,7 +547,9 @@ async def _cancel_and_drain(task: asyncio.Task[Any] | None, timeout: float = 0.1
         with suppress(BaseException):
             task.result()
     else:
-        task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
+        task.add_done_callback(
+            lambda finished: finished.exception() if not finished.cancelled() else None
+        )
 
 
 def _terminate_process_on_ownership_loss() -> None:
@@ -232,6 +619,11 @@ class _AgentRecoveryOwnership:
         except Exception:
             logger.exception("Agent recovery ownership-lost handler failed")
 
+    async def drain_handler(self) -> None:
+        """Wait for startup-time ownership-loss cleanup before propagating."""
+        if self._handler_task is not None:
+            await asyncio.shield(self._handler_task)
+
     def _holder_is_closed_or_detached(self) -> bool:
         try:
             return self._connection.is_closed()
@@ -294,6 +686,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI):
         application.state.recovery_ready = False
+        runtime_coordinator = SessionRuntimeCoordinator()
+        application.state.runtime_coordinator = runtime_coordinator
         validate_model_configuration()
         configured = settings or AuthSettings.from_env()
         if configured.pool_max_size < 2:
@@ -302,42 +696,70 @@ def create_app(
             )
         created_pool = pool is None
         database_pool = pool or await asyncpg.create_pool(
-            configured.database_url, min_size=configured.pool_min_size,
-            max_size=configured.pool_max_size, command_timeout=configured.command_timeout,
+            configured.database_url,
+            min_size=configured.pool_min_size,
+            max_size=configured.pool_max_size,
+            command_timeout=configured.command_timeout,
         )
         repository = HistoryRepository(database_pool)
+
+        async def handle_ownership_loss() -> None:
+            await runtime_coordinator.cancel_all()
+            handler = (
+                ownership_lost_handler
+                if ownership_lost_handler is not None
+                else _terminate_process_on_ownership_loss
+            )
+            result = handler()
+            if inspect.isawaitable(result):
+                await result
+
         try:
             async with _agent_recovery_ownership(
                 database_pool,
                 application,
-                ownership_lost_handler
-                if ownership_lost_handler is not None
-                else _terminate_process_on_ownership_loss,
+                handle_ownership_loss,
             ) as ownership:
                 await repository.ping()
                 await repository.interrupt_open_turns()
                 application.state.auth_settings = configured
                 application.state.history_repository = repository
-                application.state.history_service = HistoryService(repository, delete_history)
-                ownership.mark_ready()
+                application.state.history_service = HistoryService(
+                    repository, runtime_coordinator.delete_barrier
+                )
+                try:
+                    ownership.mark_ready()
+                except RuntimeError:
+                    await ownership.drain_handler()
+                    raise
                 yield
         finally:
             if created_pool:
                 await database_pool.close()
 
-    application = FastAPI(title="Agent TodoList - Agent Service", version="0.1.0", lifespan=lifespan)
+    application = FastAPI(
+        title="Agent TodoList - Agent Service", version="0.1.0", lifespan=lifespan
+    )
     application.state.recovery_ready = False
+    application.state.runtime_coordinator = SessionRuntimeCoordinator()
     application.add_middleware(
-        CORSMiddleware, allow_origins=list(settings.allowed_origins) if settings else _cors_origins(),
-        allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        CORSMiddleware,
+        allow_origins=list(settings.allowed_origins) if settings else _cors_origins(),
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Content-Type"],
     )
 
     @application.exception_handler(HTTPException)
-    async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    async def http_exception_handler(
+        request: Request, exc: HTTPException
+    ) -> JSONResponse:
         if isinstance(exc.detail, dict) and "code" in exc.detail:
             return JSONResponse(status_code=exc.status_code, content=exc.detail)
-        return JSONResponse(status_code=exc.status_code, content={"code": exc.status_code, "message": str(exc.detail), "data": None})
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"code": exc.status_code, "message": str(exc.detail), "data": None},
+        )
 
     @application.get("/api/agent/health")
     async def health(request: Request):
@@ -353,29 +775,49 @@ def create_app(
         return {"status": "ok", "timestamp": _now_iso()}
 
     @application.get("/api/agent/sessions")
-    async def list_sessions(principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def list_sessions(
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         sessions = await service.list_sessions(principal.user_id)
         return _ok({"items": [_session_payload(session) for session in sessions]})
 
     @application.post("/api/agent/sessions", status_code=201)
-    async def create_session(payload: SessionCreateRequest, principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def create_session(
+        payload: SessionCreateRequest,
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         try:
-            session = await service.create_session(principal.user_id, payload.title, payload.first_message)
+            session = await service.create_session(
+                principal.user_id, payload.title, payload.first_message
+            )
         except ValueError as exc:
             raise _err(42201, str(exc), 422) from exc
         return _ok(_session_payload(session))
 
     @application.get("/api/agent/sessions/{session_id}")
-    async def get_session(session_id: UUID, principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def get_session(
+        session_id: UUID,
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         detail = await service.get_session(principal.user_id, session_id)
         if detail is None:
             raise _err(40402, "会话不存在", 404)
         return _ok(_detail_payload(detail))
 
     @application.patch("/api/agent/sessions/{session_id}")
-    async def rename_session(session_id: UUID, payload: SessionRenameRequest, principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def rename_session(
+        session_id: UUID,
+        payload: SessionRenameRequest,
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         try:
-            session = await service.rename_session(principal.user_id, session_id, payload.title)
+            session = await service.rename_session(
+                principal.user_id, session_id, payload.title
+            )
         except ValueError as exc:
             raise _err(42201, str(exc), 422) from exc
         if session is None:
@@ -383,13 +825,21 @@ def create_app(
         return _ok(_session_payload(session))
 
     @application.delete("/api/agent/sessions/{session_id}")
-    async def delete_session(session_id: UUID, principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def delete_session(
+        session_id: UUID,
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         if not await service.delete_session(principal.user_id, session_id):
             raise _err(40402, "会话不存在", 404)
         return _ok({"deleted": True, "session_id": str(session_id)})
 
     @application.post("/api/agent/chat")
-    async def chat(req: ChatRequest, principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def chat(
+        req: ChatRequest,
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         if req.session_id:
             try:
                 session_id = UUID(req.session_id)
@@ -398,7 +848,11 @@ def create_app(
             if await service.get_session(principal.user_id, session_id) is None:
                 raise _err(40402, "会话不存在", 404)
         else:
-            session_id = (await service.create_session(principal.user_id, first_message=req.message)).id
+            session_id = (
+                await service.create_session(
+                    principal.user_id, first_message=req.message
+                )
+            ).id
         try:
             reply, actions, sid = await process_message(str(session_id), req.message)
         except Exception as exc:
@@ -407,16 +861,26 @@ def create_app(
         return _ok({"reply": reply, "session_id": sid, "actions": actions})
 
     @application.get("/api/agent/history")
-    async def history(session_id: UUID = Query(...), principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def history(
+        session_id: UUID = Query(...),
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         detail = await service.get_session(principal.user_id, session_id)
         if detail is None:
             raise _err(40402, "会话不存在", 404)
         payload = _detail_payload(detail)
-        messages = [message for turn in payload["turns"] for message in turn["messages"]]
+        messages = [
+            message for turn in payload["turns"] for message in turn["messages"]
+        ]
         return _ok({"session_id": str(session_id), "messages": messages})
 
     @application.delete("/api/agent/history")
-    async def delete_history_endpoint(session_id: UUID = Query(...), principal: AuthPrincipal = Depends(get_current_principal), service: HistoryService = Depends(get_history_service)):
+    async def delete_history_endpoint(
+        session_id: UUID = Query(...),
+        principal: AuthPrincipal = Depends(get_current_principal),
+        service: HistoryService = Depends(get_history_service),
+    ):
         if not await service.delete_session(principal.user_id, session_id):
             raise _err(40402, "会话不存在", 404)
         return _ok({"deleted": True, "session_id": str(session_id)})
@@ -429,7 +893,13 @@ def create_app(
         settings_ = getattr(ws.app.state, "auth_settings", None)
         repository = getattr(ws.app.state, "history_repository", None)
         service = getattr(ws.app.state, "history_service", None)
-        if settings_ is None or repository is None or service is None:
+        coordinator = getattr(ws.app.state, "runtime_coordinator", None)
+        if (
+            settings_ is None
+            or repository is None
+            or service is None
+            or coordinator is None
+        ):
             await ws.close(code=1011)
             return
         try:
@@ -450,7 +920,8 @@ def create_app(
         except ValueError:
             await ws.close(code=4403)
             return
-        if await service.get_session(principal.user_id, fixed_session_id) is None:
+        owned_detail = await service.get_session(principal.user_id, fixed_session_id)
+        if owned_detail is None:
             await ws.close(code=4403)
             return
         await ws.accept()
@@ -473,40 +944,106 @@ def create_app(
                 if requested_session != fixed_session_id:
                     await ws.close(code=4403)
                     return
-            request = RetryStepRequest.model_validate(payload) if payload.get("type") == "retry_step" else ChatRequest.model_validate(payload)
+            request = (
+                RetryStepRequest.model_validate(payload)
+                if payload.get("type") == "retry_step"
+                else ChatRequest.model_validate(payload)
+            )
             session_id = str(fixed_session_id)
         except WebSocketDisconnect:
             return
-        except (ValidationError, TypeError, ValueError) as exc:
-            await writer.send_json({"type": "step_failed", "step_id": "request", "error_code": "INVALID_CLIENT_EVENT", "message": "invalid request", "retryable": False, "duration_ms": 0})
+        except (ValidationError, TypeError, ValueError):
+            await writer.send_json(
+                _protocol_failure_event(
+                    "request", "INVALID_CLIENT_EVENT", "invalid request"
+                )
+            )
             await writer.send_json({"type": "done"})
             await ws.close(code=1008)
             return
 
         if isinstance(request, RetryStepRequest):
+            retry_lease: SessionRuntimeLease | None = None
+            retry_current = asyncio.current_task()
             try:
-                await retry_failed_step(session_id, request.step_id, request.retry_token, writer.send_json)
+                retry_lease = await coordinator.acquire(
+                    principal.user_id, fixed_session_id
+                )
+                assert retry_current is not None
+                await coordinator.attach(retry_lease, retry_current)
+                retry_kwargs: dict[str, Any] = {}
+                if "owner_id" in inspect.signature(retry_failed_step).parameters:
+                    retry_kwargs = {
+                        "owner_id": str(principal.user_id),
+                        "runtime_generation": retry_lease.generation,
+                    }
+                await retry_failed_step(
+                    session_id,
+                    request.step_id,
+                    request.retry_token,
+                    writer.send_json,
+                    **retry_kwargs,
+                )
                 await writer.send_json({"type": "done"})
                 await ws.close()
             except InvalidRetryStep:
-                await writer.send_json({"type": "step_failed", "step_id": request.step_id, "error_code": "INVALID_RETRY_STEP", "message": "invalid retry step", "retryable": False, "duration_ms": 0})
+                await writer.send_json(
+                    _protocol_failure_event(
+                        request.step_id, "INVALID_RETRY_STEP", "invalid retry step"
+                    )
+                )
                 await writer.send_json({"type": "done"})
                 await ws.close(code=1008)
+            except HistoryPersistenceError:
+                await writer.send_json(_history_failure_event())
+                await ws.close(code=1011)
+            finally:
+                if retry_lease is not None and retry_current is not None:
+                    await coordinator.release(retry_lease, retry_current)
             return
 
-        process_task = asyncio.create_task(process_message(session_id, request.message, on_event=writer.send_json))
+        try:
+            lease = await coordinator.acquire(principal.user_id, fixed_session_id)
+            current_task = asyncio.current_task()
+            assert current_task is not None
+            await coordinator.attach(lease, current_task)
+        except HistoryPersistenceError:
+            await writer.send_json(_history_failure_event())
+            await ws.close(code=1011)
+            return
+        persistence = RepositoryTurnPersistence(repository, coordinator, lease)
+        process_kwargs: dict[str, Any] = {"on_event": writer.send_json}
+        # Patched legacy unit-test callables intentionally keep their old
+        # signature; the production Agent function always exposes these args.
+        durable_enabled = "persistence" in inspect.signature(process_message).parameters
+        if durable_enabled:
+            process_kwargs.update(
+                persistence=persistence,
+                initial_history=_completed_history_messages(owned_detail),
+                owner_id=str(principal.user_id),
+                runtime_generation=lease.generation,
+            )
+        process_task = asyncio.create_task(
+            process_message(session_id, request.message, **process_kwargs)
+        )
         receive_task = asyncio.create_task(ws.receive_json())
         try:
             while True:
-                completed, _ = await asyncio.wait({process_task, receive_task}, return_when=asyncio.FIRST_COMPLETED)
+                completed, _ = await asyncio.wait(
+                    {process_task, receive_task}, return_when=asyncio.FIRST_COMPLETED
+                )
                 if process_task in completed:
                     await _cancel_and_drain(receive_task)
                     receive_task = None
                     result = process_task.result()
                     reply, _actions, _sid = result
+                    if durable_enabled:
+                        await persistence.complete(reply)
                     await writer.send_json({"type": "reply", "content": reply})
                     if isinstance(result, ProcessResult):
-                        acknowledged = await complete_turn(session_id, result.turn_id, result.generation)
+                        acknowledged = await complete_turn(
+                            session_id, result.turn_id, result.generation
+                        )
                         if not acknowledged:
                             await ws.close(code=1011)
                             return
@@ -517,22 +1054,82 @@ def create_app(
                 try:
                     control = ConfirmationResponse.model_validate(receive_task.result())
                 except ValidationError:
-                    await writer.send_json({"type": "step_failed", "step_id": "confirmation", "error_code": "INVALID_CLIENT_EVENT", "message": "invalid confirmation", "retryable": False, "duration_ms": 0})
+                    await writer.send_json(
+                        _protocol_failure_event(
+                            "confirmation",
+                            "INVALID_CLIENT_EVENT",
+                            "invalid confirmation",
+                        )
+                    )
                 else:
-                    if not resolve_confirmation(session_id, control.confirmation_id, control.approved):
-                        await writer.send_json({"type": "step_failed", "step_id": "confirmation", "error_code": "INVALID_CONFIRMATION", "message": "confirmation is invalid", "retryable": False, "duration_ms": 0})
+                    if not resolve_confirmation(
+                        session_id,
+                        control.confirmation_id,
+                        control.approved,
+                        owner_id=str(principal.user_id),
+                        runtime_generation=lease.generation,
+                    ):
+                        await writer.send_json(
+                            _protocol_failure_event(
+                                "confirmation",
+                                "INVALID_CONFIRMATION",
+                                "confirmation is invalid",
+                            )
+                        )
                 receive_task = asyncio.create_task(ws.receive_json())
         except WebSocketDisconnect:
             await _cancel_and_drain(process_task)
+            invalidate_turn_tokens(
+                session_id,
+                str(persistence.turn_id) if persistence.turn_id else None,
+                getattr(process_task, "generation", None),
+            )
+            with suppress(Exception):
+                await persistence.fail(
+                    "CLIENT_DISCONNECTED",
+                    "WebSocket disconnected",
+                    uncertain=persistence.uncertain,
+                )
+        except HistoryPersistenceError as exc:
+            logger.exception("Agent history persistence failed")
+            await _cancel_and_drain(process_task)
+            invalidate_turn_tokens(
+                session_id,
+                str(persistence.turn_id) if persistence.turn_id else None,
+                None,
+            )
+            with suppress(Exception):
+                await persistence.fail(
+                    "HISTORY_PERSISTENCE_FAILED",
+                    str(exc),
+                    uncertain=exc.uncertain or persistence.uncertain,
+                )
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await writer.send_json(_history_failure_event())
+                await ws.close(code=1011)
         except Exception as exc:
             logger.exception("Agent streaming failed")
             await _cancel_and_drain(process_task)
+            with suppress(Exception):
+                await persistence.fail(
+                    getattr(exc, "phase", "AGENT_ERROR"),
+                    str(exc),
+                    uncertain=persistence.uncertain,
+                )
             with suppress(RuntimeError, WebSocketDisconnect):
-                await writer.send_json({"type": "step_failed", "step_id": getattr(exc, "phase", "agent"), "error_code": "AGENT_ERROR", "message": "Agent processing failed", "retryable": False, "duration_ms": 0})
+                if not getattr(exc, "event_emitted", False):
+                    await writer.send_json(
+                        _protocol_failure_event(
+                            getattr(exc, "phase", "agent"),
+                            "AGENT_ERROR",
+                            "Agent processing failed",
+                        )
+                    )
                 await writer.send_json({"type": "done"})
                 await ws.close(code=1011)
         finally:
             await _cancel_and_drain(receive_task)
+            await coordinator.release(lease, current_task)
 
     return application
 
@@ -557,22 +1154,35 @@ async def stream(ws: Any) -> None:
         except json.JSONDecodeError:
             parsed = raw
         payload = parsed if isinstance(parsed, dict) else {"message": raw}
-        request = RetryStepRequest.model_validate(payload) if payload.get("type") == "retry_step" else ChatRequest.model_validate(payload)
+        request = (
+            RetryStepRequest.model_validate(payload)
+            if payload.get("type") == "retry_step"
+            else ChatRequest.model_validate(payload)
+        )
     except (WebSocketDisconnect, ValidationError, TypeError, ValueError):
         return
     if isinstance(request, RetryStepRequest):
         try:
-            await retry_failed_step(request.session_id, request.step_id, request.retry_token, writer.send_json)
+            await retry_failed_step(
+                request.session_id,
+                request.step_id,
+                request.retry_token,
+                writer.send_json,
+            )
             await writer.send_json({"type": "done"})
         except Exception:
             pass
         return
     session_id = request.session_id or str(uuid.uuid4())
-    process_task = asyncio.create_task(process_message(session_id, request.message, on_event=writer.send_json))
+    process_task = asyncio.create_task(
+        process_message(session_id, request.message, on_event=writer.send_json)
+    )
     receive_task = asyncio.create_task(ws.receive_json())
     try:
         while True:
-            completed, _ = await asyncio.wait({process_task, receive_task}, return_when=asyncio.FIRST_COMPLETED)
+            completed, _ = await asyncio.wait(
+                {process_task, receive_task}, return_when=asyncio.FIRST_COMPLETED
+            )
             if process_task in completed:
                 await _cancel_and_drain(receive_task)
                 receive_task = None
@@ -584,7 +1194,9 @@ async def stream(ws: Any) -> None:
                     return
                 if isinstance(result, ProcessResult):
                     try:
-                        if not await complete_turn(session_id, result.turn_id, result.generation):
+                        if not await complete_turn(
+                            session_id, result.turn_id, result.generation
+                        ):
                             return
                     except Exception:
                         return
@@ -598,10 +1210,24 @@ async def stream(ws: Any) -> None:
             assert receive_task is not None
             try:
                 control = ConfirmationResponse.model_validate(receive_task.result())
-                if not resolve_confirmation(session_id, control.confirmation_id, control.approved):
-                    await writer.send_json({"type": "step_failed", "step_id": "confirmation", "error_code": "INVALID_CONFIRMATION", "message": "confirmation is invalid", "retryable": False, "duration_ms": 0})
+                if not resolve_confirmation(
+                    session_id, control.confirmation_id, control.approved
+                ):
+                    await writer.send_json(
+                        _protocol_failure_event(
+                            "confirmation",
+                            "INVALID_CONFIRMATION",
+                            "confirmation is invalid",
+                        )
+                    )
             except ValidationError:
-                await writer.send_json({"type": "step_failed", "step_id": "confirmation", "error_code": "INVALID_CLIENT_EVENT", "message": "invalid confirmation", "retryable": False, "duration_ms": 0})
+                await writer.send_json(
+                    _protocol_failure_event(
+                        "confirmation",
+                        "INVALID_CLIENT_EVENT",
+                        "invalid confirmation",
+                    )
+                )
             receive_task = asyncio.create_task(ws.receive_json())
     except WebSocketDisconnect:
         await _cancel_and_drain(process_task)
@@ -609,7 +1235,11 @@ async def stream(ws: Any) -> None:
         await _cancel_and_drain(process_task)
         with suppress(Exception):
             if not getattr(exc, "event_emitted", False):
-                await writer.send_json({"type": "step_failed", "step_id": getattr(exc, "phase", "agent"), "error_code": "AGENT_ERROR", "message": str(exc), "retryable": False, "duration_ms": 0})
+                await writer.send_json(
+                    _protocol_failure_event(
+                        getattr(exc, "phase", "agent"), "AGENT_ERROR", str(exc)
+                    )
+                )
             await writer.send_json({"type": "done"})
             await ws.close(code=1011)
     finally:
