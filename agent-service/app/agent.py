@@ -84,6 +84,10 @@ class InvalidRetryStep(RuntimeError):
     """A retry identity is missing, consumed, stale, or bound elsewhere."""
 
 
+class TransportDeliveryError(RuntimeError):
+    """A durable event was checkpointed but could not reach the client."""
+
+
 @dataclass(frozen=True, slots=True)
 class DurableTurnRequest:
     """Stable identities required to atomically persist a user turn."""
@@ -259,7 +263,7 @@ class _PendingEntry:
 _pending_confirmations: dict[str, _PendingEntry] = {}
 
 
-@dataclass(frozen=True)
+@dataclass
 class _PendingRetry:
     owner_id: str | None
     session_id: str
@@ -274,9 +278,20 @@ class _PendingRetry:
     attempt_assistant_message_id: str
     attempt_message: str
     attempt_created_at: datetime
+    attempt_phase: str = "registered"
+    attempt_started_at: str | None = None
+    attempt_started_event: dict[str, Any] | None = None
+    attempt_terminal_event: dict[str, Any] | None = None
+    attempt_result: Any = None
+    attempt_failure_code: str | None = None
+    attempt_failure_message: str | None = None
 
 
 _pending_retries: dict[str, _PendingRetry] = {}
+
+
+def discard_retry_attempt(retry_token: str) -> None:
+    _pending_retries.pop(retry_token, None)
 
 
 def _clear_retries_for_session(session_id: str, *, turn_id: str | None = None) -> None:
@@ -332,6 +347,21 @@ def invalidate_turn_tokens(
 ) -> None:
     """Disable retry and confirmation capabilities after a terminal fault."""
     _clear_retries_for_session(session_id, turn_id=turn_id)
+    for confirmation_id, entry in list(_pending_confirmations.items()):
+        if (
+            entry.binding.session_id == session_id
+            and (turn_id is None or entry.turn_id == turn_id)
+            and (generation is None or entry.generation == generation)
+        ):
+            _pending_confirmations.pop(confirmation_id, None)
+            if not entry.future.done():
+                entry.future.cancel()
+
+
+def invalidate_turn_confirmations(
+    session_id: str, turn_id: str | None, generation: int | None
+) -> None:
+    """Cancel only live confirmations while preserving durable retry tokens."""
     for confirmation_id, entry in list(_pending_confirmations.items()):
         if (
             entry.binding.session_id == session_id
@@ -593,75 +623,117 @@ async def retry_failed_step(
                     created_at=pending.attempt_created_at,
                 )
             )
-        if _pending_retries.pop(retry_token, None) is not pending:
-            raise InvalidRetryStep(
-                "retry step does not exist or is no longer available"
-            )
-        started = time.monotonic()
         event_id = str(
             uuid5(
                 NAMESPACE_URL,
                 f"agent:{pending.attempt_turn_id}:retry:{pending.step_id}",
             )
         )
-        started_at = _now_iso()
 
-        async def emit(event: dict[str, Any]) -> None:
-            if persistence is not None:
+        async def deliver(event: dict[str, Any], *, checkpoint: bool = True) -> None:
+            if checkpoint and persistence is not None:
                 await persistence.checkpoint(event)
-            await _emit(on_event, event)
+            try:
+                await _emit(on_event, event)
+            except TransportDeliveryError:
+                raise
+            except Exception as exc:
+                raise TransportDeliveryError(str(exc)) from exc
 
-        await emit(
-            {
+        if pending.attempt_phase == "registered":
+            pending.attempt_started_at = _now_iso()
+            pending.attempt_started_event = {
                 "type": "step_started",
                 "event_id": event_id,
                 "step_id": step_id,
                 "label": "重试 Todo API 查询",
                 "tool": pending.tool,
                 "args": copy.deepcopy(pending.args),
-                "started_at": started_at,
+                "started_at": pending.attempt_started_at,
             }
-        )
-        try:
-            result = await tool.ainvoke(copy.deepcopy(pending.args))
-        except Exception as exc:
-            error_code, _ = _failure_metadata(exc)
-            await emit(
-                {
+            pending.attempt_phase = "started_pending"
+
+        if pending.attempt_phase == "started_pending":
+            assert pending.attempt_started_event is not None
+            await deliver(copy.deepcopy(pending.attempt_started_event))
+            pending.attempt_phase = "executing"
+
+        if pending.attempt_phase == "executing":
+            started = time.monotonic()
+            try:
+                pending.attempt_result = await tool.ainvoke(copy.deepcopy(pending.args))
+            except Exception as exc:
+                error_code, _ = _failure_metadata(exc)
+                pending.attempt_failure_code = error_code
+                pending.attempt_failure_message = str(exc)
+                pending.attempt_terminal_event = {
                     "type": "step_failed",
                     "event_id": event_id,
                     "step_id": step_id,
                     "label": "重试 Todo API 查询",
                     "tool": pending.tool,
                     "args": copy.deepcopy(pending.args),
-                    "started_at": started_at,
+                    "started_at": pending.attempt_started_at,
                     "error_code": error_code,
                     "message": str(exc),
                     "retryable": False,
                     "duration_ms": int((time.monotonic() - started) * 1000),
                 }
+                pending.attempt_phase = "failure_pending"
+            else:
+                pending.attempt_terminal_event = {
+                    "type": "action_completed",
+                    "event_id": event_id,
+                    "step_id": step_id,
+                    "label": "重试 Todo API 查询",
+                    "tool": pending.tool,
+                    "args": copy.deepcopy(pending.args),
+                    "started_at": pending.attempt_started_at,
+                    "action": pending.tool,
+                    "result": copy.deepcopy(pending.attempt_result),
+                    "duration_ms": int((time.monotonic() - started) * 1000),
+                }
+                pending.attempt_phase = "success_pending"
+
+        if pending.attempt_phase in {"success_pending", "failure_pending"}:
+            assert pending.attempt_terminal_event is not None
+            await deliver(copy.deepcopy(pending.attempt_terminal_event))
+            pending.attempt_phase = (
+                "success_delivered"
+                if pending.attempt_phase == "success_pending"
+                else "failure_delivered"
             )
+
+        if pending.attempt_phase == "failure_delivered":
+            error_code = pending.attempt_failure_code or "TOOL_ERROR"
+            message = pending.attempt_failure_message or "retry failed"
             if persistence is not None:
-                await persistence.fail(error_code, str(exc), uncertain=False)
+                await persistence.fail(error_code, message, uncertain=False)
+            if _pending_retries.pop(retry_token, None) is not pending:
+                raise InvalidRetryStep(
+                    "retry step does not exist or is no longer available"
+                )
             raise AgentExecutionError(
-                str(exc), phase=step_id, event_emitted=on_event is not None
-            ) from exc
-        event = {
-            "type": "action_completed",
-            "event_id": event_id,
-            "step_id": step_id,
-            "label": "重试 Todo API 查询",
-            "tool": pending.tool,
-            "args": copy.deepcopy(pending.args),
-            "started_at": started_at,
-            "action": pending.tool,
-            "result": result,
-            "duration_ms": int((time.monotonic() - started) * 1000),
-        }
-        await emit(event)
-        if persistence is None:
-            await _emit(on_event, {"type": "reply", "content": "已重新执行查询。"})
-        return result
+                message, phase=step_id, event_emitted=on_event is not None
+            )
+
+        if pending.attempt_phase == "success_delivered":
+            if persistence is not None:
+                await persistence.complete("已重新执行查询。")
+            pending.attempt_phase = "reply_pending"
+
+        if pending.attempt_phase == "reply_pending":
+            await deliver(
+                {"type": "reply", "content": "已重新执行查询。"},
+                checkpoint=False,
+            )
+            pending.attempt_phase = "delivered"
+
+        if _pending_retries.pop(retry_token, None) is not pending:
+            raise InvalidRetryStep(
+                "retry step does not exist or is no longer available"
+            )
+        return pending.attempt_result
 
 
 def _now_iso() -> str:
@@ -847,25 +919,22 @@ async def _emit_model_failure(
     phase: str,
     exc: Exception,
 ) -> bool:
-    try:
-        await _deliver_checkpointed_event(
-            session_id,
-            generation,
-            record,
-            state,
-            on_event,
-            {
-                "type": "step_failed",
-                "step_id": phase,
-                "error_code": "AGENT_MODEL_ERROR",
-                "message": str(exc),
-                "retryable": True,
-                "duration_ms": 0,
-            },
-        )
-        return on_event is not None
-    except Exception:
-        return False
+    await _deliver_checkpointed_event(
+        session_id,
+        generation,
+        record,
+        state,
+        on_event,
+        {
+            "type": "step_failed",
+            "step_id": phase,
+            "error_code": "AGENT_MODEL_ERROR",
+            "message": str(exc),
+            "retryable": True,
+            "duration_ms": 0,
+        },
+    )
+    return on_event is not None
 
 
 async def _raise_limit(
@@ -947,7 +1016,12 @@ async def process_message(
             async def durable_event_sink(event: dict[str, Any]) -> None:
                 assert persistence is not None
                 await persistence.checkpoint(event)
-                await _emit(original_event_sink, event)
+                try:
+                    await _emit(original_event_sink, event)
+                except TransportDeliveryError:
+                    raise
+                except Exception as exc:
+                    raise TransportDeliveryError(str(exc)) from exc
 
             event_sink = durable_event_sink if persistence is not None else on_event
             state = existing.get("incomplete")

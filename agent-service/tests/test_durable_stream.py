@@ -13,6 +13,7 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from starlette.websockets import WebSocketDisconnect
 
 from app.agent import _conversations, _reset_graph, process_message
 from app.auth import AuthSettings
@@ -220,6 +221,7 @@ class _StreamRepository:
         self.failed: list[tuple[str, bool]] = []
         self.steps = []
         self.fail_checkpoint = False
+        self.fail_model_error_checkpoint = False
         self.fail_completed_tool = False
         self.fail_write_terminal_step = False
         self.fail_complete = False
@@ -265,6 +267,10 @@ class _StreamRepository:
                 self.fail_write_terminal_step
                 and event.tool == "create_todo"
                 and event.status in {"completed", "failed"}
+            )
+            or (
+                self.fail_model_error_checkpoint
+                and event.error_code == "AGENT_MODEL_ERROR"
             )
         ):
             raise RuntimeError("database unavailable")
@@ -477,6 +483,119 @@ def test_disconnect_keeps_open_turn_and_reconnect_reuses_tool_and_event(durable_
     assert all(event.get("event_id") != first_action["event_id"] for event in replayed)
 
 
+@pytest.mark.parametrize(
+    "fault_event",
+    ["step_started", "action_completed", "step_failed", "tool_step_failed"],
+)
+def test_checkpointed_send_fault_reconnects_without_failing_turn_or_repeating_tool(
+    durable_client, fault_event
+):
+    from app.agent import _tools_by_name
+    from app.main import _WebSocketWriter
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    if fault_event == "step_failed":
+
+        class Model:
+            def __init__(self):
+                self.calls = 0
+
+            def bind_tools(self, _tools):
+                return self
+
+            async def ainvoke(self, _messages):
+                self.calls += 1
+                if self.calls == 1:
+                    raise RuntimeError("model unavailable")
+                return _aim("recovered")
+
+        model = Model()
+    else:
+        model = FakeToolCallingLLM(
+            responses=[
+                _aim(tool_calls=[_tc("create_todo", {"title": "once"})]),
+                _aim("recovered"),
+            ]
+        )
+    tool = (
+        StubTool(side_effect=TimeoutError("tool unavailable"))
+        if fault_event == "tool_step_failed"
+        else StubTool(result={"id": 1})
+    )
+    target_event = "step_failed" if fault_event == "tool_step_failed" else fault_event
+    original_send = _WebSocketWriter.send_json
+    failed_event = None
+
+    async def fail_once(self, event):
+        nonlocal failed_event
+        if event["type"] == target_event and failed_event is None:
+            failed_event = dict(event)
+            raise RuntimeError(f"{target_event} delivery lost")
+        await original_send(self, event)
+
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+        patch.object(_WebSocketWriter, "send_json", new=fail_once),
+    ):
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("same request")
+            while True:
+                try:
+                    ws.receive_json()
+                except Exception:
+                    break
+
+        assert durable_client.repo.failed == []
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("same request")
+            replayed = []
+            while not replayed or replayed[-1]["type"] != "done":
+                replayed.append(ws.receive_json())
+
+    assert failed_event is not None
+    assert len(durable_client.repo.starts) == 2
+    assert durable_client.repo.starts[0][:2] == durable_client.repo.starts[1][:2]
+    assert durable_client.repo.completed is True
+    assert (
+        sum(
+            event.get("event_id") == failed_event["event_id"]
+            and event["type"] == failed_event["type"]
+            for event in replayed
+        )
+        == 1
+    )
+    if fault_event != "step_failed":
+        tool.ainvoke.assert_awaited_once()
+
+
+def test_model_failure_checkpoint_fault_reports_only_history_failure(durable_client):
+    class BrokenModel:
+        def bind_tools(self, _tools):
+            return self
+
+        async def ainvoke(self, _messages):
+            raise RuntimeError("model unavailable")
+
+    durable_client.repo.fail_model_error_checkpoint = True
+    with (
+        patch("app.agent._build_llm", return_value=BrokenModel()),
+        durable_client.websocket_connect(_stream_url(durable_client)) as ws,
+    ):
+        ws.send_text("fail model")
+        events = []
+        while True:
+            try:
+                events.append(ws.receive_json())
+            except Exception:
+                break
+
+    terminal = [event for event in events if event["type"] == "step_failed"]
+    assert [event["error_code"] for event in terminal] == ["HISTORY_PERSISTENCE_FAILED"]
+    assert all(event["type"] not in {"reply", "done"} for event in events)
+    assert durable_client.repo.failed == [("HISTORY_PERSISTENCE_FAILED", False)]
+
+
 def test_retry_creates_a_new_durable_attempt_before_reply(durable_client):
     from app.agent import _tools_by_name
     from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
@@ -534,6 +653,261 @@ def test_retry_creates_a_new_durable_attempt_before_reply(durable_client):
         "reply",
         "done",
     ]
+    with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+        ws.send_json(
+            {
+                "type": "retry_step",
+                "session_id": str(durable_client.repo.session_id),
+                "step_id": failure["step_id"],
+                "retry_token": failure["retry_token"],
+            }
+        )
+        invalid = ws.receive_json()
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+    assert invalid["error_code"] == "INVALID_RETRY_STEP"
+
+
+def test_retry_reply_send_fault_reconnects_without_repeating_tool(durable_client):
+    from app.agent import _tools_by_name
+    from app.main import _WebSocketWriter
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    seed_events = []
+    seed_model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("list_todos", {})]),
+            _aim("original turn finished"),
+        ]
+    )
+
+    async def seed_retry():
+        with (
+            patch("app.agent._build_llm", return_value=seed_model),
+            patch.dict(
+                _tools_by_name,
+                {"list_todos": StubTool(side_effect=TimeoutError("seed timeout"))},
+            ),
+        ):
+            await process_message(
+                str(durable_client.repo.session_id),
+                "list",
+                on_event=seed_events.append,
+                owner_id=str(durable_client.repo.owner),
+                runtime_generation=0,
+            )
+
+    asyncio.run(seed_retry())
+    failure = next(event for event in seed_events if event["type"] == "step_failed")
+    retry_tool = StubTool(result={"items": []})
+    original_send = _WebSocketWriter.send_json
+    reply_failed = False
+
+    async def fail_reply_once(self, event):
+        nonlocal reply_failed
+        if event["type"] == "reply" and not reply_failed:
+            reply_failed = True
+            raise RuntimeError("reply delivery lost")
+        await original_send(self, event)
+
+    retry_frame = {
+        "type": "retry_step",
+        "session_id": str(durable_client.repo.session_id),
+        "step_id": failure["step_id"],
+        "retry_token": failure["retry_token"],
+    }
+    with (
+        patch.dict(_tools_by_name, {"list_todos": retry_tool}),
+        patch.object(_WebSocketWriter, "send_json", new=fail_reply_once),
+    ):
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_json(retry_frame)
+            while True:
+                try:
+                    ws.receive_json()
+                except Exception:
+                    break
+        assert durable_client.repo.failed == []
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_json(retry_frame)
+            replayed = [ws.receive_json(), ws.receive_json()]
+
+    assert reply_failed is True
+    retry_tool.ainvoke.assert_awaited_once_with({})
+    assert len(durable_client.repo.starts) == 2
+    assert durable_client.repo.starts[0][:2] == durable_client.repo.starts[1][:2]
+    assert [event["type"] for event in replayed] == ["reply", "done"]
+    assert durable_client.repo.completed is True
+
+
+@pytest.mark.parametrize(
+    ("terminal_type", "tool_effect", "expected_status"),
+    [
+        ("action_completed", {"items": [], "total": 0}, "completed"),
+        ("step_failed", TimeoutError("retry timeout"), "failed"),
+    ],
+)
+def test_retry_terminal_send_fault_replays_same_attempt_without_repeating_tool(
+    durable_client, terminal_type, tool_effect, expected_status
+):
+    from app.agent import _tools_by_name
+    from app.main import _WebSocketWriter
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    seed_events = []
+    seed_model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("list_todos", {})]),
+            _aim("original turn finished"),
+        ]
+    )
+
+    async def seed_retry():
+        with (
+            patch("app.agent._build_llm", return_value=seed_model),
+            patch.dict(
+                _tools_by_name,
+                {"list_todos": StubTool(side_effect=TimeoutError("seed timeout"))},
+            ),
+        ):
+            await process_message(
+                str(durable_client.repo.session_id),
+                "list",
+                on_event=seed_events.append,
+                owner_id=str(durable_client.repo.owner),
+                runtime_generation=0,
+            )
+
+    asyncio.run(seed_retry())
+    source_failure = next(
+        event for event in seed_events if event["type"] == "step_failed"
+    )
+    retry_tool = (
+        StubTool(side_effect=tool_effect)
+        if isinstance(tool_effect, Exception)
+        else StubTool(result=tool_effect)
+    )
+    original_send = _WebSocketWriter.send_json
+    failed_event = None
+
+    async def fail_once(self, event):
+        nonlocal failed_event
+        if event["type"] == terminal_type and failed_event is None:
+            failed_event = dict(event)
+            raise RuntimeError(f"{terminal_type} delivery lost")
+        await original_send(self, event)
+
+    retry_frame = {
+        "type": "retry_step",
+        "session_id": str(durable_client.repo.session_id),
+        "step_id": source_failure["step_id"],
+        "retry_token": source_failure["retry_token"],
+    }
+    with (
+        patch.dict(_tools_by_name, {"list_todos": retry_tool}),
+        patch.object(_WebSocketWriter, "send_json", new=fail_once),
+    ):
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_json(retry_frame)
+            while True:
+                try:
+                    ws.receive_json()
+                except Exception:
+                    break
+
+        assert durable_client.repo.failed == []
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_json(retry_frame)
+            replayed = []
+            while True:
+                try:
+                    replayed.append(ws.receive_json())
+                    if replayed[-1]["type"] == "done":
+                        break
+                except Exception:
+                    break
+
+    assert failed_event is not None
+    retry_tool.ainvoke.assert_awaited_once_with({})
+    assert len(durable_client.repo.starts) == 2
+    assert durable_client.repo.starts[0][:2] == durable_client.repo.starts[1][:2]
+    assert (
+        sum(
+            event.get("event_id") == failed_event["event_id"]
+            and event["type"] == terminal_type
+            for event in replayed
+        )
+        == 1
+    )
+    assert all(event["type"] != "done" for event in replayed) == (
+        expected_status == "failed"
+    )
+    if expected_status == "completed":
+        assert durable_client.repo.completed is True
+        assert durable_client.repo.failed == []
+    else:
+        assert durable_client.repo.completed is False
+        assert durable_client.repo.failed == [("TOOL_TIMEOUT", False)]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_retry_claims_execute_the_tool_only_once():
+    from app.agent import InvalidRetryStep, _tools_by_name, retry_failed_step
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    events = []
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("list_todos", {})]),
+            _aim("original finished"),
+        ]
+    )
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(
+            _tools_by_name,
+            {"list_todos": StubTool(side_effect=TimeoutError("seed timeout"))},
+        ),
+    ):
+        await process_message(
+            "concurrent-retry",
+            "list",
+            on_event=events.append,
+            owner_id="owner-a",
+            runtime_generation=2,
+        )
+    failure = next(event for event in events if event["type"] == "step_failed")
+    retry_tool = StubTool(result={"items": []})
+    persistence_one = _RecordingPersistence()
+    persistence_two = _RecordingPersistence()
+    with patch.dict(_tools_by_name, {"list_todos": retry_tool}):
+        results = await asyncio.gather(
+            retry_failed_step(
+                "concurrent-retry",
+                failure["step_id"],
+                failure["retry_token"],
+                owner_id="owner-a",
+                runtime_generation=2,
+                persistence=persistence_one,
+            ),
+            retry_failed_step(
+                "concurrent-retry",
+                failure["step_id"],
+                failure["retry_token"],
+                owner_id="owner-a",
+                runtime_generation=2,
+                persistence=persistence_two,
+            ),
+            return_exceptions=True,
+        )
+
+    retry_tool.ainvoke.assert_awaited_once_with({})
+    assert sum(isinstance(result, InvalidRetryStep) for result in results) == 1
+    assert sum(not isinstance(result, Exception) for result in results) == 1
+    assert (
+        sum(persistence.started for persistence in (persistence_one, persistence_two))
+        == 1
+    )
 
 
 @pytest.mark.asyncio
@@ -1136,6 +1510,92 @@ async def test_real_postgres_stream_persists_complete_turn_before_terminal_deliv
             events[0]["event_id"]
         ]
         assert detail.turns[0].steps[0].status == "completed"
+    finally:
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM users WHERE id = $1", owner)
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_checkpointed_delivery_fault_resumes_open_turn():
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL delivery recovery")
+
+    import asyncpg
+    from app.agent import TransportDeliveryError, _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    pool = await asyncpg.create_pool(database_url)
+    repository = HistoryRepository(pool)
+    owner = uuid4()
+    suffix = uuid4().hex
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """INSERT INTO users (id, email, display_name, password_hash)
+               VALUES ($1, $2, 'Delivery Recovery', 'test-only')""",
+            owner,
+            f"delivery-{suffix}@example.test",
+        )
+    try:
+        session = await repository.create_session(owner, "Delivery recovery")
+        detail = await repository.get_session(owner, session.id)
+        coordinator = SessionRuntimeCoordinator()
+        model = FakeToolCallingLLM(
+            responses=[
+                _aim(tool_calls=[_tc("create_todo", {"title": "once"})]),
+                _aim("recovered"),
+            ]
+        )
+        tool = StubTool(result={"id": 1})
+        failed_event = None
+
+        async def fail_action_once(event):
+            nonlocal failed_event
+            if event["type"] == "action_completed" and failed_event is None:
+                failed_event = dict(event)
+                raise RuntimeError("delivery lost")
+
+        with (
+            patch("app.agent._build_llm", return_value=model),
+            patch.dict(_tools_by_name, {"create_todo": tool}),
+        ):
+            with pytest.raises(TransportDeliveryError):
+                await _execute_durable_message(
+                    repository,
+                    coordinator,
+                    owner,
+                    session.id,
+                    "same request",
+                    detail,
+                    on_event=fail_action_once,
+                )
+            open_detail = await repository.get_session(owner, session.id)
+            assert open_detail.turns[0].status == "running"
+            replayed = []
+            await _execute_durable_message(
+                repository,
+                coordinator,
+                owner,
+                session.id,
+                "same request",
+                detail,
+                on_event=replayed.append,
+            )
+
+        final_detail = await repository.get_session(owner, session.id)
+        tool.ainvoke.assert_awaited_once()
+        assert failed_event is not None
+        assert len(final_detail.turns) == 1
+        assert final_detail.turns[0].status == "completed"
+        assert (
+            sum(
+                event.get("event_id") == failed_event["event_id"]
+                and event["type"] == "action_completed"
+                for event in replayed
+            )
+            == 1
+        )
     finally:
         async with pool.acquire() as connection:
             await connection.execute("DELETE FROM users WHERE id = $1", owner)

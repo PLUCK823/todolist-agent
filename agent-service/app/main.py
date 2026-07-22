@@ -36,8 +36,11 @@ from .agent import (
     DurableTurnRequest,
     InvalidRetryStep,
     ProcessResult,
+    TransportDeliveryError,
     complete_turn,
     delete_history,
+    discard_retry_attempt,
+    invalidate_turn_confirmations,
     invalidate_turn_tokens,
     process_message,
     resolve_confirmation,
@@ -434,6 +437,13 @@ async def _execute_durable_message(
                 None,
             )
             raise
+        except TransportDeliveryError:
+            invalidate_turn_confirmations(
+                str(session_id),
+                str(persistence.turn_id) if persistence.turn_id else None,
+                None,
+            )
+            raise
         except HistoryPersistenceError as exc:
             invalidate_turn_tokens(
                 str(session_id),
@@ -459,7 +469,12 @@ async def _execute_durable_message(
         # A terminal transport message is permitted only after the durable
         # assistant commit. A lost send must not rewrite that completed turn.
         if on_terminal is not None:
-            await on_terminal(result)
+            try:
+                await on_terminal(result)
+            except TransportDeliveryError:
+                raise
+            except Exception as exc:
+                raise TransportDeliveryError(str(exc)) from exc
         if isinstance(result, ProcessResult):
             acknowledged = await complete_turn(
                 str(session_id), result.turn_id, result.generation
@@ -1147,11 +1162,6 @@ def create_app(
                     writer.send_json,
                     **retry_kwargs,
                 )
-                if durable_retry:
-                    await retry_persistence.complete("已重新执行查询。")
-                    await writer.send_json(
-                        {"type": "reply", "content": "已重新执行查询。"}
-                    )
                 await writer.send_json({"type": "done"})
                 await ws.close()
             except InvalidRetryStep:
@@ -1161,7 +1171,11 @@ def create_app(
                     )
                 )
                 await ws.close(code=1008)
+            except TransportDeliveryError:
+                with suppress(RuntimeError, WebSocketDisconnect):
+                    await ws.close(code=1011)
             except HistoryPersistenceError as exc:
+                discard_retry_attempt(request.retry_token)
                 if retry_persistence is not None:
                     with suppress(Exception):
                         await retry_persistence.fail(
@@ -1172,7 +1186,10 @@ def create_app(
                 await writer.send_json(_history_failure_event())
                 await ws.close(code=1011)
             except Exception as exc:
-                if retry_persistence is not None:
+                discard_retry_attempt(request.retry_token)
+                if retry_persistence is not None and not getattr(
+                    exc, "event_emitted", False
+                ):
                     with suppress(Exception):
                         await retry_persistence.fail(
                             getattr(exc, "phase", "AGENT_ERROR"),
@@ -1187,7 +1204,6 @@ def create_app(
                             "Agent processing failed",
                         )
                     )
-                await writer.send_json({"type": "done"})
                 await ws.close(code=1011)
             finally:
                 if retry_lease is not None and retry_current is not None:
@@ -1260,6 +1276,9 @@ def create_app(
                 receive_task = asyncio.create_task(ws.receive_json())
         except WebSocketDisconnect:
             await _cancel_and_fully_drain(process_task)
+        except TransportDeliveryError:
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await ws.close(code=1011)
         except TerminalAlreadySentError:
             with suppress(RuntimeError, WebSocketDisconnect):
                 await ws.close(code=1011)
