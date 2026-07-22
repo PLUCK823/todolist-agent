@@ -1684,6 +1684,97 @@ async def test_delete_tombstone_survives_decision_and_all_stale_leases():
 
 
 @pytest.mark.asyncio
+async def test_overlapping_delete_keeps_tombstone_when_first_barrier_fails():
+    coordinator = SessionRuntimeCoordinator()
+    owner = uuid4()
+    session_id = uuid4()
+    key = (owner, session_id)
+    first_entered = asyncio.Event()
+    fail_first = asyncio.Event()
+    second_entered = asyncio.Event()
+    finish_second = asyncio.Event()
+
+    async def first_delete():
+        first_entered.set()
+        await fail_first.wait()
+        raise RuntimeError("first delete failed")
+
+    async def second_delete():
+        second_entered.set()
+        await finish_second.wait()
+        return True
+
+    first = asyncio.create_task(
+        coordinator.delete_barrier(owner, session_id, first_delete)
+    )
+    await first_entered.wait()
+    second = asyncio.create_task(
+        coordinator.delete_barrier(owner, session_id, second_delete)
+    )
+    while coordinator._generations.get(key) != 2:
+        await asyncio.sleep(0)
+
+    fail_first.set()
+    with pytest.raises(RuntimeError, match="first delete failed"):
+        await first
+    await second_entered.wait()
+
+    assert key in coordinator._tombstones
+    assert coordinator.state_size == 1
+    with pytest.raises(HistoryPersistenceError, match="being deleted"):
+        await coordinator.acquire(owner, session_id)
+
+    finish_second.set()
+    assert await second is True
+    assert coordinator.state_size == 0
+
+
+@pytest.mark.asyncio
+async def test_overlapping_delete_barriers_reclaim_state_after_last_exit():
+    coordinator = SessionRuntimeCoordinator()
+
+    for _ in range(20):
+        owner = uuid4()
+        session_id = uuid4()
+        key = (owner, session_id)
+        first_entered = asyncio.Event()
+        finish_first = asyncio.Event()
+        second_entered = asyncio.Event()
+        finish_second = asyncio.Event()
+
+        async def first_delete():
+            first_entered.set()
+            await finish_first.wait()
+            return True
+
+        async def second_delete():
+            second_entered.set()
+            await finish_second.wait()
+            return True
+
+        first = asyncio.create_task(
+            coordinator.delete_barrier(owner, session_id, first_delete)
+        )
+        await first_entered.wait()
+        second = asyncio.create_task(
+            coordinator.delete_barrier(owner, session_id, second_delete)
+        )
+        while coordinator._generations.get(key) != 2:
+            await asyncio.sleep(0)
+
+        finish_first.set()
+        assert await first is True
+        await second_entered.wait()
+        assert key in coordinator._tombstones
+        with pytest.raises(HistoryPersistenceError, match="being deleted"):
+            await coordinator.acquire(owner, session_id)
+
+        finish_second.set()
+        assert await second is True
+        assert coordinator.state_size == 0
+
+
+@pytest.mark.asyncio
 async def test_releasing_leases_does_not_replace_lock_with_operations_waiting():
     coordinator = SessionRuntimeCoordinator()
     owner = uuid4()

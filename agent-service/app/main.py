@@ -103,7 +103,7 @@ class SessionRuntimeCoordinator:
         self._leases: dict[tuple[UUID, UUID], set[UUID]] = {}
         self._tasks: dict[tuple[UUID, UUID], set[tuple[UUID, asyncio.Task[Any]]]] = {}
         self._operations: dict[tuple[UUID, UUID], int] = {}
-        self._deleting: set[tuple[UUID, UUID]] = set()
+        self._deleting: dict[tuple[UUID, UUID], int] = {}
         self._closed = False
 
     @property
@@ -116,7 +116,7 @@ class SessionRuntimeCoordinator:
             | set(self._leases)
             | set(self._tasks)
             | set(self._operations)
-            | self._deleting
+            | set(self._deleting)
         )
 
     async def acquire(self, owner_id: UUID, session_id: UUID) -> SessionRuntimeLease:
@@ -208,7 +208,7 @@ class SessionRuntimeCoordinator:
             generation = self._generations.get(key, 0) + 1
             self._generations[key] = generation
             self._tombstones.add(key)
-            self._deleting.add(key)
+            self._deleting[key] = self._deleting.get(key, 0) + 1
             tasks = tuple({task for _, task in self._tasks.get(key, ())})
         try:
             current = asyncio.current_task()
@@ -229,7 +229,11 @@ class SessionRuntimeCoordinator:
                 return True
         finally:
             async with self._state_lock:
-                self._deleting.discard(key)
+                remaining = self._deleting[key] - 1
+                if remaining:
+                    self._deleting[key] = remaining
+                else:
+                    self._deleting.pop(key, None)
                 self._cleanup_if_idle(key)
 
     async def cancel_all(self) -> None:
@@ -251,7 +255,7 @@ class SessionRuntimeCoordinator:
             self._leases.get(key)
             or self._tasks.get(key)
             or self._operations.get(key)
-            or key in self._deleting
+            or self._deleting.get(key)
         ):
             return
         self._operation_locks.pop(key, None)
