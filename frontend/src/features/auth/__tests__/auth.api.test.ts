@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
 import { server } from '../../../mocks/server'
 import { createAuthApi } from '../auth.api'
+import { loadStoredAvatar } from '../auth.storage'
 
 const account = {
   id: 'user-1', name: 'Server User', email: 'user@example.com', timezone: 'Asia/Shanghai',
@@ -40,7 +41,7 @@ describe('authApi', () => {
         calls.push('register')
         expect(request.credentials).toBe('include')
         expect(await request.json()).toEqual({ name: 'New User', email: 'new@example.com', password: 'password1' })
-        return ok({ ...account, name: 'New User', email: 'new@example.com' })
+        return HttpResponse.json({ code: 0, message: 'ok', data: { ...account, name: 'New User', email: 'new@example.com' } }, { status: 201 })
       }),
       http.post('/api/auth/login', async ({ request }) => {
         calls.push('login')
@@ -53,13 +54,52 @@ describe('authApi', () => {
         expect(request.credentials).toBe('include')
         return new HttpResponse(null, { status: 204 })
       }),
+      http.get('/api/auth/me', () => HttpResponse.json({ code: 40101, message: '未登录', data: null }, { status: 401 })),
+      http.post('/api/auth/refresh', () => HttpResponse.json({ code: 40102, message: '未登录', data: null }, { status: 401 })),
     )
 
     const api = createAuthApi()
     await expect(api.register({ name: 'New User', email: 'new@example.com', password: 'password1' })).resolves.toMatchObject({ email: 'new@example.com' })
+    await expect(api.getSession()).resolves.toBeNull()
     await expect(api.login({ email: 'new@example.com', password: 'password1' })).resolves.toMatchObject({ email: 'new@example.com' })
     await expect(api.logout()).resolves.toBeUndefined()
     expect(calls).toEqual(['register', 'login', 'logout'])
+  })
+
+  it('cannot let an old me response replace a newer login identity or receive its avatar', async () => {
+    const alice = { ...account, id: 'race-alice', name: 'Alice', email: 'alice@example.com' }
+    const bob = { ...account, id: 'race-bob', name: 'Bob', email: 'bob@example.com' }
+    let releaseAlice!: () => void
+    let markAliceStarted!: () => void
+    let meCalls = 0
+    const delayedAlice = new Promise<void>((resolve) => { releaseAlice = resolve })
+    const aliceStarted = new Promise<void>((resolve) => { markAliceStarted = resolve })
+    server.use(
+      http.get('/api/auth/me', async () => {
+        meCalls += 1
+        if (meCalls === 1) {
+          markAliceStarted()
+          await delayedAlice
+          return ok(alice)
+        }
+        return ok(bob)
+      }),
+      http.post('/api/auth/login', () => ok(bob)),
+    )
+    const api = createAuthApi()
+
+    const oldSession = api.getSession()
+    await aliceStarted
+    await expect(api.login({ email: bob.email, password: 'password1' })).resolves.toMatchObject({ id: bob.id })
+    releaseAlice()
+    const settledOldSession = await oldSession.catch(() => null)
+    if (settledOldSession) expect(settledOldSession.account.id).toBe(bob.id)
+
+    await expect(api.updateProfile({ avatar: { kind: 'preset', value: 'ocean' } })).resolves.toMatchObject({
+      id: bob.id, avatar: { kind: 'preset', value: 'ocean' },
+    })
+    await expect(loadStoredAvatar(alice.id)).resolves.toBeNull()
+    await expect(loadStoredAvatar(bob.id)).resolves.toEqual({ kind: 'preset', value: 'ocean' })
   })
 
   it('does not treat registration as an authenticated session', async () => {

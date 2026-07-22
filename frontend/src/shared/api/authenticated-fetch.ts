@@ -32,6 +32,23 @@ const NO_REFRESH_PATHS = new Set([
 
 let refreshPromise: Promise<void> | null = null
 let sessionEpoch = 0
+let expiredGeneration: number | null = null
+let refreshController: AbortController | null = null
+
+export interface AuthExpiredDetail {
+  generation: number
+}
+
+export function getAuthGeneration(): number {
+  return sessionEpoch
+}
+
+export function beginAuthTransition(): number {
+  sessionEpoch += 1
+  expiredGeneration = null
+  refreshController?.abort()
+  return sessionEpoch
+}
 
 function requestPath(input: RequestInfo | URL): string {
   if (input instanceof Request) return new URL(input.url, window.location.origin).pathname
@@ -60,9 +77,10 @@ async function parseEnvelope<T>(response: Response): Promise<T> {
   if (code === null || !('data' in envelope)) {
     throw new ApiError('服务返回了无法识别的响应', response.status, code)
   }
-  const message = typeof envelope.message === 'string' && envelope.message
-    ? envelope.message
-    : response.ok ? '服务返回了无法识别的响应' : `请求失败（${response.status}）`
+  if (typeof envelope.message !== 'string') {
+    throw new ApiError('服务返回了无法识别的响应', response.status, code)
+  }
+  const message = envelope.message
 
   if (!response.ok || code !== 0) {
     throw new ApiError(message, response.status, code)
@@ -80,24 +98,34 @@ export async function apiFetch<T>(input: RequestInfo | URL, init?: RequestInit):
   return parseEnvelope<T>(response)
 }
 
-function emitAuthExpired() {
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event(API_AUTH_EXPIRED_EVENT))
+function emitAuthExpired(generation: number) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent<AuthExpiredDetail>(API_AUTH_EXPIRED_EVENT, { detail: { generation } }))
+  }
 }
 
-function refreshSession(): Promise<void> {
+function refreshSession(expectedGeneration: number): Promise<void> {
   if (!refreshPromise) {
-    refreshPromise = apiFetch('/api/auth/refresh', { method: 'POST' })
+    const controller = new AbortController()
+    refreshController = controller
+    const pending = apiFetch('/api/auth/refresh', { method: 'POST', signal: controller.signal })
       .then(() => {
+        if (sessionEpoch !== expectedGeneration) return
         sessionEpoch += 1
+        expiredGeneration = null
       })
       .catch((error) => {
-        sessionEpoch += 1
-        emitAuthExpired()
+        if (sessionEpoch === expectedGeneration) {
+          expiredGeneration = expectedGeneration
+          emitAuthExpired(expectedGeneration)
+        }
         throw error
       })
       .finally(() => {
-        refreshPromise = null
+        if (refreshPromise === pending) refreshPromise = null
+        if (refreshController === controller) refreshController = null
       })
+    refreshPromise = pending
   }
   return refreshPromise
 }
@@ -111,14 +139,18 @@ export async function authenticatedFetch<T>(input: RequestInfo | URL, init?: Req
     ? apiFetch<T>(replayable.clone())
     : apiFetch<T>(input, init)
 
+  let unauthorized: ApiError
   try {
     return await attempt()
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401 || NO_REFRESH_PATHS.has(requestPath(input))) {
       throw error
     }
+    unauthorized = error
   }
 
-  if (sessionEpoch === epochAtStart) await refreshSession()
+  if (sessionEpoch !== epochAtStart) return attempt()
+  if (expiredGeneration === epochAtStart) throw unauthorized
+  await refreshSession(epochAtStart)
   return attempt()
 }

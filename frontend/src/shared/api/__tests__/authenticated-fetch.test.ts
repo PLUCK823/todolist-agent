@@ -1,14 +1,18 @@
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '../../../mocks/server'
 import {
   API_AUTH_EXPIRED_EVENT,
   ApiError,
   apiFetch,
   authenticatedFetch,
+  beginAuthTransition,
+  getAuthGeneration,
 } from '../authenticated-fetch'
 
 const ok = <T,>(data: T) => HttpResponse.json({ code: 0, message: 'ok', data })
+
+afterEach(() => beginAuthTransition())
 
 describe('authenticatedFetch', () => {
   it('includes credentials and unwraps the API envelope', async () => {
@@ -91,6 +95,36 @@ describe('authenticatedFetch', () => {
     expect(refreshCalls).toBe(1)
   })
 
+  it.each(['login', 'logout'])('does not refresh a late 401 across the %s identity boundary', async () => {
+    let release!: () => void
+    const delayed = new Promise<void>((resolve) => { release = resolve })
+    let privateCalls = 0
+    let refreshCalls = 0
+    server.use(
+      http.get('/api/private', async () => {
+        privateCalls += 1
+        if (privateCalls === 1) {
+          await delayed
+          return HttpResponse.json({ code: 40101, message: 'old session', data: null }, { status: 401 })
+        }
+        return ok({ identity: 'new' })
+      }),
+      http.post('/api/auth/refresh', () => {
+        refreshCalls += 1
+        return ok({ id: 'unexpected' })
+      }),
+    )
+
+    const pending = authenticatedFetch('/api/private')
+    await Promise.resolve()
+    beginAuthTransition()
+    release()
+
+    await expect(pending).resolves.toEqual({ identity: 'new' })
+    expect(privateCalls).toBe(2)
+    expect(refreshCalls).toBe(0)
+  })
+
   it('replays a Request body safely after refresh', async () => {
     const bodies: string[] = []
     server.use(
@@ -138,6 +172,32 @@ describe('authenticatedFetch', () => {
     expect(privateCalls).toBe(2)
     expect(refreshCalls).toBe(1)
     expect(listener).toHaveBeenCalledTimes(1)
+    window.removeEventListener(API_AUTH_EXPIRED_EVENT, listener)
+  })
+
+  it('latches an expired generation until a new authentication boundary', async () => {
+    let refreshCalls = 0
+    const listener = vi.fn()
+    window.addEventListener(API_AUTH_EXPIRED_EVENT, listener)
+    server.use(
+      http.get('/api/private', () => HttpResponse.json({ code: 40101, message: 'expired', data: null }, { status: 401 })),
+      http.post('/api/auth/refresh', () => {
+        refreshCalls += 1
+        return HttpResponse.json({ code: 40102, message: 'refresh expired', data: null }, { status: 401 })
+      }),
+    )
+
+    await expect(authenticatedFetch('/api/private')).rejects.toMatchObject({ status: 401 })
+    await expect(authenticatedFetch('/api/private')).rejects.toMatchObject({ status: 401 })
+    expect(refreshCalls).toBe(1)
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    const previous = getAuthGeneration()
+    beginAuthTransition()
+    expect(getAuthGeneration()).toBeGreaterThan(previous)
+    await expect(authenticatedFetch('/api/private')).rejects.toMatchObject({ status: 401 })
+    expect(refreshCalls).toBe(2)
+    expect(listener).toHaveBeenCalledTimes(2)
     window.removeEventListener(API_AUTH_EXPIRED_EVENT, listener)
   })
 
@@ -198,5 +258,11 @@ describe('authenticatedFetch', () => {
     server.use(http.get('/api/malformed', () => HttpResponse.json({ code: 0, message: 'ok' })))
 
     await expect(apiFetch('/api/malformed')).rejects.toThrow('服务返回了无法识别的响应')
+  })
+
+  it('fails closed when envelope message is not a string', async () => {
+    server.use(http.get('/api/malformed-message', () => HttpResponse.json({ code: 0, message: 42, data: {} })))
+
+    await expect(apiFetch('/api/malformed-message')).rejects.toThrow('服务返回了无法识别的响应')
   })
 })

@@ -79,12 +79,12 @@ test('API fixture preserves updates, completion and deletion for following GETs'
   expect(result).toEqual({ title: 'after update', completed: true, reopened: false, deletedStatus: 404 })
 })
 
-test('app fixture clears storage once per browser context, not once per page', async ({ context, login }) => {
+test('app fixture shares the Cookie session without injecting localStorage identity', async ({ context, login }) => {
   await login()
   const secondPage = await context.newPage()
-  await secondPage.goto('/favicon.svg')
-  await expect.poll(() => secondPage.evaluate(() => localStorage.getItem('todolist.auth.session')))
-    .toBe('e2e-demo-account')
+  await secondPage.goto('/tasks')
+  await expect(secondPage.getByRole('heading', { name: '今天，保持专注' })).toBeVisible()
+  await expect.poll(() => secondPage.evaluate(() => localStorage.getItem('todolist.auth.session'))).toBeNull()
   await secondPage.close()
 })
 

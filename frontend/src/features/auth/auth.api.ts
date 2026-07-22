@@ -1,4 +1,4 @@
-import { ApiError, apiFetch, authenticatedFetch } from '../../shared/api/authenticated-fetch'
+import { ApiError, apiFetch, authenticatedFetch, beginAuthTransition, getAuthGeneration } from '../../shared/api/authenticated-fetch'
 import { applyStoredAvatar, clearLegacyAuthStorage, saveStoredAvatar } from './auth.storage'
 import type { Account, AuthApi, LoginInput, ProfileUpdate, RegisterInput, Session } from './auth.types'
 
@@ -32,10 +32,18 @@ function jsonRequest(method: string, body: unknown): RequestInit {
 
 export function createAuthApi(): AuthApi {
   clearLegacyAuthStorage()
-  let currentAccount: Account | null = null
-  const remember = async (value: unknown) => {
-    currentAccount = await applyStoredAvatar(parseAccount(value))
-    return currentAccount
+  const readStableSession = async (): Promise<Session | null> => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const generation = getAuthGeneration()
+      try {
+        const account = await applyStoredAvatar(parseAccount(await authenticatedFetch<unknown>('/api/auth/me')))
+        if (generation === getAuthGeneration()) return { account }
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) return null
+        throw error
+      }
+    }
+    throw new ApiError('登录状态已发生变化，请重试', 409)
   }
 
   return {
@@ -45,42 +53,50 @@ export function createAuthApi(): AuthApi {
     },
 
     async login(input: LoginInput) {
-      return await remember(await apiFetch<unknown>('/api/auth/login', jsonRequest('POST', input)))
+      const generation = beginAuthTransition()
+      const account = await applyStoredAvatar(parseAccount(await apiFetch<unknown>('/api/auth/login', jsonRequest('POST', input))))
+      if (generation !== getAuthGeneration()) throw new ApiError('登录状态已发生变化，请重试', 409)
+      return account
     },
 
     async logout() {
-      try {
-        await apiFetch<void>('/api/auth/logout', { method: 'POST' })
-      } finally {
-        currentAccount = null
-      }
+      beginAuthTransition()
+      await apiFetch<void>('/api/auth/logout', { method: 'POST' })
     },
 
     async getSession(): Promise<Session | null> {
-      try {
-        return { account: await remember(await authenticatedFetch<unknown>('/api/auth/me')) }
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
-          currentAccount = null
-          return null
-        }
-        throw error
-      }
+      return readStableSession()
     },
 
     async updateProfile(input: ProfileUpdate) {
-      let account = currentAccount
-      if (!account) account = (await this.getSession())?.account ?? null
+      let account = (await readStableSession())?.account ?? null
       if (!account) throw new ApiError('登录状态已失效', 401, 40101)
+      const trustedAccountId = account.id
+      const trustedGeneration = getAuthGeneration()
 
       const { avatar, ...serverInput } = input
       if (Object.keys(serverInput).length > 0) {
-        account = await remember(await authenticatedFetch<unknown>('/api/auth/me', jsonRequest('PATCH', serverInput)))
+        const updated = parseAccount(await authenticatedFetch<unknown>('/api/auth/me', jsonRequest('PATCH', serverInput)))
+        if (updated.id !== trustedAccountId) throw new ApiError('登录状态已发生变化，请重试', 409)
+        if (trustedGeneration !== getAuthGeneration()) {
+          const current = (await readStableSession())?.account
+          if (!current || current.id !== trustedAccountId) throw new ApiError('登录状态已发生变化，请重试', 409)
+          account = current
+        } else {
+          account = await applyStoredAvatar(updated)
+        }
       }
       if (avatar) {
+        if (trustedGeneration !== getAuthGeneration()) {
+          const current = (await readStableSession())?.account
+          if (!current || current.id !== trustedAccountId) throw new ApiError('登录状态已发生变化，请重试', 409)
+          account = current
+        }
         await saveStoredAvatar(account.id, avatar)
+        if (trustedAccountId !== account.id || (trustedGeneration !== getAuthGeneration() && (await readStableSession())?.account.id !== trustedAccountId)) {
+          throw new ApiError('登录状态已发生变化，请重试', 409)
+        }
         account = { ...account, avatar }
-        currentAccount = account
       }
       return account
     },

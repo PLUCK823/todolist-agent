@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { API_AUTH_EXPIRED_EVENT } from '../../shared/api/authenticated-fetch'
+import { API_AUTH_EXPIRED_EVENT, getAuthGeneration, type AuthExpiredDetail } from '../../shared/api/authenticated-fetch'
 import { authApi } from './auth.api'
 import type { Account, AuthApi, LoginInput, ProfileUpdate, RegisterInput } from './auth.types'
 import { AuthContext, type AuthStatus } from './auth-context'
@@ -28,7 +28,9 @@ export function AuthProvider({ children, api = authApi, initialAccount }: { chil
   }, [api, initialAccount])
 
   useEffect(() => {
-    const onAuthExpired = () => {
+    const onAuthExpired = (event: Event) => {
+      const generation = (event as CustomEvent<AuthExpiredDetail>).detail?.generation
+      if (generation !== getAuthGeneration()) return
       operation.current += 1
       setAccount(null)
       setStatus('anonymous')

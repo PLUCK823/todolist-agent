@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { API_AUTH_EXPIRED_EVENT } from '../../../shared/api/authenticated-fetch'
+import { API_AUTH_EXPIRED_EVENT, beginAuthTransition, getAuthGeneration } from '../../../shared/api/authenticated-fetch'
 import { AuthProvider } from '../AuthContext'
 import { useAuth } from '../auth-context'
 import type { Account, AuthApi, Session } from '../auth.types'
@@ -102,9 +102,33 @@ describe('AuthProvider', () => {
     const { result } = renderHook(() => useAuth(), { wrapper })
     await waitFor(() => expect(result.current.status).toBe('authenticated'))
 
-    act(() => window.dispatchEvent(new Event(API_AUTH_EXPIRED_EVENT)))
+    act(() => window.dispatchEvent(new CustomEvent(API_AUTH_EXPIRED_EVENT, { detail: { generation: getAuthGeneration() } })))
     expect(result.current.status).toBe('anonymous')
     expect(result.current.account).toBeNull()
+  })
+
+  it('ignores an old expired event while a newer login succeeds', async () => {
+    const nextLogin = deferred<Account>()
+    const oldGeneration = getAuthGeneration()
+    const api = createApi({
+      getSession: vi.fn().mockResolvedValue(null),
+      login: vi.fn(() => {
+        beginAuthTransition()
+        return nextLogin.promise
+      }),
+    })
+    const wrapper = ({ children }: { children: ReactNode }) => <AuthProvider api={api}>{children}</AuthProvider>
+    const { result } = renderHook(() => useAuth(), { wrapper })
+    await waitFor(() => expect(result.current.status).toBe('anonymous'))
+
+    let loginPromise!: Promise<Account>
+    act(() => { loginPromise = result.current.login({ email: account.email, password: 'password1' }) })
+    act(() => window.dispatchEvent(new CustomEvent(API_AUTH_EXPIRED_EVENT, { detail: { generation: oldGeneration } })))
+    nextLogin.resolve(account)
+    await act(async () => { await loginPromise })
+
+    expect(result.current.status).toBe('authenticated')
+    expect(result.current.account).toEqual(account)
   })
 
   it('does not use browser storage events as authentication state', async () => {

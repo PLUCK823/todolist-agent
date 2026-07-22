@@ -82,9 +82,23 @@ export const test = base.extend<AppFixtures>({
     await provide(async ({ account = demoAccount } = {}) => {
       await page.goto('/login')
       await page.getByRole('button', { name: '登录' }).waitFor()
-      await page.evaluate(({ accountValue }) => {
-        localStorage.setItem('todolist.auth.account', JSON.stringify(accountValue))
-        localStorage.setItem('todolist.auth.session', accountValue.id)
+      await page.evaluate(async ({ accountValue }) => {
+        const password = 'password1'
+        const register = await fetch('/api/auth/register', {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: accountValue.name, email: accountValue.email, password }),
+        })
+        if (!register.ok && register.status !== 409) throw new Error(`mock register failed: ${register.status}`)
+        const login = await fetch('/api/auth/login', {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: accountValue.email, password }),
+        })
+        if (!login.ok) throw new Error(`mock login failed: ${login.status}`)
+        // Service-worker mock responses cannot mutate the browser Cookie jar.
+        // Mirror the HttpOnly session effect with a mock-only Cookie after the
+        // real login request succeeds; no account identity is stored locally.
+        const mockSession = JSON.stringify({ email: accountValue.email.toLowerCase(), name: accountValue.name })
+        document.cookie = `todolist_mock_session=${encodeURIComponent(mockSession)}; Path=/; SameSite=Lax`
       }, { accountValue: account })
     })
   },

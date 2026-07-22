@@ -131,6 +131,84 @@ function notFound(): ApiResponse<null> {
   return { code: 40401, message: '待办不存在', data: null }
 }
 
+interface MockAuthAccount {
+  id: string
+  name: string
+  email: string
+  timezone: string
+  avatar: { kind: 'preset'; value: 'amber' }
+  taskCount: number
+  agentSessionCount: number
+}
+
+const mockAuthAccounts = new Map<string, { account: MockAuthAccount; password: string }>()
+const MOCK_SESSION_COOKIE = 'todolist_mock_session'
+let mockActiveSessionEmail: string | null = null
+const MOCK_AUTH_CACHE = 'todolist-mock-auth'
+const MOCK_SESSION_CACHE_KEY = 'http://mock.local/session'
+
+function normalizedEmail(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function mockAuthAccount(name: string, email: string): MockAuthAccount {
+  return {
+    id: `mock-${email.replace(/[^a-z0-9]/gi, '-')}`,
+    name: name.trim(),
+    email,
+    timezone: 'Asia/Shanghai (UTC+8)',
+    avatar: { kind: 'preset', value: 'amber' },
+    taskCount: todos.length,
+    agentSessionCount: 0,
+  }
+}
+
+function sessionIdentity(request: Request): { email: string; name?: string } | null {
+  const cookies = request.headers.get('cookie') ?? ''
+  const value = cookies.split(';').map((part) => part.trim()).find((part) => part.startsWith(`${MOCK_SESSION_COOKIE}=`))
+  const raw = value ? decodeURIComponent(value.slice(MOCK_SESSION_COOKIE.length + 1)) : mockActiveSessionEmail
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw) as { email?: unknown; name?: unknown }
+    if (typeof parsed.email === 'string') return { email: normalizedEmail(parsed.email), ...(typeof parsed.name === 'string' && { name: parsed.name }) }
+  } catch { /* Plain email Cookies are also accepted by the mock. */ }
+  return { email: normalizedEmail(raw) }
+}
+
+function sessionEmail(request: Request) {
+  return sessionIdentity(request)?.email ?? null
+}
+
+async function persistMockSession(account: MockAuthAccount | null) {
+  mockActiveSessionEmail = account?.email ?? null
+  if (typeof globalThis.caches === 'undefined') return
+  const cache = await globalThis.caches.open(MOCK_AUTH_CACHE)
+  if (!account) await cache.delete(MOCK_SESSION_CACHE_KEY)
+  else await cache.put(MOCK_SESSION_CACHE_KEY, new Response(JSON.stringify(account), { headers: { 'Content-Type': 'application/json' } }))
+}
+
+async function currentMockAccount(request: Request) {
+  const identity = sessionIdentity(request)
+  if (identity) {
+    const existing = mockAuthAccounts.get(identity.email)?.account
+    if (existing) return existing
+    const account = mockAuthAccount(identity.name ?? identity.email.split('@')[0], identity.email)
+    mockAuthAccounts.set(identity.email, { account, password: '' })
+    return account
+  }
+  if (typeof globalThis.caches === 'undefined') return null
+  const cached = await (await globalThis.caches.open(MOCK_AUTH_CACHE)).match(MOCK_SESSION_CACHE_KEY)
+  return cached ? await cached.json() as MockAuthAccount : null
+}
+
+function unauthorizedAuth() {
+  return HttpResponse.json({ code: 40102, message: '邮箱或密码不正确或登录已失效', data: null }, { status: 401 })
+}
+
+function unauthorizedLogin() {
+  return HttpResponse.json({ code: 40102, message: '邮箱或密码不正确', data: null }, { status: 401 })
+}
+
 import { http, HttpResponse, ws } from 'msw'
 
 async function consumeTodoControl(request: Request) {
@@ -340,6 +418,66 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
 })
 
 export const handlers = [
+  http.post('/api/auth/register', async ({ request }) => {
+    const input = await request.json() as { name?: unknown; email?: unknown; password?: unknown }
+    if (typeof input.name !== 'string' || typeof input.email !== 'string' || typeof input.password !== 'string') {
+      return HttpResponse.json({ code: 40001, message: '请求参数格式错误', data: null }, { status: 400 })
+    }
+    const email = normalizedEmail(input.email)
+    if (mockAuthAccounts.has(email)) {
+      return HttpResponse.json({ code: 40901, message: '邮箱已被使用', data: null }, { status: 409 })
+    }
+    const account = mockAuthAccount(input.name, email)
+    mockAuthAccounts.set(email, { account, password: input.password })
+    return HttpResponse.json(ok(account), { status: 201 })
+  }),
+  http.post('/api/auth/login', async ({ request }) => {
+    const input = await request.json() as { email?: unknown; password?: unknown }
+    const email = typeof input.email === 'string' ? normalizedEmail(input.email) : ''
+    const stored = mockAuthAccounts.get(email)
+    if (!stored || typeof input.password !== 'string' || stored.password !== input.password) return unauthorizedLogin()
+    await persistMockSession(stored.account)
+    return HttpResponse.json(ok(stored.account), {
+      headers: { 'Set-Cookie': `${MOCK_SESSION_COOKIE}=${encodeURIComponent(email)}; Path=/; SameSite=Lax` },
+    })
+  }),
+  http.post('/api/auth/refresh', async ({ request }) => {
+    const account = await currentMockAccount(request)
+    return account ? HttpResponse.json(ok(account)) : unauthorizedAuth()
+  }),
+  http.post('/api/auth/logout', async () => {
+    await persistMockSession(null)
+    return new HttpResponse(null, {
+      status: 204,
+      headers: { 'Set-Cookie': `${MOCK_SESSION_COOKIE}=; Path=/; Max-Age=0; SameSite=Lax` },
+    })
+  }),
+  http.get('/api/auth/me', async ({ request }) => {
+    const account = await currentMockAccount(request)
+    return account ? HttpResponse.json(ok(account)) : unauthorizedAuth()
+  }),
+  http.patch('/api/auth/me', async ({ request }) => {
+    const current = await currentMockAccount(request)
+    const email = current?.email ?? sessionEmail(request)
+    const stored = email ? mockAuthAccounts.get(email) ?? (current ? { account: current, password: '' } : null) : null
+    if (!stored || !email) return unauthorizedAuth()
+    const input = await request.json() as { name?: unknown; email?: unknown; timezone?: unknown; avatar?: unknown }
+    if ('avatar' in input) return HttpResponse.json({ code: 40001, message: '请求参数不合法', data: null }, { status: 400 })
+    const nextEmail = typeof input.email === 'string' ? normalizedEmail(input.email) : email
+    const account = {
+      ...stored.account,
+      ...(typeof input.name === 'string' && { name: input.name.trim() }),
+      ...(typeof input.timezone === 'string' && { timezone: input.timezone }),
+      email: nextEmail,
+    }
+    mockAuthAccounts.delete(email)
+    mockAuthAccounts.set(nextEmail, { account, password: stored.password })
+    await persistMockSession(account)
+    return HttpResponse.json(ok(account), {
+      headers: { 'Set-Cookie': `${MOCK_SESSION_COOKIE}=${encodeURIComponent(nextEmail)}; Path=/; SameSite=Lax` },
+    })
+  }),
+
   // Test controls are available only when the browser MSW worker is enabled.
   http.post('/api/__e2e__/todos/seed', async ({ request }) => {
     const body = await request.json() as { todos?: Todo[] }
