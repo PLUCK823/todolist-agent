@@ -348,11 +348,11 @@ def test_websocket_invalid_initial_envelope_fails_and_closes(client):
     ):
         ws.send_json({"message": "", "unexpected": True})
         failure = ws.receive_json()
-        done = ws.receive_json()
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
 
     assert failure["error_code"] == "INVALID_CLIENT_EVENT"
     assert UUID(failure["event_id"])
-    assert done == {"type": "done"}
     process.assert_not_awaited()
 
 
@@ -604,12 +604,12 @@ def test_websocket_retry_step_rejects_client_supplied_tool_or_args(client):
             }
         )
         failure = ws.receive_json()
-        done = ws.receive_json()
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
 
     retry.assert_not_awaited()
     assert failure["error_code"] == "INVALID_CLIENT_EVENT"
     assert failure["retryable"] is False
-    assert done == {"type": "done"}
 
 
 def test_websocket_retry_step_routes_identity_without_replanning(client):

@@ -6,7 +6,7 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import jwt
@@ -23,6 +23,7 @@ from app.main import (
     HistoryPersistenceError,
     RepositoryTurnPersistence,
     SessionRuntimeCoordinator,
+    _execute_durable_message,
     app,
 )
 
@@ -213,12 +214,14 @@ class _StreamRepository:
         self.auth_session = uuid4()
         self.session_id = uuid4()
         self.turn_id = None
+        self.starts = []
         self.user_exists = False
         self.completed = False
         self.failed: list[tuple[str, bool]] = []
         self.steps = []
         self.fail_checkpoint = False
         self.fail_completed_tool = False
+        self.fail_write_terminal_step = False
         self.fail_complete = False
         now = datetime.now(timezone.utc)
         self.summary = SessionSummary(
@@ -245,15 +248,24 @@ class _StreamRepository:
     ):
         assert owner == self.owner and session_id == self.session_id
         self.turn_id = turn_id
+        self.starts.append((turn_id, message_id, content))
         self.user_exists = True
         return SimpleNamespace(id=turn_id)
 
     async def upsert_step(self, owner, turn_id, event):
         assert self.user_exists
-        if self.fail_checkpoint or (
-            self.fail_completed_tool
-            and event.tool == "create_todo"
-            and event.status == "completed"
+        if (
+            self.fail_checkpoint
+            or (
+                self.fail_completed_tool
+                and event.tool == "create_todo"
+                and event.status == "completed"
+            )
+            or (
+                self.fail_write_terminal_step
+                and event.tool == "create_todo"
+                and event.status in {"completed", "failed"}
+            )
         ):
             raise RuntimeError("database unavailable")
         self.steps.append(event)
@@ -315,6 +327,39 @@ def _stream_url(client) -> str:
     return f"/api/agent/stream?session_id={client.repo.session_id}"
 
 
+def test_http_chat_uses_same_durable_executor_before_responding(durable_client):
+    with patch("app.agent._build_llm", return_value=_ReplyModel()):
+        response = durable_client.post(
+            "/api/agent/chat",
+            json={
+                "message": "persist over http",
+                "session_id": str(durable_client.repo.session_id),
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["reply"] == "durable reply"
+    assert durable_client.repo.user_exists is True
+    assert durable_client.repo.completed is True
+    assert durable_client.repo.steps[-1].status == "completed"
+
+
+def test_http_chat_history_fault_never_returns_false_success(durable_client):
+    durable_client.repo.fail_checkpoint = True
+    with patch("app.agent._build_llm", return_value=_ReplyModel()):
+        response = durable_client.post(
+            "/api/agent/chat",
+            json={
+                "message": "must fail",
+                "session_id": str(durable_client.repo.session_id),
+            },
+        )
+
+    assert response.status_code == 500
+    assert durable_client.repo.completed is False
+    assert durable_client.repo.failed == [("HISTORY_PERSISTENCE_FAILED", False)]
+
+
 def test_terminal_reply_is_committed_before_reply_and_done(durable_client):
     with patch(
         "app.agent._build_llm", return_value=_ReplyModel(reply="committed reply")
@@ -329,6 +374,27 @@ def test_terminal_reply_is_committed_before_reply_and_done(durable_client):
 
     assert events[-1] == {"type": "reply", "content": "committed reply"}
     assert done == {"type": "done"}
+
+
+def test_memory_ack_failure_after_committed_reply_emits_no_second_terminal(
+    durable_client,
+):
+    with (
+        patch("app.agent._build_llm", return_value=_ReplyModel()),
+        patch("app.main.complete_turn", new=AsyncMock(return_value=False)),
+        durable_client.websocket_connect(_stream_url(durable_client)) as ws,
+    ):
+        ws.send_text("hello")
+        events = []
+        while True:
+            try:
+                events.append(ws.receive_json())
+            except Exception:
+                break
+
+    assert durable_client.repo.completed is True
+    assert [event["type"] for event in events].count("reply") == 1
+    assert all(event["type"] not in {"step_failed", "done"} for event in events)
 
 
 def test_history_checkpoint_failure_emits_failure_without_reply_or_done(durable_client):
@@ -349,6 +415,125 @@ def test_history_checkpoint_failure_emits_failure_without_reply_or_done(durable_
     assert events[0]["retryable"] is False
     assert "retry_token" not in events[0]
     assert durable_client.repo.failed == [("HISTORY_PERSISTENCE_FAILED", False)]
+
+
+def test_disconnect_keeps_open_turn_and_reconnect_reuses_tool_and_event(durable_client):
+    from app.agent import _tools_by_name
+    from tests.test_agent import StubTool, _aim, _tc
+
+    entered_second_model = asyncio.Event()
+
+    class DisconnectModel:
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, _tools):
+            return self
+
+        async def ainvoke(self, _messages):
+            self.calls += 1
+            if self.calls == 1:
+                return _aim(tool_calls=[_tc("create_todo", {"title": "once"})])
+            if self.calls == 2:
+                entered_second_model.set()
+                await asyncio.Future()
+            return _aim("reconnected reply")
+
+    model = DisconnectModel()
+    tool = StubTool(result={"id": 1})
+    first_action = None
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("create once")
+            while first_action is None:
+                event = ws.receive_json()
+                if event["type"] == "action_completed":
+                    first_action = event
+
+        assert entered_second_model.is_set()
+        assert durable_client.repo.failed == []
+
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("create once")
+            replayed = []
+            while not replayed or replayed[-1]["type"] != "done":
+                replayed.append(ws.receive_json())
+
+    tool.ainvoke.assert_awaited_once()
+    assert len(durable_client.repo.starts) == 2
+    assert durable_client.repo.starts[0][:2] == durable_client.repo.starts[1][:2]
+    assert durable_client.repo.completed is True
+    assert (
+        sum(
+            str(step.event_id) == first_action["event_id"]
+            and step.status == "completed"
+            for step in durable_client.repo.steps
+        )
+        == 1
+    )
+    assert all(event.get("event_id") != first_action["event_id"] for event in replayed)
+
+
+def test_retry_creates_a_new_durable_attempt_before_reply(durable_client):
+    from app.agent import _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("list_todos", {})]),
+            _aim("original turn finished"),
+        ]
+    )
+    failure_events = []
+
+    async def seed_retry():
+        with (
+            patch("app.agent._build_llm", return_value=model),
+            patch.dict(
+                _tools_by_name,
+                {"list_todos": StubTool(side_effect=TimeoutError("read timeout"))},
+            ),
+        ):
+            await process_message(
+                str(durable_client.repo.session_id),
+                "list",
+                on_event=failure_events.append,
+                owner_id=str(durable_client.repo.owner),
+                runtime_generation=0,
+            )
+
+    asyncio.run(seed_retry())
+    failure = next(event for event in failure_events if event["type"] == "step_failed")
+    retry_tool = StubTool(result={"items": [], "total": 0})
+    with (
+        patch.dict(_tools_by_name, {"list_todos": retry_tool}),
+        durable_client.websocket_connect(_stream_url(durable_client)) as ws,
+    ):
+        ws.send_json(
+            {
+                "type": "retry_step",
+                "session_id": str(durable_client.repo.session_id),
+                "step_id": failure["step_id"],
+                "retry_token": failure["retry_token"],
+            }
+        )
+        events = []
+        while not events or events[-1]["type"] != "done":
+            events.append(ws.receive_json())
+
+    retry_tool.ainvoke.assert_awaited_once_with({})
+    assert len(durable_client.repo.starts) == 1
+    assert durable_client.repo.starts[0][2].startswith("Retry read-only step ")
+    assert durable_client.repo.completed is True
+    assert [event["type"] for event in events] == [
+        "step_started",
+        "action_completed",
+        "reply",
+        "done",
+    ]
 
 
 @pytest.mark.asyncio
@@ -408,6 +593,71 @@ async def test_terminal_checkpoint_keeps_complete_step_and_confirmation_snapshot
     assert terminal.confirmation_approved is True
 
 
+@pytest.mark.asyncio
+async def test_step_snapshot_survives_reconnect_with_new_persistence_instance():
+    repo = _StreamRepository()
+    coordinator = SessionRuntimeCoordinator()
+    lease = await coordinator.acquire(repo.owner, repo.session_id)
+    turn_id = uuid4()
+    request = SimpleNamespace(
+        turn_id=turn_id,
+        message_id=uuid4(),
+        assistant_message_id=uuid4(),
+        message="delete",
+        created_at=datetime.now(timezone.utc),
+    )
+    event_id = str(uuid4())
+    first = RepositoryTurnPersistence(repo, coordinator, lease)
+    await first.start(request)
+    await first.checkpoint(
+        {
+            "type": "step_started",
+            "event_id": event_id,
+            "step_id": "delete-1",
+            "label": "调用 Todo API",
+            "tool": "delete_todo",
+            "args": {"todo_id": 7},
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await first.checkpoint(
+        {
+            "type": "confirmation_required",
+            "event_id": event_id,
+            "step_id": "delete-1",
+            "confirmation_id": "confirm-7",
+            "message": "confirm delete",
+        }
+    )
+
+    second = RepositoryTurnPersistence(repo, coordinator, lease)
+    await second.start(request)
+    await second.checkpoint(
+        {
+            "type": "action_completed",
+            "event_id": event_id,
+            "step_id": "delete-1",
+            "label": "调用 Todo API",
+            "tool": "delete_todo",
+            "args": {"todo_id": 7},
+            "started_at": repo.steps[0].started_at.isoformat(),
+            "action": "delete_todo",
+            "result": {"deleted": True},
+            "confirmation_id": "confirm-7",
+            "confirmation_message": "confirm delete",
+            "confirmation_approved": True,
+        }
+    )
+
+    terminal = repo.steps[-1]
+    assert terminal.label == "调用 Todo API"
+    assert terminal.tool == "delete_todo"
+    assert terminal.args == {"todo_id": 7}
+    assert terminal.confirmation_id == "confirm-7"
+    assert terminal.confirmation_message == "confirm delete"
+    assert terminal.confirmation_approved is True
+
+
 def test_write_effect_then_checkpoint_failure_is_uncertain_and_not_retryable(
     durable_client,
 ):
@@ -439,6 +689,36 @@ def test_write_effect_then_checkpoint_failure_is_uncertain_and_not_retryable(
     assert events[-1]["error_code"] == "HISTORY_PERSISTENCE_FAILED"
     assert all(event["type"] not in {"reply", "done"} for event in events)
     assert all("retry_token" not in event for event in events)
+    assert durable_client.repo.failed == [("HISTORY_PERSISTENCE_FAILED", True)]
+
+
+def test_write_dispatch_connection_error_then_checkpoint_failure_is_uncertain(
+    durable_client,
+):
+    from app.agent import _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    model = FakeToolCallingLLM(
+        responses=[_aim(tool_calls=[_tc("create_todo", {"title": "maybe"})])]
+    )
+    tool = StubTool(side_effect=ConnectionError("response lost after dispatch"))
+    durable_client.repo.fail_write_terminal_step = True
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+        durable_client.websocket_connect(_stream_url(durable_client)) as ws,
+    ):
+        ws.send_text("create maybe")
+        events = []
+        while True:
+            try:
+                events.append(ws.receive_json())
+            except Exception:
+                break
+
+    tool.ainvoke.assert_awaited_once_with({"title": "maybe"})
+    assert events[-1]["error_code"] == "HISTORY_PERSISTENCE_FAILED"
+    assert all(event["type"] not in {"reply", "done"} for event in events)
     assert durable_client.repo.failed == [("HISTORY_PERSISTENCE_FAILED", True)]
 
 
@@ -532,6 +812,63 @@ async def test_active_delete_cancels_and_drains_inflight_persistence_before_retu
     await asyncio.wait_for(coordinator.delete_barrier(owner, session_id), timeout=1)
 
     assert worker.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_delete_barrier_waits_for_task_that_ignores_first_cancellation():
+    coordinator = SessionRuntimeCoordinator()
+    owner = uuid4()
+    session_id = uuid4()
+    lease = await coordinator.acquire(owner, session_id)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stubborn_write():
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    worker = asyncio.create_task(stubborn_write())
+    await coordinator.attach(lease, worker)
+    await entered.wait()
+    deleting = asyncio.create_task(coordinator.delete_barrier(owner, session_id))
+    await asyncio.sleep(0.15)
+    assert deleting.done() is False
+    release.set()
+    await asyncio.wait_for(deleting, timeout=1)
+    assert worker.done()
+
+
+@pytest.mark.asyncio
+async def test_delete_drain_timeout_fails_closed_before_cascade(monkeypatch):
+    coordinator = SessionRuntimeCoordinator()
+    owner = uuid4()
+    session_id = uuid4()
+    lease = await coordinator.acquire(owner, session_id)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def stubborn_write():
+        entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await release.wait()
+
+    worker = asyncio.create_task(stubborn_write())
+    await coordinator.attach(lease, worker)
+    await entered.wait()
+    monkeypatch.setenv("AGENT_DELETE_DRAIN_TIMEOUT_SECONDS", "0.01")
+    with patch("app.main.delete_history", new=AsyncMock()) as cascade:
+        with pytest.raises(TimeoutError):
+            await coordinator.delete_barrier(owner, session_id)
+
+    cascade.assert_not_awaited()
+    assert worker.done() is False
+    release.set()
+    await worker
 
 
 @pytest.mark.asyncio
@@ -765,20 +1102,27 @@ async def test_real_postgres_stream_persists_complete_turn_before_terminal_deliv
         )
     try:
         session = await repository.create_session(owner, "Real durable stream")
+        session_detail = await repository.get_session(owner, session.id)
+        assert session_detail is not None
         coordinator = SessionRuntimeCoordinator()
-        lease = await coordinator.acquire(owner, session.id)
-        persistence = RepositoryTurnPersistence(repository, coordinator, lease)
         events = []
+
+        async def assert_committed_before_terminal(result):
+            terminal_detail = await repository.get_session(owner, session.id)
+            assert terminal_detail.turns[0].status == "completed"
+            events.append({"type": "reply", "content": result.reply})
+
         with patch("app.agent._build_llm", return_value=_ReplyModel()):
-            result = await process_message(
-                str(session.id),
+            await _execute_durable_message(
+                repository,
+                coordinator,
+                owner,
+                session.id,
                 "persist me",
-                events.append,
-                persistence=persistence,
-                owner_id=str(owner),
-                runtime_generation=lease.generation,
+                session_detail,
+                on_event=events.append,
+                on_terminal=assert_committed_before_terminal,
             )
-        await persistence.complete(result.reply)
 
         detail = await repository.get_session(owner, session.id)
         assert detail is not None
@@ -792,6 +1136,110 @@ async def test_real_postgres_stream_persists_complete_turn_before_terminal_deliv
             events[0]["event_id"]
         ]
         assert detail.turns[0].steps[0].status == "completed"
+    finally:
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM users WHERE id = $1", owner)
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_http_ack_loss_returns_failure_then_reuses_committed_turn():
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is required for PostgreSQL HTTP durability test")
+
+    import asyncpg
+    from httpx import ASGITransport, AsyncClient
+    from app.main import create_app
+
+    pool = await asyncpg.create_pool(database_url)
+    repository = HistoryRepository(pool)
+    owner = uuid4()
+    auth_session = uuid4()
+    suffix = uuid4().hex
+    now = datetime.now(timezone.utc)
+    settings = AuthSettings(
+        secret="real-postgres-route-secret-value-32",
+        access_cookie="todolist_access",
+        allowed_origins=frozenset({"http://frontend.test"}),
+        issuer="todolist-backend",
+        database_url=database_url,
+    )
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """INSERT INTO users (id, email, display_name, password_hash)
+               VALUES ($1, $2, 'HTTP Durable', 'test-only')""",
+            owner,
+            f"http-durable-{suffix}@example.test",
+        )
+        await connection.execute(
+            """INSERT INTO auth_sessions
+                   (id, user_id, refresh_token_hash, expires_at)
+               VALUES ($1, $2, $3, $4)""",
+            auth_session,
+            owner,
+            suffix.ljust(64, "0")[:64],
+            now + timedelta(minutes=10),
+        )
+    try:
+        session = await repository.create_session(owner, "HTTP ack loss")
+        application = create_app(settings=settings)
+        coordinator = SessionRuntimeCoordinator()
+        application.state.auth_settings = settings
+        application.state.history_repository = repository
+        application.state.history_service = HistoryService(
+            repository, coordinator.delete_barrier
+        )
+        application.state.runtime_coordinator = coordinator
+        application.state.recovery_ready = True
+        token = jwt.encode(
+            {
+                "sub": str(owner),
+                "sid": str(auth_session),
+                "iss": settings.issuer,
+                "iat": now,
+                "exp": now + timedelta(minutes=5),
+            },
+            settings.secret,
+            algorithm="HS256",
+        )
+        original_complete = repository.complete_turn
+        drop_ack = True
+
+        async def complete_then_maybe_drop(*args, **kwargs):
+            nonlocal drop_ack
+            result = await original_complete(*args, **kwargs)
+            if drop_ack:
+                drop_ack = False
+                raise ConnectionError("terminal acknowledgement lost")
+            return result
+
+        repository.complete_turn = complete_then_maybe_drop
+        async with AsyncClient(
+            transport=ASGITransport(app=application),
+            base_url="http://agent.test",
+            cookies={settings.access_cookie: token},
+            headers={"origin": "http://frontend.test"},
+        ) as client:
+            with patch("app.agent._build_llm", return_value=_ReplyModel()):
+                first = await client.post(
+                    "/api/agent/chat",
+                    json={"session_id": str(session.id), "message": "same request"},
+                )
+                second = await client.post(
+                    "/api/agent/chat",
+                    json={"session_id": str(session.id), "message": "same request"},
+                )
+
+        detail = await repository.get_session(owner, session.id)
+        assert first.status_code == 500
+        assert second.status_code == 200
+        assert len(detail.turns) == 1
+        assert detail.turns[0].status == "completed"
+        assert [message.content for message in detail.turns[0].messages] == [
+            "same request",
+            "durable reply",
+        ]
     finally:
         async with pool.acquire() as connection:
             await connection.execute("DELETE FROM users WHERE id = $1", owner)

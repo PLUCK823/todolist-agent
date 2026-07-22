@@ -32,6 +32,7 @@ from pydantic import ValidationError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from .agent import (
+    AgentEventSink,
     DurableTurnRequest,
     InvalidRetryStep,
     ProcessResult,
@@ -74,6 +75,10 @@ class HistoryPersistenceError(RuntimeError):
     def __init__(self, message: str, *, uncertain: bool):
         super().__init__(message)
         self.uncertain = uncertain
+
+
+class TerminalAlreadySentError(RuntimeError):
+    """A post-send local acknowledgement failed; no second event is legal."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +150,12 @@ class SessionRuntimeCoordinator:
         current = asyncio.current_task()
         for task in tasks:
             if task is not current:
-                await _cancel_and_drain(task)
+                await _cancel_and_fully_drain(
+                    task,
+                    timeout=float(
+                        os.getenv("AGENT_DELETE_DRAIN_TIMEOUT_SECONDS", "30")
+                    ),
+                )
         # A repository operation already past the generation check must leave
         # the per-session critical section before the cascade delete begins.
         async with lock:
@@ -162,7 +172,7 @@ class SessionRuntimeCoordinator:
         current = asyncio.current_task()
         for task in tasks:
             if task is not current:
-                await _cancel_and_drain(task)
+                await _cancel_and_fully_drain(task)
 
     def _assert_current(self, lease: SessionRuntimeLease) -> None:
         key = (lease.owner_id, lease.session_id)
@@ -240,7 +250,15 @@ class RepositoryTurnPersistence:
         context.update(
             {
                 key: event[key]
-                for key in ("label", "tool", "args", "started_at")
+                for key in (
+                    "label",
+                    "tool",
+                    "args",
+                    "started_at",
+                    "confirmation_id",
+                    "confirmation_message",
+                    "confirmation_approved",
+                )
                 if key in event and event[key] is not None
             }
         )
@@ -373,6 +391,91 @@ def _completed_history_messages(
         else AIMessage(content=message.content)
         for message in messages
     ]
+
+
+async def _execute_durable_message(
+    repository: HistoryRepository,
+    coordinator: SessionRuntimeCoordinator,
+    owner_id: UUID,
+    session_id: UUID,
+    message: str,
+    detail: SessionDetail | dict[str, Any],
+    *,
+    on_event: AgentEventSink | None = None,
+    on_terminal: Callable[[ProcessResult], Awaitable[None]] | None = None,
+    lease: SessionRuntimeLease | None = None,
+) -> ProcessResult:
+    """Run the production turn lifecycle shared by HTTP and WebSocket."""
+    active_lease = lease or await coordinator.acquire(owner_id, session_id)
+    current = asyncio.current_task()
+    assert current is not None
+    await coordinator.attach(active_lease, current)
+    persistence = RepositoryTurnPersistence(repository, coordinator, active_lease)
+    durable_enabled = "persistence" in inspect.signature(process_message).parameters
+    kwargs: dict[str, Any] = {"on_event": on_event}
+    if durable_enabled:
+        kwargs.update(
+            persistence=persistence,
+            initial_history=_completed_history_messages(detail),
+            owner_id=str(owner_id),
+            runtime_generation=active_lease.generation,
+        )
+    try:
+        try:
+            result = await process_message(str(session_id), message, **kwargs)
+            if durable_enabled:
+                await persistence.complete(result.reply)
+        except asyncio.CancelledError:
+            # Transport loss stops execution but deliberately leaves the
+            # durable turn open. Its journal can resume idempotently.
+            invalidate_turn_tokens(
+                str(session_id),
+                str(persistence.turn_id) if persistence.turn_id else None,
+                None,
+            )
+            raise
+        except HistoryPersistenceError as exc:
+            invalidate_turn_tokens(
+                str(session_id),
+                str(persistence.turn_id) if persistence.turn_id else None,
+                None,
+            )
+            with suppress(Exception):
+                await persistence.fail(
+                    "HISTORY_PERSISTENCE_FAILED",
+                    str(exc),
+                    uncertain=exc.uncertain or persistence.uncertain,
+                )
+            raise
+        except Exception as exc:
+            with suppress(Exception):
+                await persistence.fail(
+                    getattr(exc, "phase", "AGENT_ERROR"),
+                    str(exc),
+                    uncertain=persistence.uncertain,
+                )
+            raise
+
+        # A terminal transport message is permitted only after the durable
+        # assistant commit. A lost send must not rewrite that completed turn.
+        if on_terminal is not None:
+            await on_terminal(result)
+        if isinstance(result, ProcessResult):
+            acknowledged = await complete_turn(
+                str(session_id), result.turn_id, result.generation
+            )
+            if not acknowledged:
+                if on_terminal is not None:
+                    raise TerminalAlreadySentError(
+                        "terminal memory acknowledgement rejected"
+                    )
+                raise HistoryPersistenceError(
+                    "terminal memory acknowledgement rejected",
+                    uncertain=persistence.uncertain,
+                )
+        return result
+    finally:
+        await coordinator.release(active_lease, current)
 
 
 def _cors_origins() -> list[str]:
@@ -550,6 +653,40 @@ async def _cancel_and_drain(
         task.add_done_callback(
             lambda finished: finished.exception() if not finished.cancelled() else None
         )
+
+
+async def _cancel_and_fully_drain(
+    task: asyncio.Task[Any] | None,
+    timeout: float | None = None,
+) -> None:
+    """Cancel an owned execution and do not return while it can still mutate."""
+    if task is None:
+        return
+    if not task.done():
+        task.cancel()
+    waiter = asyncio.shield(task)
+    try:
+        if timeout is None:
+            await waiter
+        else:
+            await asyncio.wait_for(waiter, timeout=timeout)
+    except asyncio.CancelledError:
+        # A successfully cancelled child is the expected drain outcome. If the
+        # caller itself is cancelled, preserve that cancellation instead.
+        if not task.done():
+            raise
+    except TimeoutError:
+        # Delete must fail closed while any execution could still issue a
+        # repository write; callers must not continue to the cascade.
+        raise
+    except BaseException:
+        # The caller is draining a child whose failure is handled at the
+        # protocol boundary; draining must not re-raise it a second time.
+        pass
+    finally:
+        if task.done():
+            with suppress(BaseException):
+                task.result()
 
 
 def _terminate_process_on_ownership_loss() -> None:
@@ -836,6 +973,7 @@ def create_app(
 
     @application.post("/api/agent/chat")
     async def chat(
+        request: Request,
         req: ChatRequest,
         principal: AuthPrincipal = Depends(get_current_principal),
         service: HistoryService = Depends(get_history_service),
@@ -845,7 +983,8 @@ def create_app(
                 session_id = UUID(req.session_id)
             except ValueError as exc:
                 raise _err(40402, "会话不存在", 404) from exc
-            if await service.get_session(principal.user_id, session_id) is None:
+            detail = await service.get_session(principal.user_id, session_id)
+            if detail is None:
                 raise _err(40402, "会话不存在", 404)
         else:
             session_id = (
@@ -853,8 +992,24 @@ def create_app(
                     principal.user_id, first_message=req.message
                 )
             ).id
+            detail = await service.get_session(principal.user_id, session_id)
+            if detail is None:
+                raise _err(50004, "Agent history persistence failed", 500)
+        repository = request.app.state.history_repository
+        coordinator = request.app.state.runtime_coordinator
         try:
-            reply, actions, sid = await process_message(str(session_id), req.message)
+            result = await _execute_durable_message(
+                repository,
+                coordinator,
+                principal.user_id,
+                session_id,
+                req.message,
+                detail,
+            )
+            reply, actions, sid = result
+        except HistoryPersistenceError as exc:
+            logger.exception("Agent chat history persistence failed")
+            raise _err(50004, "Agent history persistence failed", 500) from exc
         except Exception as exc:
             logger.exception("Agent chat failed")
             raise _err(50004, "Agent processing failed", 500) from exc
@@ -958,25 +1113,33 @@ def create_app(
                     "request", "INVALID_CLIENT_EVENT", "invalid request"
                 )
             )
-            await writer.send_json({"type": "done"})
             await ws.close(code=1008)
             return
 
         if isinstance(request, RetryStepRequest):
             retry_lease: SessionRuntimeLease | None = None
             retry_current = asyncio.current_task()
+            retry_persistence: RepositoryTurnPersistence | None = None
             try:
                 retry_lease = await coordinator.acquire(
                     principal.user_id, fixed_session_id
                 )
                 assert retry_current is not None
                 await coordinator.attach(retry_lease, retry_current)
+                retry_persistence = RepositoryTurnPersistence(
+                    repository, coordinator, retry_lease
+                )
                 retry_kwargs: dict[str, Any] = {}
                 if "owner_id" in inspect.signature(retry_failed_step).parameters:
                     retry_kwargs = {
                         "owner_id": str(principal.user_id),
                         "runtime_generation": retry_lease.generation,
                     }
+                durable_retry = (
+                    "persistence" in inspect.signature(retry_failed_step).parameters
+                )
+                if durable_retry:
+                    retry_kwargs["persistence"] = retry_persistence
                 await retry_failed_step(
                     session_id,
                     request.step_id,
@@ -984,6 +1147,11 @@ def create_app(
                     writer.send_json,
                     **retry_kwargs,
                 )
+                if durable_retry:
+                    await retry_persistence.complete("已重新执行查询。")
+                    await writer.send_json(
+                        {"type": "reply", "content": "已重新执行查询。"}
+                    )
                 await writer.send_json({"type": "done"})
                 await ws.close()
             except InvalidRetryStep:
@@ -992,10 +1160,34 @@ def create_app(
                         request.step_id, "INVALID_RETRY_STEP", "invalid retry step"
                     )
                 )
-                await writer.send_json({"type": "done"})
                 await ws.close(code=1008)
-            except HistoryPersistenceError:
+            except HistoryPersistenceError as exc:
+                if retry_persistence is not None:
+                    with suppress(Exception):
+                        await retry_persistence.fail(
+                            "HISTORY_PERSISTENCE_FAILED",
+                            str(exc),
+                            uncertain=exc.uncertain or retry_persistence.uncertain,
+                        )
                 await writer.send_json(_history_failure_event())
+                await ws.close(code=1011)
+            except Exception as exc:
+                if retry_persistence is not None:
+                    with suppress(Exception):
+                        await retry_persistence.fail(
+                            getattr(exc, "phase", "AGENT_ERROR"),
+                            str(exc),
+                            uncertain=retry_persistence.uncertain,
+                        )
+                if not getattr(exc, "event_emitted", False):
+                    await writer.send_json(
+                        _protocol_failure_event(
+                            request.step_id,
+                            "AGENT_ERROR",
+                            "Agent processing failed",
+                        )
+                    )
+                await writer.send_json({"type": "done"})
                 await ws.close(code=1011)
             finally:
                 if retry_lease is not None and retry_current is not None:
@@ -1004,27 +1196,27 @@ def create_app(
 
         try:
             lease = await coordinator.acquire(principal.user_id, fixed_session_id)
-            current_task = asyncio.current_task()
-            assert current_task is not None
-            await coordinator.attach(lease, current_task)
         except HistoryPersistenceError:
             await writer.send_json(_history_failure_event())
             await ws.close(code=1011)
             return
-        persistence = RepositoryTurnPersistence(repository, coordinator, lease)
-        process_kwargs: dict[str, Any] = {"on_event": writer.send_json}
-        # Patched legacy unit-test callables intentionally keep their old
-        # signature; the production Agent function always exposes these args.
-        durable_enabled = "persistence" in inspect.signature(process_message).parameters
-        if durable_enabled:
-            process_kwargs.update(
-                persistence=persistence,
-                initial_history=_completed_history_messages(owned_detail),
-                owner_id=str(principal.user_id),
-                runtime_generation=lease.generation,
-            )
+
+        async def send_reply(result: ProcessResult) -> None:
+            reply = result.reply if isinstance(result, ProcessResult) else result[0]
+            await writer.send_json({"type": "reply", "content": reply})
+
         process_task = asyncio.create_task(
-            process_message(session_id, request.message, **process_kwargs)
+            _execute_durable_message(
+                repository,
+                coordinator,
+                principal.user_id,
+                fixed_session_id,
+                request.message,
+                owned_detail,
+                on_event=writer.send_json,
+                on_terminal=send_reply,
+                lease=lease,
+            )
         )
         receive_task = asyncio.create_task(ws.receive_json())
         try:
@@ -1035,18 +1227,7 @@ def create_app(
                 if process_task in completed:
                     await _cancel_and_drain(receive_task)
                     receive_task = None
-                    result = process_task.result()
-                    reply, _actions, _sid = result
-                    if durable_enabled:
-                        await persistence.complete(reply)
-                    await writer.send_json({"type": "reply", "content": reply})
-                    if isinstance(result, ProcessResult):
-                        acknowledged = await complete_turn(
-                            session_id, result.turn_id, result.generation
-                        )
-                        if not acknowledged:
-                            await ws.close(code=1011)
-                            return
+                    process_task.result()
                     await writer.send_json({"type": "done"})
                     await ws.close()
                     return
@@ -1078,44 +1259,18 @@ def create_app(
                         )
                 receive_task = asyncio.create_task(ws.receive_json())
         except WebSocketDisconnect:
-            await _cancel_and_drain(process_task)
-            invalidate_turn_tokens(
-                session_id,
-                str(persistence.turn_id) if persistence.turn_id else None,
-                getattr(process_task, "generation", None),
-            )
-            with suppress(Exception):
-                await persistence.fail(
-                    "CLIENT_DISCONNECTED",
-                    "WebSocket disconnected",
-                    uncertain=persistence.uncertain,
-                )
-        except HistoryPersistenceError as exc:
+            await _cancel_and_fully_drain(process_task)
+        except TerminalAlreadySentError:
+            with suppress(RuntimeError, WebSocketDisconnect):
+                await ws.close(code=1011)
+        except HistoryPersistenceError:
             logger.exception("Agent history persistence failed")
-            await _cancel_and_drain(process_task)
-            invalidate_turn_tokens(
-                session_id,
-                str(persistence.turn_id) if persistence.turn_id else None,
-                None,
-            )
-            with suppress(Exception):
-                await persistence.fail(
-                    "HISTORY_PERSISTENCE_FAILED",
-                    str(exc),
-                    uncertain=exc.uncertain or persistence.uncertain,
-                )
             with suppress(RuntimeError, WebSocketDisconnect):
                 await writer.send_json(_history_failure_event())
                 await ws.close(code=1011)
         except Exception as exc:
             logger.exception("Agent streaming failed")
-            await _cancel_and_drain(process_task)
-            with suppress(Exception):
-                await persistence.fail(
-                    getattr(exc, "phase", "AGENT_ERROR"),
-                    str(exc),
-                    uncertain=persistence.uncertain,
-                )
+            await _cancel_and_fully_drain(process_task)
             with suppress(RuntimeError, WebSocketDisconnect):
                 if not getattr(exc, "event_emitted", False):
                     await writer.send_json(
@@ -1129,7 +1284,6 @@ def create_app(
                 await ws.close(code=1011)
         finally:
             await _cancel_and_drain(receive_task)
-            await coordinator.release(lease, current_task)
 
     return application
 

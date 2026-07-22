@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  agent:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: todolist
+          POSTGRES_PASSWORD: test-password
+          POSTGRES_DB: todolist_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U todolist -d todolist_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://todolist:test-password@127.0.0.1:5432/todolist_test
+      DATABASE_URL: postgresql://todolist:test-password@127.0.0.1:5432/todolist_test
+      AUTH_JWT_SECRET: ci-only-secret-that-is-at-least-32-bytes
+      AUTH_ALLOWED_ORIGINS: http://frontend.test
+      LLM_PROVIDER: fake
+      APP_ENV: e2e
+      ENABLE_E2E_PROVIDER: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ensure PostgreSQL client is available
+        run: |
+          command -v psql || {
+            sudo apt-get update
+            sudo apt-get install --yes postgresql-client
+          }
+      - name: Initialize PostgreSQL schema
+        run: psql -v ON_ERROR_STOP=1 "$TEST_DATABASE_URL" -f data/init.sql
+      - name: Run Agent tests with PostgreSQL durability coverage
+        working-directory: agent-service
+        run: |
+          : ${TEST_DATABASE_URL:?TEST_DATABASE_URL must be set so PostgreSQL tests cannot skip}
+          uv run --frozen --extra dev pytest -rs

@@ -269,6 +269,11 @@ class _PendingRetry:
     turn_id: str
     generation: int
     runtime_generation: int | None
+    attempt_turn_id: str
+    attempt_message_id: str
+    attempt_assistant_message_id: str
+    attempt_message: str
+    attempt_created_at: datetime
 
 
 _pending_retries: dict[str, _PendingRetry] = {}
@@ -293,6 +298,7 @@ def _register_retry(
     args: dict[str, Any],
 ) -> str:
     token = secrets.token_urlsafe(32)
+    attempt_turn_id = str(uuid.uuid4())
     _pending_retries[token] = _PendingRetry(
         owner_id=owner_id,
         session_id=session_id,
@@ -302,6 +308,13 @@ def _register_retry(
         turn_id=state["turn_id"],
         generation=generation,
         runtime_generation=runtime_generation,
+        attempt_turn_id=attempt_turn_id,
+        attempt_message_id=str(uuid5(NAMESPACE_URL, f"agent:{attempt_turn_id}:user")),
+        attempt_assistant_message_id=str(
+            uuid5(NAMESPACE_URL, f"agent:{attempt_turn_id}:assistant")
+        ),
+        attempt_message=f"Retry read-only step {step_id}",
+        attempt_created_at=datetime.now(timezone.utc),
     )
     return token
 
@@ -522,6 +535,7 @@ async def retry_failed_step(
     *,
     owner_id: str | None = None,
     runtime_generation: int | None = None,
+    persistence: TurnPersistence | None = None,
 ) -> dict[str, Any]:
     """Execute one exact server-recorded read-only call without invoking the LLM."""
     slot = _session_slots.get(session_id)
@@ -566,6 +580,19 @@ async def retry_failed_step(
         tool = _tools_by_name.get(pending.tool)
         if tool is None:
             raise InvalidRetryStep("retry tool is no longer available")
+        if persistence is not None:
+            # Start before consuming the capability. If the commit succeeds
+            # but its acknowledgement is lost, the same token retries these
+            # pre-generated identities idempotently.
+            await persistence.start(
+                DurableTurnRequest(
+                    turn_id=pending.attempt_turn_id,
+                    message_id=pending.attempt_message_id,
+                    assistant_message_id=pending.attempt_assistant_message_id,
+                    message=pending.attempt_message,
+                    created_at=pending.attempt_created_at,
+                )
+            )
         if _pending_retries.pop(retry_token, None) is not pending:
             raise InvalidRetryStep(
                 "retry step does not exist or is no longer available"
@@ -574,11 +601,17 @@ async def retry_failed_step(
         event_id = str(
             uuid5(
                 NAMESPACE_URL,
-                f"agent:{pending.turn_id}:retry:{pending.step_id}",
+                f"agent:{pending.attempt_turn_id}:retry:{pending.step_id}",
             )
         )
-        await _emit(
-            on_event,
+        started_at = _now_iso()
+
+        async def emit(event: dict[str, Any]) -> None:
+            if persistence is not None:
+                await persistence.checkpoint(event)
+            await _emit(on_event, event)
+
+        await emit(
             {
                 "type": "step_started",
                 "event_id": event_id,
@@ -586,25 +619,30 @@ async def retry_failed_step(
                 "label": "重试 Todo API 查询",
                 "tool": pending.tool,
                 "args": copy.deepcopy(pending.args),
-                "started_at": _now_iso(),
-            },
+                "started_at": started_at,
+            }
         )
         try:
             result = await tool.ainvoke(copy.deepcopy(pending.args))
         except Exception as exc:
             error_code, _ = _failure_metadata(exc)
-            await _emit(
-                on_event,
+            await emit(
                 {
                     "type": "step_failed",
                     "event_id": event_id,
                     "step_id": step_id,
+                    "label": "重试 Todo API 查询",
+                    "tool": pending.tool,
+                    "args": copy.deepcopy(pending.args),
+                    "started_at": started_at,
                     "error_code": error_code,
                     "message": str(exc),
                     "retryable": False,
                     "duration_ms": int((time.monotonic() - started) * 1000),
-                },
+                }
             )
+            if persistence is not None:
+                await persistence.fail(error_code, str(exc), uncertain=False)
             raise AgentExecutionError(
                 str(exc), phase=step_id, event_emitted=on_event is not None
             ) from exc
@@ -612,12 +650,17 @@ async def retry_failed_step(
             "type": "action_completed",
             "event_id": event_id,
             "step_id": step_id,
+            "label": "重试 Todo API 查询",
+            "tool": pending.tool,
+            "args": copy.deepcopy(pending.args),
+            "started_at": started_at,
             "action": pending.tool,
             "result": result,
             "duration_ms": int((time.monotonic() - started) * 1000),
         }
-        await _emit(on_event, event)
-        await _emit(on_event, {"type": "reply", "content": "已重新执行查询。"})
+        await emit(event)
+        if persistence is None:
+            await _emit(on_event, {"type": "reply", "content": "已重新执行查询。"})
         return result
 
 
@@ -983,6 +1026,9 @@ async def process_message(
                 phase = state["phase"]
                 if phase == "understand":
                     state["phase"] = "understand_model"
+                    understand_started_at = state.setdefault(
+                        "understand_started_at", _now_iso()
+                    )
                     await _deliver_checkpointed_event(
                         session_id,
                         generation,
@@ -993,7 +1039,7 @@ async def process_message(
                             "type": "step_started",
                             "step_id": "understand",
                             "label": "理解请求",
-                            "started_at": _now_iso(),
+                            "started_at": understand_started_at,
                         },
                     )
                     continue
@@ -1044,6 +1090,8 @@ async def process_message(
                             {
                                 "type": "step_completed",
                                 "step_id": "understand",
+                                "label": "理解请求",
+                                "started_at": state.get("understand_started_at"),
                                 "duration_ms": 0,
                             },
                         )
@@ -1156,6 +1204,10 @@ async def process_message(
                                 confirmation["event"] = {
                                     "type": "confirmation_required",
                                     "step_id": step_id,
+                                    "label": "调用 Todo API",
+                                    "tool": name,
+                                    "args": args,
+                                    "started_at": step["started_at"],
                                     "message": binding.message,
                                     "confirmation_id": confirmation_id,
                                 }
@@ -1206,6 +1258,10 @@ async def process_message(
                                 event = {
                                     "type": "step_failed",
                                     "step_id": step_id,
+                                    "label": "调用 Todo API",
+                                    "tool": name,
+                                    "args": args,
+                                    "started_at": step["started_at"],
                                     "error_code": "CONFIRMATION_TIMEOUT",
                                     "message": action["error"],
                                     "retryable": False,
@@ -1249,17 +1305,17 @@ async def process_message(
                                 "duration_ms": int((time.monotonic() - started) * 1000),
                             }
                         else:
+                            # Once a non-read-only request is dispatched, an
+                            # exception cannot prove the remote side effect did
+                            # not happen. Keep uncertainty sticky before await.
+                            if (
+                                persistence is not None
+                                and name not in READ_ONLY_RETRY_TOOLS
+                            ):
+                                persistence.mark_write_applied()
                             try:
                                 result = await tool.ainvoke(args)
                             except Exception as exc:
-                                if (
-                                    persistence is not None
-                                    and name not in READ_ONLY_RETRY_TOOLS
-                                    and isinstance(
-                                        exc, (TimeoutError, asyncio.TimeoutError)
-                                    )
-                                ):
-                                    persistence.mark_write_applied()
                                 error_code, retryable = _failure_metadata(exc)
                                 retryable = (
                                     retryable
@@ -1292,11 +1348,6 @@ async def process_message(
                                         args,
                                     )
                             else:
-                                if (
-                                    persistence is not None
-                                    and name not in READ_ONLY_RETRY_TOOLS
-                                ):
-                                    persistence.mark_write_applied()
                                 action = {"type": name, "args": args, "result": result}
                                 tool_message = ToolMessage(
                                     content=str(result), tool_call_id=call_id
@@ -1311,8 +1362,21 @@ async def process_message(
                                     ),
                                 }
 
+                    # Every replayable journal entry carries its canonical
+                    # snapshot so a fresh persistence sink cannot degrade it.
+                    event.update(
+                        {
+                            "label": "调用 Todo API",
+                            "tool": name,
+                            "args": args,
+                            "started_at": step["started_at"],
+                        }
+                    )
                     if confirmation_id is not None:
                         event["confirmation_id"] = confirmation_id
+                        event["confirmation_message"] = (
+                            "确认删除这个待办吗？此操作不可撤销。"
+                        )
                         event["confirmation_approved"] = approved
 
                     # Journal before emitting: a send/model failure can resume
