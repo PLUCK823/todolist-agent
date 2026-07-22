@@ -382,6 +382,56 @@ def test_terminal_reply_is_committed_before_reply_and_done(durable_client):
     assert done == {"type": "done"}
 
 
+@pytest.mark.parametrize("fault_point", ["done", "close"])
+def test_success_terminal_transport_fault_adds_no_false_failure(
+    durable_client, fault_point
+):
+    from fastapi import WebSocket
+    from app.main import _WebSocketWriter
+
+    original_send = _WebSocketWriter.send_json
+    original_close = WebSocket.close
+    faulted = False
+
+    async def maybe_fail_send(self, event):
+        nonlocal faulted
+        if fault_point == "done" and event["type"] == "done" and not faulted:
+            faulted = True
+            raise RuntimeError("done delivery lost")
+        await original_send(self, event)
+
+    async def maybe_fail_close(self, code=1000, reason=None):
+        nonlocal faulted
+        if fault_point == "close" and not faulted:
+            faulted = True
+            raise RuntimeError("close failed")
+        await original_close(self, code=code, reason=reason)
+
+    with (
+        patch("app.agent._build_llm", return_value=_ReplyModel()),
+        patch.object(_WebSocketWriter, "send_json", new=maybe_fail_send),
+        patch.object(WebSocket, "close", new=maybe_fail_close),
+        durable_client.websocket_connect(_stream_url(durable_client)) as ws,
+    ):
+        ws.send_text("terminal")
+        events = []
+        while True:
+            try:
+                events.append(ws.receive_json())
+            except Exception:
+                break
+
+    terminal = [
+        event["type"]
+        for event in events
+        if event["type"] in {"reply", "done", "step_failed"}
+    ]
+    assert faulted is True
+    assert terminal == (["reply"] if fault_point == "done" else ["reply", "done"])
+    assert durable_client.repo.completed is True
+    assert durable_client.repo.failed == []
+
+
 def test_memory_ack_failure_after_committed_reply_emits_no_second_terminal(
     durable_client,
 ):
@@ -567,6 +617,105 @@ def test_checkpointed_send_fault_reconnects_without_failing_turn_or_repeating_to
     )
     if fault_event != "step_failed":
         tool.ainvoke.assert_awaited_once()
+    else:
+        snapshots = [
+            step
+            for step in durable_client.repo.steps
+            if str(step.event_id) == failed_event["event_id"]
+            and step.status in {"running", "failed"}
+        ]
+        running = next(step for step in snapshots if step.status == "running")
+        failed = [step for step in snapshots if step.status == "failed"]
+        assert len(failed) == 2  # initial checkpoint plus fresh-sink replay
+        for snapshot in failed:
+            assert snapshot.label == running.label == "理解请求"
+            assert snapshot.started_at == running.started_at
+            assert snapshot.tool == running.tool is None
+            assert snapshot.args == running.args == {}
+            assert snapshot.confirmation_id == running.confirmation_id is None
+            assert snapshot.confirmation_message is None
+            assert snapshot.confirmation_approved is None
+
+
+def test_respond_model_failure_replay_preserves_canonical_step_snapshot(
+    durable_client,
+):
+    from app.agent import _tools_by_name
+    from app.main import _WebSocketWriter
+    from tests.test_agent import StubTool, _aim, _tc
+
+    class Model:
+        def __init__(self):
+            self.ainvoke = AsyncMock(
+                side_effect=[
+                    _aim(tool_calls=[_tc("list_todos", {})]),
+                    RuntimeError("respond model unavailable"),
+                    _aim("recovered"),
+                ]
+            )
+
+        def bind_tools(self, _tools):
+            return self
+
+    model = Model()
+    tool = StubTool(result={"items": [], "total": 0})
+    original_send = _WebSocketWriter.send_json
+    failed_event = None
+
+    async def fail_respond_failure_once(self, event):
+        nonlocal failed_event
+        if (
+            event["type"] == "step_failed"
+            and event["step_id"] == "respond"
+            and failed_event is None
+        ):
+            failed_event = dict(event)
+            raise RuntimeError("respond failure delivery lost")
+        await original_send(self, event)
+
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"list_todos": tool}),
+        patch.object(_WebSocketWriter, "send_json", new=fail_respond_failure_once),
+    ):
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("list")
+            while True:
+                try:
+                    ws.receive_json()
+                except Exception:
+                    break
+
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("list")
+            replayed = []
+            while not replayed or replayed[-1]["type"] != "done":
+                replayed.append(ws.receive_json())
+
+    assert failed_event is not None
+    assert failed_event["label"] == "生成回复"
+    assert failed_event["started_at"]
+    assert failed_event["tool"] is None
+    assert failed_event["args"] == {}
+    assert failed_event["confirmation_id"] is None
+    assert failed_event["confirmation_message"] is None
+    assert failed_event["confirmation_approved"] is None
+    failed = [
+        step
+        for step in durable_client.repo.steps
+        if str(step.event_id) == failed_event["event_id"] and step.status == "failed"
+    ]
+    assert len(failed) == 2  # initial checkpoint plus fresh-sink replay
+    assert all(step.label == "生成回复" for step in failed)
+    assert failed[0].started_at == failed[1].started_at
+    assert all(step.tool is None for step in failed)
+    assert all(step.args == {} for step in failed)
+    assert all(step.confirmation_id is None for step in failed)
+    assert all(step.confirmation_message is None for step in failed)
+    assert all(step.confirmation_approved is None for step in failed)
+    tool.ainvoke.assert_awaited_once_with({})
+    assert durable_client.repo.failed == []
+    assert durable_client.repo.completed is True
 
 
 def test_model_failure_checkpoint_fault_reports_only_history_failure(durable_client):
@@ -738,6 +887,93 @@ def test_retry_reply_send_fault_reconnects_without_repeating_tool(durable_client
     assert durable_client.repo.starts[0][:2] == durable_client.repo.starts[1][:2]
     assert [event["type"] for event in replayed] == ["reply", "done"]
     assert durable_client.repo.completed is True
+
+
+@pytest.mark.parametrize("fault_point", ["done", "close"])
+def test_retry_success_terminal_transport_fault_adds_no_false_failure(
+    durable_client, fault_point
+):
+    from fastapi import WebSocket
+    from app.agent import _tools_by_name
+    from app.main import _WebSocketWriter
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    seed_events = []
+    seed_model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("list_todos", {})]),
+            _aim("original turn finished"),
+        ]
+    )
+
+    async def seed_retry():
+        with (
+            patch("app.agent._build_llm", return_value=seed_model),
+            patch.dict(
+                _tools_by_name,
+                {"list_todos": StubTool(side_effect=TimeoutError("seed timeout"))},
+            ),
+        ):
+            await process_message(
+                str(durable_client.repo.session_id),
+                "list",
+                on_event=seed_events.append,
+                owner_id=str(durable_client.repo.owner),
+                runtime_generation=0,
+            )
+
+    asyncio.run(seed_retry())
+    failure = next(event for event in seed_events if event["type"] == "step_failed")
+    retry_tool = StubTool(result={"items": []})
+    original_send = _WebSocketWriter.send_json
+    original_close = WebSocket.close
+    faulted = False
+
+    async def maybe_fail_send(self, event):
+        nonlocal faulted
+        if fault_point == "done" and event["type"] == "done" and not faulted:
+            faulted = True
+            raise RuntimeError("done delivery lost")
+        await original_send(self, event)
+
+    async def maybe_fail_close(self, code=1000, reason=None):
+        nonlocal faulted
+        if fault_point == "close" and not faulted:
+            faulted = True
+            raise RuntimeError("close failed")
+        await original_close(self, code=code, reason=reason)
+
+    with (
+        patch.dict(_tools_by_name, {"list_todos": retry_tool}),
+        patch.object(_WebSocketWriter, "send_json", new=maybe_fail_send),
+        patch.object(WebSocket, "close", new=maybe_fail_close),
+        durable_client.websocket_connect(_stream_url(durable_client)) as ws,
+    ):
+        ws.send_json(
+            {
+                "type": "retry_step",
+                "session_id": str(durable_client.repo.session_id),
+                "step_id": failure["step_id"],
+                "retry_token": failure["retry_token"],
+            }
+        )
+        events = []
+        while True:
+            try:
+                events.append(ws.receive_json())
+            except Exception:
+                break
+
+    terminal = [
+        event["type"]
+        for event in events
+        if event["type"] in {"reply", "done", "step_failed"}
+    ]
+    assert faulted is True
+    assert terminal == (["reply"] if fault_point == "done" else ["reply", "done"])
+    retry_tool.ainvoke.assert_awaited_once_with({})
+    assert durable_client.repo.completed is True
+    assert durable_client.repo.failed == []
 
 
 @pytest.mark.parametrize(

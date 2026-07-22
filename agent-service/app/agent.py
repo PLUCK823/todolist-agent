@@ -919,6 +919,7 @@ async def _emit_model_failure(
     phase: str,
     exc: Exception,
 ) -> bool:
+    started_at = state.setdefault(f"{phase}_started_at", _now_iso())
     await _deliver_checkpointed_event(
         session_id,
         generation,
@@ -928,6 +929,13 @@ async def _emit_model_failure(
         {
             "type": "step_failed",
             "step_id": phase,
+            "label": "理解请求" if phase == "understand" else "生成回复",
+            "tool": None,
+            "args": {},
+            "started_at": started_at,
+            "confirmation_id": None,
+            "confirmation_message": None,
+            "confirmation_approved": None,
             "error_code": "AGENT_MODEL_ERROR",
             "message": str(exc),
             "retryable": True,
@@ -1120,6 +1128,9 @@ async def process_message(
 
                 if phase in ("understand_model", "awaiting_model"):
                     step_id = "understand" if phase == "understand_model" else "respond"
+                    state.setdefault(f"{step_id}_started_at", _now_iso())
+                    record["incomplete"] = state
+                    _save_record(session_id, generation, record)
                     try:
                         response = await model.ainvoke(state["messages"])
                     except Exception as exc:

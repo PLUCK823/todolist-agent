@@ -650,6 +650,19 @@ class _WebSocketWriter:
             await self._ws.send_json(event)
 
 
+async def _finish_successful_stream(writer: _WebSocketWriter, ws: WebSocket) -> None:
+    """Best-effort success framing after the durable reply is already final."""
+    try:
+        await writer.send_json({"type": "done"})
+        await ws.close()
+    except Exception:
+        # The reply and durable terminal state already exist. Emitting any
+        # failure or second done frame here would manufacture a false outcome.
+        with suppress(Exception):
+            await ws.close()
+        return
+
+
 async def _cancel_and_drain(
     task: asyncio.Task[Any] | None, timeout: float = 0.1
 ) -> None:
@@ -1162,8 +1175,7 @@ def create_app(
                     writer.send_json,
                     **retry_kwargs,
                 )
-                await writer.send_json({"type": "done"})
-                await ws.close()
+                await _finish_successful_stream(writer, ws)
             except InvalidRetryStep:
                 await writer.send_json(
                     _protocol_failure_event(
@@ -1244,8 +1256,7 @@ def create_app(
                     await _cancel_and_drain(receive_task)
                     receive_task = None
                     process_task.result()
-                    await writer.send_json({"type": "done"})
-                    await ws.close()
+                    await _finish_successful_stream(writer, ws)
                     return
                 assert receive_task is not None
                 try:
