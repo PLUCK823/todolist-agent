@@ -9,8 +9,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.auth import AuthSettings
 from app.history_models import PersistedStepEvent
 from app.history_repository import HistoryConflictError, HistoryRepository
+from app.main import create_app
 
 
 pytestmark = pytest.mark.asyncio
@@ -293,3 +295,55 @@ async def test_fail_turn_exact_retry_is_noop_and_conflicting_retry_is_rejected(r
     with pytest.raises(HistoryConflictError, match="failure"):
         await repository.fail_turn(alice, turn.id, "MODEL_FAILED", "different", True)
     assert await repository.get_session(alice, session.id) == first
+
+
+async def test_recovery_ownership_prevents_a_second_instance_interrupting_active_turn(
+    repo, monkeypatch
+):
+    repository_a, alice, _ = repo
+    import asyncpg
+
+    database_url = os.environ["TEST_DATABASE_URL"]
+    pool_b = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    settings = AuthSettings(
+        secret="x" * 32,
+        access_cookie="todolist_access",
+        allowed_origins=frozenset({"http://frontend.test"}),
+        issuer="todolist-backend",
+        database_url=database_url,
+        pool_min_size=1,
+        pool_max_size=2,
+    )
+    app_a = create_app(settings=settings, pool=repository_a._pool)
+    app_b = create_app(settings=settings, pool=pool_b)
+    monkeypatch.setattr("app.main.validate_model_configuration", lambda: None)
+
+    try:
+        async with app_a.router.lifespan_context(app_a):
+            session = await repository_a.create_session(alice, "Recovery ownership")
+            now = datetime.now(timezone.utc)
+            active = await repository_a.start_turn(
+                alice, session.id, uuid.uuid4(), uuid.uuid4(), "active", now
+            )
+
+            with pytest.raises(RuntimeError, match="another Agent instance"):
+                async with app_b.router.lifespan_context(app_b):
+                    pass
+
+            detail = await repository_a.get_session(alice, session.id)
+            assert detail.turns[0].status == "running"
+            await repository_a.complete_turn(
+                alice, active.id, uuid.uuid4(), "completed by A", now
+            )
+            stale = await repository_a.start_turn(
+                alice, session.id, uuid.uuid4(), uuid.uuid4(), "stale", now
+            )
+
+        async with app_b.router.lifespan_context(app_b):
+            repository_b = app_b.state.history_repository
+            detail = await repository_b.get_session(alice, session.id)
+            by_id = {turn.id: turn for turn in detail.turns}
+            assert by_id[active.id].status == "completed"
+            assert by_id[stale.id].status == "interrupted"
+    finally:
+        await pool_b.close()

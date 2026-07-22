@@ -51,6 +51,7 @@ from .schemas import (
 
 
 logger = logging.getLogger(__name__)
+AGENT_RECOVERY_LOCK_KEY = 0x4147454E54524543  # Stable bigint key: "AGENTREC".
 
 
 def _cors_origins() -> list[str]:
@@ -157,6 +158,27 @@ async def _cancel_and_drain(task: asyncio.Task[Any] | None, timeout: float = 0.1
         task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
 
 
+@asynccontextmanager
+async def _agent_recovery_ownership(database_pool: asyncpg.Pool):
+    """Reserve one database session as the sole owner of Agent recovery."""
+    if database_pool.get_max_size() < 2:
+        raise RuntimeError(
+            "Agent database pool max size must be at least 2 while recovery ownership is reserved"
+        )
+    async with database_pool.acquire() as connection:
+        acquired = await connection.fetchval(
+            "SELECT pg_try_advisory_lock($1)", AGENT_RECOVERY_LOCK_KEY
+        )
+        if not acquired:
+            raise RuntimeError("another Agent instance already owns recovery")
+        try:
+            yield
+        finally:
+            await connection.fetchval(
+                "SELECT pg_advisory_unlock($1)", AGENT_RECOVERY_LOCK_KEY
+            )
+
+
 def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | None = None) -> FastAPI:
     """Create an injectable application; production setup occurs only in lifespan."""
 
@@ -164,6 +186,10 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
     async def lifespan(application: FastAPI):
         validate_model_configuration()
         configured = settings or AuthSettings.from_env()
+        if configured.pool_max_size < 2:
+            raise RuntimeError(
+                "Agent database pool max size must be at least 2 while recovery ownership is reserved"
+            )
         created_pool = pool is None
         database_pool = pool or await asyncpg.create_pool(
             configured.database_url, min_size=configured.pool_min_size,
@@ -171,12 +197,13 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
         )
         repository = HistoryRepository(database_pool)
         try:
-            await repository.ping()
-            await repository.interrupt_open_turns()
-            application.state.auth_settings = configured
-            application.state.history_repository = repository
-            application.state.history_service = HistoryService(repository, delete_history)
-            yield
+            async with _agent_recovery_ownership(database_pool):
+                await repository.ping()
+                await repository.interrupt_open_turns()
+                application.state.auth_settings = configured
+                application.state.history_repository = repository
+                application.state.history_service = HistoryService(repository, delete_history)
+                yield
         finally:
             if created_pool:
                 await database_pool.close()
