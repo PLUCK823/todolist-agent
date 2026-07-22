@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import os
+import signal
 import uuid
 from contextlib import asynccontextmanager, suppress
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import UUID
 
 import asyncpg
@@ -52,6 +54,7 @@ from .schemas import (
 
 logger = logging.getLogger(__name__)
 AGENT_RECOVERY_LOCK_KEY = 0x4147454E54524543  # Stable bigint key: "AGENTREC".
+OwnershipLostHandler = Callable[[], Awaitable[None] | None]
 
 
 def _cors_origins() -> list[str]:
@@ -113,6 +116,8 @@ def _detail_payload(detail: SessionDetail | dict[str, Any]) -> dict[str, object]
 
 
 async def get_history_service(request: Request) -> HistoryService:
+    if getattr(request.app.state, "recovery_ready", False) is not True:
+        raise _err(50301, "Agent recovery ownership is unavailable", 503)
     service = getattr(request.app.state, "history_service", None)
     if service is None:
         raise _err(50301, "Agent persistence is unavailable", 503)
@@ -120,6 +125,8 @@ async def get_history_service(request: Request) -> HistoryService:
 
 
 async def get_current_principal(request: Request) -> AuthPrincipal:
+    if getattr(request.app.state, "recovery_ready", False) is not True:
+        raise _err(50301, "Agent recovery ownership is unavailable", 503)
     settings = getattr(request.app.state, "auth_settings", None)
     repository = getattr(request.app.state, "history_repository", None)
     if settings is None or repository is None:
@@ -158,8 +165,103 @@ async def _cancel_and_drain(task: asyncio.Task[Any] | None, timeout: float = 0.1
         task.add_done_callback(lambda finished: finished.exception() if not finished.cancelled() else None)
 
 
+def _terminate_process_on_ownership_loss() -> None:
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+class _AgentRecoveryOwnership:
+    """Track the reserved PostgreSQL session and fail closed if it disappears."""
+
+    def __init__(
+        self,
+        application: FastAPI,
+        connection: asyncpg.Connection,
+        ownership_lost_handler: OwnershipLostHandler,
+    ) -> None:
+        self._application = application
+        self._connection = connection
+        self._ownership_lost_handler = ownership_lost_handler
+        self._loop = asyncio.get_running_loop()
+        self._lost = False
+        self._closing = False
+        self._handler_task: asyncio.Future[None] | None = None
+        self.holder_pid = connection.get_server_pid()
+
+    @property
+    def ready(self) -> bool:
+        return getattr(self._application.state, "recovery_ready", False) is True
+
+    @property
+    def lost(self) -> bool:
+        return self._lost
+
+    def listen(self) -> None:
+        self._connection.add_termination_listener(self._on_termination)
+
+    def mark_ready(self) -> None:
+        if self._lost or self._closing:
+            raise RuntimeError("Agent recovery ownership was lost during startup")
+        self._application.state.recovery_ready = True
+
+    def _on_termination(self, _connection: asyncpg.Connection) -> None:
+        try:
+            self._loop.call_soon_threadsafe(self._handle_loss)
+        except RuntimeError:
+            # The event loop is already closed, so the process is no longer serving.
+            pass
+
+    def _handle_loss(self) -> None:
+        if self._closing or self._lost:
+            return
+        self._lost = True
+        self._application.state.recovery_ready = False
+        try:
+            result = self._ownership_lost_handler()
+        except Exception:
+            logger.exception("Agent recovery ownership-lost handler failed")
+            return
+        if inspect.isawaitable(result):
+            self._handler_task = asyncio.ensure_future(result, loop=self._loop)
+            self._handler_task.add_done_callback(self._log_handler_failure)
+
+    @staticmethod
+    def _log_handler_failure(task: asyncio.Future[None]) -> None:
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception:
+            logger.exception("Agent recovery ownership-lost handler failed")
+
+    def _holder_is_closed_or_detached(self) -> bool:
+        try:
+            return self._connection.is_closed()
+        except (AttributeError, asyncpg.InterfaceError):
+            return True
+
+    async def close(self) -> None:
+        self._application.state.recovery_ready = False
+        self._closing = True
+        try:
+            self._connection.remove_termination_listener(self._on_termination)
+        except (AttributeError, asyncpg.InterfaceError):
+            pass
+        if self._holder_is_closed_or_detached():
+            return
+        try:
+            await self._connection.fetchval(
+                "SELECT pg_advisory_unlock($1)", AGENT_RECOVERY_LOCK_KEY
+            )
+        except Exception:
+            logger.exception("Failed to release Agent recovery ownership")
+
+
 @asynccontextmanager
-async def _agent_recovery_ownership(database_pool: asyncpg.Pool):
+async def _agent_recovery_ownership(
+    database_pool: asyncpg.Pool,
+    application: FastAPI,
+    ownership_lost_handler: OwnershipLostHandler,
+):
     """Reserve one database session as the sole owner of Agent recovery."""
     if database_pool.get_max_size() < 2:
         raise RuntimeError(
@@ -171,19 +273,28 @@ async def _agent_recovery_ownership(database_pool: asyncpg.Pool):
         )
         if not acquired:
             raise RuntimeError("another Agent instance already owns recovery")
+        ownership = _AgentRecoveryOwnership(
+            application, connection, ownership_lost_handler
+        )
+        application.state.recovery_ownership = ownership
+        ownership.listen()
         try:
-            yield
+            yield ownership
         finally:
-            await connection.fetchval(
-                "SELECT pg_advisory_unlock($1)", AGENT_RECOVERY_LOCK_KEY
-            )
+            await ownership.close()
 
 
-def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | None = None) -> FastAPI:
+def create_app(
+    *,
+    settings: AuthSettings | None = None,
+    pool: asyncpg.Pool | None = None,
+    ownership_lost_handler: OwnershipLostHandler | None = None,
+) -> FastAPI:
     """Create an injectable application; production setup occurs only in lifespan."""
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
+        application.state.recovery_ready = False
         validate_model_configuration()
         configured = settings or AuthSettings.from_env()
         if configured.pool_max_size < 2:
@@ -197,18 +308,26 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
         )
         repository = HistoryRepository(database_pool)
         try:
-            async with _agent_recovery_ownership(database_pool):
+            async with _agent_recovery_ownership(
+                database_pool,
+                application,
+                ownership_lost_handler
+                if ownership_lost_handler is not None
+                else _terminate_process_on_ownership_loss,
+            ) as ownership:
                 await repository.ping()
                 await repository.interrupt_open_turns()
                 application.state.auth_settings = configured
                 application.state.history_repository = repository
                 application.state.history_service = HistoryService(repository, delete_history)
+                ownership.mark_ready()
                 yield
         finally:
             if created_pool:
                 await database_pool.close()
 
     application = FastAPI(title="Agent TodoList - Agent Service", version="0.1.0", lifespan=lifespan)
+    application.state.recovery_ready = False
     application.add_middleware(
         CORSMiddleware, allow_origins=list(settings.allowed_origins) if settings else _cors_origins(),
         allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE"],
@@ -223,6 +342,8 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
 
     @application.get("/api/agent/health")
     async def health(request: Request):
+        if getattr(request.app.state, "recovery_ready", False) is not True:
+            raise _err(50301, "Agent recovery ownership is unavailable", 503)
         repository = getattr(request.app.state, "history_repository", None)
         if repository is None:
             raise _err(50301, "Agent persistence is unavailable", 503)
@@ -303,6 +424,9 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
 
     @application.websocket("/api/agent/stream")
     async def stream(ws: WebSocket):
+        if getattr(ws.app.state, "recovery_ready", False) is not True:
+            await ws.close(code=1011)
+            return
         settings_ = getattr(ws.app.state, "auth_settings", None)
         repository = getattr(ws.app.state, "history_repository", None)
         service = getattr(ws.app.state, "history_service", None)

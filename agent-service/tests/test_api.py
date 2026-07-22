@@ -87,6 +87,7 @@ def client() -> TestClient:
     app.state.auth_settings = settings
     app.state.history_repository = _TestRepository()
     app.state.history_service = service
+    app.state.recovery_ready = True
     now = datetime.now(timezone.utc)
     token = jwt.encode(
         {"sub": str(service.owner), "sid": str(uuid4()), "iss": settings.issuer,

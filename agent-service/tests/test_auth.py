@@ -73,6 +73,7 @@ async def test_http_routes_reject_missing_cookie_and_cross_site_mutation():
     settings = _settings()
     app.state.auth_settings = settings
     app.state.history_repository = Repository()
+    app.state.recovery_ready = True
     token = _token(settings)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         assert (await client.get("/api/agent/sessions")).status_code == 401

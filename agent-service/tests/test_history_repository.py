@@ -6,8 +6,10 @@ import asyncio
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from app.auth import AuthSettings
 from app.history_models import PersistedStepEvent
@@ -345,5 +347,107 @@ async def test_recovery_ownership_prevents_a_second_instance_interrupting_active
             by_id = {turn.id: turn for turn in detail.turns}
             assert by_id[active.id].status == "completed"
             assert by_id[stale.id].status == "interrupted"
+    finally:
+        await pool_b.close()
+
+
+async def test_terminated_lock_holder_fails_closed_and_successor_recovers(
+    repo, monkeypatch
+):
+    repository_a, alice, _ = repo
+    import asyncpg
+
+    database_url = os.environ["TEST_DATABASE_URL"]
+    pool_b = await asyncpg.create_pool(database_url, min_size=1, max_size=2)
+    settings = AuthSettings(
+        secret="x" * 32,
+        access_cookie="todolist_access",
+        allowed_origins=frozenset({"http://frontend.test"}),
+        issuer="todolist-backend",
+        database_url=database_url,
+        pool_min_size=1,
+        pool_max_size=2,
+    )
+    lost = asyncio.Event()
+    handler_calls = 0
+
+    async def on_ownership_lost():
+        nonlocal handler_calls
+        handler_calls += 1
+        lost.set()
+
+    app_a = create_app(
+        settings=settings,
+        pool=repository_a._pool,
+        ownership_lost_handler=on_ownership_lost,
+    )
+    app_b = create_app(settings=settings, pool=pool_b)
+    monkeypatch.setattr("app.main.validate_model_configuration", lambda: None)
+
+    try:
+        async with app_a.router.lifespan_context(app_a):
+            ownership = app_a.state.recovery_ownership
+            session = await repository_a.create_session(alice, "Lost ownership")
+            now = datetime.now(timezone.utc)
+            active = await repository_a.start_turn(
+                alice, session.id, uuid.uuid4(), uuid.uuid4(), "active", now
+            )
+
+            async with pool_b.acquire() as killer:
+                assert await killer.fetchval(
+                    "SELECT pg_terminate_backend($1)", ownership.holder_pid
+                ) is True
+            await asyncio.wait_for(lost.wait(), timeout=2)
+
+            assert ownership.ready is False
+            assert ownership.lost is True
+            assert app_a.state.recovery_ready is False
+            assert handler_calls == 1
+            process = AsyncMock()
+            with patch("app.main.process_message", new=process):
+                async with AsyncClient(
+                    transport=ASGITransport(app=app_a), base_url="http://test"
+                ) as client:
+                    assert (await client.get("/api/agent/health")).status_code == 503
+                    assert (await client.get("/api/agent/sessions")).status_code == 503
+                    assert (
+                        await client.post(
+                            "/api/agent/chat",
+                            headers={"Origin": "http://frontend.test"},
+                            json={"message": "must not run"},
+                        )
+                    ).status_code == 503
+
+                class WebSocket:
+                    def __init__(self):
+                        self.app = app_a
+                        self.accept_count = 0
+                        self.close_codes = []
+
+                    async def accept(self):
+                        self.accept_count += 1
+
+                    async def close(self, code=1000):
+                        self.close_codes.append(code)
+
+                route = next(
+                    route
+                    for route in app_a.router.routes
+                    if getattr(route, "path", None) == "/api/agent/stream"
+                )
+                websocket = WebSocket()
+                await route.endpoint(websocket)
+                assert websocket.accept_count == 0
+                assert websocket.close_codes == [1011]
+            process.assert_not_awaited()
+
+            async with app_b.router.lifespan_context(app_b):
+                repository_b = app_b.state.history_repository
+                detail = await repository_b.get_session(alice, session.id)
+                by_id = {turn.id: turn for turn in detail.turns}
+                assert by_id[active.id].status == "interrupted"
+
+        assert repository_a._pool.get_idle_size() == repository_a._pool.get_size()
+        assert pool_b.get_idle_size() == pool_b.get_size()
     finally:
         await pool_b.close()

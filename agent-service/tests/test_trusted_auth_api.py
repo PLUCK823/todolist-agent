@@ -88,6 +88,7 @@ def _app():
     app.state.auth_settings = settings
     app.state.history_repository = repository
     app.state.history_service = service
+    app.state.recovery_ready = True
     return app, settings, repository, service
 
 
