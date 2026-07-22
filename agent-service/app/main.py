@@ -199,18 +199,17 @@ class _AgentRecoveryOwnership:
         self._connection.add_termination_listener(self._on_termination)
 
     def mark_ready(self) -> None:
+        if self._holder_is_closed_or_detached():
+            self._revoke()
         if self._lost or self._closing:
+            self._application.state.recovery_ready = False
             raise RuntimeError("Agent recovery ownership was lost during startup")
         self._application.state.recovery_ready = True
 
     def _on_termination(self, _connection: asyncpg.Connection) -> None:
-        try:
-            self._loop.call_soon_threadsafe(self._handle_loss)
-        except RuntimeError:
-            # The event loop is already closed, so the process is no longer serving.
-            pass
+        self._revoke()
 
-    def _handle_loss(self) -> None:
+    def _revoke(self) -> None:
         if self._closing or self._lost:
             return
         self._lost = True

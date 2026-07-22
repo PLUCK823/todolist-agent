@@ -70,7 +70,8 @@ class _Connection:
             self.pool.events.append("ping")
             if self.pool.terminate_holder_on_ping:
                 self.pool.connections[0].terminate()
-                await asyncio.sleep(0)
+            if self.pool.close_holder_on_ping:
+                self.pool.connections[0].closed = True
             if self.pool.fail_ping:
                 raise RuntimeError("ping failed")
             return "SELECT 1"
@@ -104,11 +105,13 @@ class _Pool:
         max_size: int = 2,
         fail_ping: bool = False,
         terminate_holder_on_ping: bool = False,
+        close_holder_on_ping: bool = False,
     ):
         self.shared_lock = shared_lock or _SharedAdvisoryLock()
         self.max_size = max_size
         self.fail_ping = fail_ping
         self.terminate_holder_on_ping = terminate_holder_on_ping
+        self.close_holder_on_ping = close_holder_on_ping
         self.events: list[str] = []
         self.active_connections = 0
         self.connections: list[_Connection] = []
@@ -227,9 +230,12 @@ async def test_holder_termination_revokes_readiness_and_calls_handler_once():
             listener = holder.termination_listener
 
             holder.terminate()
+            assert ownership.ready is False
+            assert ownership.lost is True
+            assert lost.is_set() is False
+
             listener(holder)
             await asyncio.wait_for(lost.wait(), timeout=1)
-            await asyncio.sleep(0)
 
             assert ownership.ready is False
             assert ownership.lost is True
@@ -312,4 +318,21 @@ async def test_holder_loss_during_startup_cannot_restore_readiness():
                 pass
 
     assert lost.is_set()
+    assert app.state.recovery_ready is False
+
+
+@pytest.mark.asyncio
+async def test_closed_holder_during_startup_cannot_be_marked_ready():
+    pool = _Pool(close_holder_on_ping=True)
+    app = create_app(
+        settings=_settings(),
+        pool=pool,
+        ownership_lost_handler=lambda: None,
+    )
+
+    with patch("app.main.validate_model_configuration"):
+        with pytest.raises(RuntimeError, match="ownership was lost during startup"):
+            async with app.router.lifespan_context(app):
+                pass
+
     assert app.state.recovery_ready is False
