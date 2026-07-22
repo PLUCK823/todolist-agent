@@ -148,8 +148,63 @@ def test_websocket_auth_and_ownership_close_before_agent_execution():
             pass
     assert query_owner.value.code == 4403
 
-    with client.websocket_connect("/api/agent/stream", headers={"origin": "http://frontend.test"}) as ws:
+    with pytest.raises(WebSocketDisconnect) as invalid_query:
+        with client.websocket_connect(
+            "/api/agent/stream?session_id=not-a-uuid",
+            headers={"origin": "http://frontend.test"},
+        ):
+            pass
+    assert invalid_query.value.code == 4403
+
+    alice_session = SessionSummary(uuid4(), alice, "Alice", now, now, now)
+    service.sessions[alice_session.id] = alice_session
+    with client.websocket_connect(
+        f"/api/agent/stream?session_id={alice_session.id}",
+        headers={"origin": "http://frontend.test"},
+    ) as ws:
         ws.send_json({"message": "switch", "session_id": str(bob_session.id)})
         with pytest.raises(WebSocketDisconnect) as frame_owner:
             ws.receive_json()
     assert frame_owner.value.code == 4403
+
+
+@pytest.mark.asyncio
+async def test_websocket_missing_query_session_closes_before_accept_or_receive():
+    """The production route must authorize its fixed session before the handshake."""
+    app, settings, _, _ = _app()
+    user, auth_session_id = uuid4(), uuid4()
+
+    class CountingWebSocket:
+        def __init__(self):
+            self.app = app
+            self.headers = {"origin": "http://frontend.test"}
+            self.cookies = {
+                settings.access_cookie: _token(settings, user, auth_session_id)
+            }
+            self.query_params = {}
+            self.accept_count = 0
+            self.receive_count = 0
+            self.close_codes: list[int] = []
+
+        async def accept(self):
+            self.accept_count += 1
+
+        async def receive_text(self):
+            self.receive_count += 1
+            raise WebSocketDisconnect(code=1000)
+
+        async def close(self, code=1000):
+            self.close_codes.append(code)
+
+    route = next(
+        route
+        for route in app.router.routes
+        if getattr(route, "path", None) == "/api/agent/stream"
+    )
+    websocket = CountingWebSocket()
+
+    await route.endpoint(websocket)
+
+    assert websocket.accept_count == 0
+    assert websocket.receive_count == 0
+    assert websocket.close_codes == [4403]

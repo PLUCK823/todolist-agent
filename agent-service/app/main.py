@@ -292,16 +292,17 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
             return
 
         query_session = ws.query_params.get("session_id")
-        fixed_session_id: UUID | None = None
-        if query_session:
-            try:
-                fixed_session_id = UUID(query_session)
-            except ValueError:
-                await ws.close(code=4403)
-                return
-            if await service.get_session(principal.user_id, fixed_session_id) is None:
-                await ws.close(code=4403)
-                return
+        if not query_session:
+            await ws.close(code=4403)
+            return
+        try:
+            fixed_session_id = UUID(query_session)
+        except ValueError:
+            await ws.close(code=4403)
+            return
+        if await service.get_session(principal.user_id, fixed_session_id) is None:
+            await ws.close(code=4403)
+            return
         await ws.accept()
         writer = _WebSocketWriter(ws)
         process_task: asyncio.Task[Any] | None = None
@@ -320,15 +321,9 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
                 except ValueError:
                     await ws.close(code=4403)
                     return
-                if fixed_session_id and requested_session != fixed_session_id:
+                if requested_session != fixed_session_id:
                     await ws.close(code=4403)
                     return
-                if await service.get_session(principal.user_id, requested_session) is None:
-                    await ws.close(code=4403)
-                    return
-                fixed_session_id = requested_session
-            elif fixed_session_id is None:
-                fixed_session_id = (await service.create_session(principal.user_id, first_message=getattr(request, "message", None))).id
             session_id = str(fixed_session_id)
         except WebSocketDisconnect:
             return

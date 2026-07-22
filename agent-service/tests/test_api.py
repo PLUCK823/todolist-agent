@@ -266,10 +266,14 @@ def test_delete_history_success(client):
 # ===================================================================
 
 
+def _stream_url(client) -> str:
+    return f"/api/agent/stream?session_id={client.service.session.id}"
+
+
 def test_websocket_initial_disconnect_starts_no_agent_task(client):
     process = AsyncMock()
     with patch("app.main.process_message", new=process):
-        with client.websocket_connect("/api/agent/stream"):
+        with client.websocket_connect(_stream_url(client)):
             pass
     process.assert_not_awaited()
 
@@ -278,7 +282,7 @@ def test_websocket_invalid_initial_envelope_fails_and_closes(client):
     process = AsyncMock()
     with (
         patch("app.main.process_message", new=process),
-        client.websocket_connect("/api/agent/stream") as ws,
+        client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json({"message": "", "unexpected": True})
         failure = ws.receive_json()
@@ -302,7 +306,7 @@ def test_websocket_unknown_valid_confirmation_reports_and_cleans_up(client):
 
     with (
         patch("app.main.process_message", new=AsyncMock(side_effect=blocked)),
-        client.websocket_connect("/api/agent/stream") as ws,
+        client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json({"message": "等待", "session_id": str(client.service.session.id)})
         assert ws.receive_json()["step_id"] == "wait"
@@ -354,7 +358,7 @@ def test_websocket_stream_chat(client):
         )
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_mock_stream)):
-        with client.websocket_connect("/api/agent/stream") as ws:
+        with client.websocket_connect(_stream_url(client)) as ws:
             ws.send_text("帮我创建一个待办")
 
             events = []
@@ -396,7 +400,7 @@ def test_websocket_sends_step_events(client):
         return "好的", [], session_id
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_mock_stream)):
-        with client.websocket_connect("/api/agent/stream") as ws:
+        with client.websocket_connect(_stream_url(client)) as ws:
             ws.send_text("你好")
 
             events = []
@@ -438,7 +442,7 @@ def test_websocket_confirmation_response_resumes_bound_delete(client):
     with (
         patch("app.agent._build_llm", return_value=llm),
         patch.dict(_tools_by_name, {"delete_todo": delete}),
-        client.websocket_connect("/api/agent/stream") as ws,
+        client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json({"message": "删除 7", "session_id": str(client.service.session.id)})
         confirmation = None
@@ -478,7 +482,7 @@ def test_websocket_disconnect_cancels_processing(client):
             raise
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=_blocked)):
-        with client.websocket_connect("/api/agent/stream") as ws:
+        with client.websocket_connect(_stream_url(client)) as ws:
             ws.send_json({"message": "一直运行", "session_id": str(client.service.session.id)})
             assert ws.receive_json()["step_id"] == "slow"
 
@@ -496,7 +500,7 @@ def test_websocket_rejects_unvalidated_confirmation_frame(client):
     with (
         patch("app.main.process_message", new=AsyncMock(side_effect=_blocked)),
         patch("app.main.resolve_confirmation") as resolve,
-        client.websocket_connect("/api/agent/stream") as ws,
+        client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json({"message": "等待", "session_id": str(client.service.session.id)})
         assert ws.receive_json()["step_id"] == "wait"
@@ -520,7 +524,7 @@ def test_websocket_retry_step_rejects_client_supplied_tool_or_args(client):
     retry = AsyncMock()
     with (
         patch("app.main.retry_failed_step", new=retry),
-        client.websocket_connect("/api/agent/stream") as ws,
+        client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json(
             {
@@ -561,7 +565,7 @@ def test_websocket_retry_step_routes_identity_without_replanning(client):
     with (
         patch("app.main.process_message", new=process),
         patch("app.main.retry_failed_step", new=AsyncMock(side_effect=exact_retry)) as retry,
-        client.websocket_connect("/api/agent/stream") as ws,
+        client.websocket_connect(_stream_url(client)) as ws,
     ):
         ws.send_json(
             {
@@ -590,7 +594,7 @@ def test_websocket_json_scalars_remain_plain_text_messages(client, raw):
         return "ok", [], session_id
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=capture)):
-        with client.websocket_connect("/api/agent/stream") as ws:
+        with client.websocket_connect(_stream_url(client)) as ws:
             ws.send_text(raw)
             assert ws.receive_json()["type"] == "reply"
             assert ws.receive_json()["type"] == "done"
@@ -835,7 +839,7 @@ def test_websocket_reports_the_actual_failed_phase(client):
         raise AgentExecutionError("final failed", phase="respond")
 
     with patch("app.main.process_message", new=AsyncMock(side_effect=fail_respond)):
-        with client.websocket_connect("/api/agent/stream") as ws:
+        with client.websocket_connect(_stream_url(client)) as ws:
             ws.send_text("触发失败")
             failure = ws.receive_json()
             done = ws.receive_json()

@@ -28,6 +28,7 @@ from .history_models import (
 DEFAULT_SESSION_TITLE = "新对话"
 RESULT_MAX_BYTES = int(os.getenv("AGENT_RESULT_MAX_BYTES", "65536"))
 RESULT_PREVIEW_CHARS = 4096
+OPEN_TURN_STATUSES = ("running", "waiting_confirmation")
 
 
 class HistoryNotFoundError(LookupError):
@@ -35,7 +36,7 @@ class HistoryNotFoundError(LookupError):
 
 
 class HistoryConflictError(RuntimeError):
-    """A caller reused an immutable message identity for a different reply."""
+    """A caller attempted an incompatible identity or terminal-state transition."""
 
 
 def _utc(value: datetime) -> datetime:
@@ -250,10 +251,12 @@ class HistoryRepository:
         preview = result_json[:RESULT_PREVIEW_CHARS] if truncated else None
         async with self._pool.acquire() as conn, conn.transaction():
             owned_turn = await conn.fetchrow(
-                """SELECT t.id FROM agent_turns t JOIN agent_sessions s ON s.id = t.session_id
+                """SELECT t.id, t.status FROM agent_turns t JOIN agent_sessions s ON s.id = t.session_id
                    WHERE t.id = $1 AND s.owner_id = $2 FOR UPDATE""", turn_id, owner_id
             )
             if owned_turn is None:
+                return False
+            if owned_turn["status"] not in OPEN_TURN_STATUSES:
                 return False
             existing = await conn.fetchrow(
                 """SELECT st.turn_id FROM agent_steps st
@@ -322,7 +325,7 @@ class HistoryRepository:
         now = _utc(created_at)
         async with self._pool.acquire() as conn, conn.transaction():
             row = await conn.fetchrow(
-                """SELECT t.id, t.session_id FROM agent_turns t
+                """SELECT t.id, t.session_id, t.status FROM agent_turns t
                    JOIN agent_sessions s ON s.id=t.session_id
                    WHERE t.id=$1 AND s.owner_id=$2 FOR UPDATE OF t, s""", turn_id, owner_id
             )
@@ -334,13 +337,20 @@ class HistoryRepository:
                    FROM agent_messages WHERE id=$1 FOR UPDATE""",
                 message_id,
             )
+            message_matches = existing_message is not None and (
+                existing_message["session_id"] == session_id
+                and existing_message["turn_id"] == turn_id
+                and existing_message["role"] == "assistant"
+                and existing_message["content"] == content
+            )
+            if row["status"] == "completed":
+                if message_matches:
+                    return
+                raise HistoryConflictError("completion terminal conflict")
+            if row["status"] not in OPEN_TURN_STATUSES:
+                raise HistoryConflictError("turn terminal state conflict")
             if existing_message is not None:
-                if not (
-                    existing_message["session_id"] == session_id
-                    and existing_message["turn_id"] == turn_id
-                    and existing_message["role"] == "assistant"
-                    and existing_message["content"] == content
-                ):
+                if not message_matches:
                     raise HistoryConflictError("completion message conflict")
             else:
                 ordinal = await conn.fetchval(
@@ -354,7 +364,9 @@ class HistoryRepository:
             await conn.execute(
                 """UPDATE agent_turns SET status='completed', completed_at=$3,
                        failure_code=NULL, failure_message=NULL, result_uncertain=false
-                   WHERE id=$1 AND session_id=$2""", turn_id, session_id, now
+                   WHERE id=$1 AND session_id=$2
+                     AND status IN ('running', 'waiting_confirmation')""",
+                turn_id, session_id, now,
             )
             await conn.execute(
                 """UPDATE agent_sessions SET updated_at=$3, last_message_at=$3
@@ -362,16 +374,33 @@ class HistoryRepository:
             )
 
     async def fail_turn(self, owner_id: UUID, turn_id: UUID, code: str, message: str, uncertain: bool) -> None:
-        async with self._pool.acquire() as conn:
-            result = await conn.execute(
-                """UPDATE agent_turns t SET status='failed', completed_at=NOW(), failure_code=$3,
-                       failure_message=$4, result_uncertain=$5
-                   FROM agent_sessions s
-                   WHERE t.session_id=s.id AND t.id=$1 AND s.owner_id=$2""",
-                turn_id, owner_id, code[:128], message, uncertain,
+        failure_code = code[:128]
+        async with self._pool.acquire() as conn, conn.transaction():
+            row = await conn.fetchrow(
+                """SELECT t.status, t.failure_code, t.failure_message, t.result_uncertain
+                   FROM agent_turns t
+                   JOIN agent_sessions s ON s.id=t.session_id
+                   WHERE t.id=$1 AND s.owner_id=$2 FOR UPDATE OF t""",
+                turn_id, owner_id,
             )
-        if not result.endswith("1"):
-            raise HistoryNotFoundError("turn not found")
+            if row is None:
+                raise HistoryNotFoundError("turn not found")
+            if row["status"] == "failed":
+                if (
+                    row["failure_code"] == failure_code
+                    and row["failure_message"] == message
+                    and row["result_uncertain"] == uncertain
+                ):
+                    return
+                raise HistoryConflictError("failure terminal conflict")
+            if row["status"] not in OPEN_TURN_STATUSES:
+                raise HistoryConflictError("turn terminal state conflict")
+            await conn.execute(
+                """UPDATE agent_turns SET status='failed', completed_at=NOW(), failure_code=$2,
+                       failure_message=$3, result_uncertain=$4
+                   WHERE id=$1 AND status IN ('running', 'waiting_confirmation')""",
+                turn_id, failure_code, message, uncertain,
+            )
 
     async def interrupt_open_turns(self) -> int:
         async with self._pool.acquire() as conn:

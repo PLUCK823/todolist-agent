@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -162,8 +162,134 @@ async def test_complete_turn_allows_exact_same_turn_assistant_retry_without_dupl
     reply_id = uuid.uuid4()
 
     await repository.complete_turn(alice, turn.id, reply_id, "same reply", now)
-    await repository.complete_turn(alice, turn.id, reply_id, "same reply", now)
+    first = await repository.get_session(alice, session.id)
+    await repository.complete_turn(
+        alice, turn.id, reply_id, "same reply", now + timedelta(seconds=1)
+    )
 
     detail = await repository.get_session(alice, session.id)
     assert detail.turns[0].status == "completed"
     assert [message.content for message in detail.turns[0].messages] == ["request", "same reply"]
+    assert detail.turns[0].completed_at == first.turns[0].completed_at
+    assert detail.updated_at == first.updated_at
+    assert detail.last_message_at == first.last_message_at
+
+    with pytest.raises(HistoryConflictError, match="completion"):
+        await repository.complete_turn(alice, turn.id, reply_id, "different reply", now)
+
+
+async def test_completed_turn_rejects_late_failure_without_mutation(repo):
+    repository, alice, _ = repo
+    now = datetime.now(timezone.utc)
+    session = await repository.create_session(alice, "Completed")
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now
+    )
+    await repository.complete_turn(alice, turn.id, uuid.uuid4(), "reply", now)
+    before = await repository.get_session(alice, session.id)
+
+    with pytest.raises(HistoryConflictError, match="terminal"):
+        await repository.fail_turn(
+            alice, turn.id, "LATE_FAILURE", "must not overwrite", uncertain=True
+        )
+
+    after = await repository.get_session(alice, session.id)
+    assert after == before
+
+
+async def test_failed_turn_rejects_late_completion_without_mutation(repo):
+    repository, alice, _ = repo
+    now = datetime.now(timezone.utc)
+    session = await repository.create_session(alice, "Failed")
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now
+    )
+    await repository.fail_turn(alice, turn.id, "MODEL_FAILED", "unavailable", True)
+    before = await repository.get_session(alice, session.id)
+
+    with pytest.raises(HistoryConflictError, match="terminal"):
+        await repository.complete_turn(
+            alice, turn.id, uuid.uuid4(), "late reply", now
+        )
+
+    after = await repository.get_session(alice, session.id)
+    assert after == before
+
+
+async def test_interrupted_turn_rejects_late_completion_without_mutation(repo):
+    repository, alice, _ = repo
+    now = datetime.now(timezone.utc)
+    session = await repository.create_session(alice, "Interrupted")
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now
+    )
+    await repository.interrupt_open_turns()
+    before = await repository.get_session(alice, session.id)
+
+    with pytest.raises(HistoryConflictError, match="terminal"):
+        await repository.complete_turn(
+            alice, turn.id, uuid.uuid4(), "late reply", now
+        )
+
+    after = await repository.get_session(alice, session.id)
+    assert after == before
+
+
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "interrupted"])
+async def test_terminal_turn_rejects_late_step_create_and_mutation(repo, terminal_status):
+    repository, alice, _ = repo
+    now = datetime.now(timezone.utc)
+    session = await repository.create_session(alice, f"Terminal {terminal_status}")
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now
+    )
+    event_id = uuid.uuid4()
+    initial = PersistedStepEvent(
+        event_id=event_id, label="Initial", status="running", args={"version": 1}
+    )
+    assert await repository.upsert_step(alice, turn.id, initial) is True
+    if terminal_status == "completed":
+        await repository.complete_turn(alice, turn.id, uuid.uuid4(), "reply", now)
+    elif terminal_status == "failed":
+        await repository.fail_turn(alice, turn.id, "FAILED", "failed", False)
+    else:
+        await repository.interrupt_open_turns()
+    before = await repository.get_session(alice, session.id)
+
+    assert await repository.upsert_step(
+        alice,
+        turn.id,
+        PersistedStepEvent(
+            event_id=event_id,
+            label="Mutated",
+            status="completed",
+            args={"version": 2},
+        ),
+    ) is False
+    assert await repository.upsert_step(
+        alice,
+        turn.id,
+        PersistedStepEvent(event_id=uuid.uuid4(), label="Late", status="running"),
+    ) is False
+
+    after = await repository.get_session(alice, session.id)
+    assert after == before
+
+
+async def test_fail_turn_exact_retry_is_noop_and_conflicting_retry_is_rejected(repo):
+    repository, alice, _ = repo
+    now = datetime.now(timezone.utc)
+    session = await repository.create_session(alice, "Idempotent failure")
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "request", now
+    )
+    await repository.fail_turn(alice, turn.id, "MODEL_FAILED", "unavailable", True)
+    first = await repository.get_session(alice, session.id)
+
+    await repository.fail_turn(alice, turn.id, "MODEL_FAILED", "unavailable", True)
+    repeated = await repository.get_session(alice, session.id)
+    assert repeated == first
+
+    with pytest.raises(HistoryConflictError, match="failure"):
+        await repository.fail_turn(alice, turn.id, "MODEL_FAILED", "different", True)
+    assert await repository.get_session(alice, session.id) == first
