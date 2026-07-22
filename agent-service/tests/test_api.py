@@ -11,6 +11,7 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage, SystemMessage
+from starlette.websockets import WebSocketDisconnect
 
 
 @pytest.fixture(autouse=True)
@@ -268,6 +269,35 @@ def test_delete_history_success(client):
 
 def _stream_url(client) -> str:
     return f"/api/agent/stream?session_id={client.service.session.id}"
+
+
+@pytest.mark.parametrize(
+    "frame_session_id",
+    [None, "", "not-a-uuid", str(uuid4())],
+    ids=["null", "empty", "invalid", "different"],
+)
+def test_websocket_rejects_any_explicit_invalid_frame_session_identity(
+    client, frame_session_id
+):
+    process = AsyncMock(
+        return_value=("must not execute", [], str(client.service.session.id))
+    )
+    received = []
+    close_code = None
+
+    with (
+        patch("app.main.process_message", new=process),
+        client.websocket_connect(_stream_url(client)) as ws,
+    ):
+        ws.send_json({"message": "hello", "session_id": frame_session_id})
+        try:
+            received.append(ws.receive_json())
+        except WebSocketDisconnect as exc:
+            close_code = exc.code
+
+    assert received == []
+    assert close_code == 4403
+    process.assert_not_awaited()
 
 
 def test_websocket_initial_disconnect_starts_no_agent_task(client):
@@ -881,7 +911,6 @@ async def test_websocket_send_failure_cleans_up_without_hanging():
 async def test_websocket_disconnect_and_process_failure_are_drained_together():
     from app.agent import AgentExecutionError
     from app.main import stream
-    from starlette.websockets import WebSocketDisconnect
 
     trigger = asyncio.Event()
 

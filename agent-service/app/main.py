@@ -314,16 +314,16 @@ def create_app(*, settings: AuthSettings | None = None, pool: asyncpg.Pool | Non
             except json.JSONDecodeError:
                 parsed = raw
             payload = parsed if isinstance(parsed, dict) else {"message": raw}
-            request = RetryStepRequest.model_validate(payload) if payload.get("type") == "retry_step" else ChatRequest.model_validate(payload)
-            if request.session_id:
+            if "session_id" in payload:
                 try:
-                    requested_session = UUID(request.session_id)
-                except ValueError:
+                    requested_session = UUID(payload["session_id"])
+                except (AttributeError, TypeError, ValueError):
                     await ws.close(code=4403)
                     return
                 if requested_session != fixed_session_id:
                     await ws.close(code=4403)
                     return
+            request = RetryStepRequest.model_validate(payload) if payload.get("type") == "retry_step" else ChatRequest.model_validate(payload)
             session_id = str(fixed_session_id)
         except WebSocketDisconnect:
             return
