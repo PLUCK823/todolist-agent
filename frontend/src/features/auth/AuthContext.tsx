@@ -1,73 +1,73 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AUTH_STORAGE_KEYS, authStorage, type KeyValueStorage } from './auth.storage'
-import type { Account, AuthStorageAdapter, LoginInput, ProfileUpdate, RegisterInput } from './auth.types'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { API_AUTH_EXPIRED_EVENT } from '../../shared/api/authenticated-fetch'
+import { authApi } from './auth.api'
+import type { Account, AuthApi, LoginInput, ProfileUpdate, RegisterInput } from './auth.types'
 import { AuthContext, type AuthStatus } from './auth-context'
 
-export function AuthProvider({ children, storage = authStorage, initialAccount }: { children: ReactNode; storage?: AuthStorageAdapter; initialAccount?: Account }) {
+export function AuthProvider({ children, api = authApi, initialAccount }: { children: ReactNode; api?: AuthApi; initialAccount?: Account }) {
   const [status, setStatus] = useState<AuthStatus>(initialAccount ? 'authenticated' : 'loading')
   const [account, setAccount] = useState<Account | null>(initialAccount ?? null)
+  const operation = useRef(0)
 
   useEffect(() => {
     if (initialAccount) return
     let active = true
-    storage.getSession()
+    const currentOperation = operation.current
+    api.getSession()
       .then((session) => {
-        if (!active) return
+        if (!active || operation.current !== currentOperation) return
         setAccount(session?.account ?? null)
         setStatus(session ? 'authenticated' : 'anonymous')
       })
       .catch(() => {
-        if (!active) return
+        if (!active || operation.current !== currentOperation) return
         setAccount(null)
         setStatus('anonymous')
       })
     return () => { active = false }
-  }, [initialAccount, storage])
+  }, [api, initialAccount])
 
   useEffect(() => {
-    let active = true
-    const syncSession = async (event: StorageEvent) => {
-      if (!AUTH_STORAGE_KEYS.has(event.key)) return
-      try {
-        const session = await storage.getSession()
-        if (!active) return
-        setAccount(session?.account ?? null)
-        setStatus(session ? 'authenticated' : 'anonymous')
-      } catch {
-        if (!active) return
+    const onAuthExpired = () => {
+      operation.current += 1
+      setAccount(null)
+      setStatus('anonymous')
+    }
+    window.addEventListener(API_AUTH_EXPIRED_EVENT, onAuthExpired)
+    return () => window.removeEventListener(API_AUTH_EXPIRED_EVENT, onAuthExpired)
+  }, [])
+
+  const login = useCallback(async (input: LoginInput) => {
+    const currentOperation = ++operation.current
+    const next = await api.login(input)
+    if (operation.current === currentOperation) {
+      setAccount(next)
+      setStatus('authenticated')
+    }
+    return next
+  }, [api])
+
+  const register = useCallback((input: RegisterInput) => api.register(input), [api])
+
+  const logout = useCallback(async () => {
+    const currentOperation = ++operation.current
+    try {
+      await api.logout()
+    } finally {
+      if (operation.current === currentOperation) {
         setAccount(null)
         setStatus('anonymous')
       }
     }
-    const onStorage = (event: StorageEvent) => { void syncSession(event) }
-    window.addEventListener('storage', onStorage)
-    return () => {
-      active = false
-      window.removeEventListener('storage', onStorage)
-    }
-  }, [storage])
+  }, [api])
 
-  const login = useCallback(async (input: LoginInput) => {
-    const next = await storage.login(input)
-    setAccount(next)
-    setStatus('authenticated')
-    return next
-  }, [storage])
-
-  const register = useCallback((input: RegisterInput) => storage.register(input), [storage])
-  const logout = useCallback(async () => {
-    await storage.logout()
-    setAccount(null)
-    setStatus('anonymous')
-  }, [storage])
   const updateProfile = useCallback(async (input: ProfileUpdate) => {
-    const next = await storage.updateProfile(input)
-    setAccount(next)
+    const currentOperation = ++operation.current
+    const next = await api.updateProfile(input)
+    if (operation.current === currentOperation) setAccount(next)
     return next
-  }, [storage])
+  }, [api])
 
   const value = useMemo(() => ({ status, account, login, register, logout, updateProfile }), [account, login, logout, register, status, updateProfile])
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
-
-export type { KeyValueStorage }

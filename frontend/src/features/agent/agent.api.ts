@@ -7,6 +7,7 @@ import type {
   AgentStreamClient,
 } from './agent.types'
 import { parseAgentEvent } from './agent.schema'
+import { ApiError, authenticatedFetch } from '../../shared/api/authenticated-fetch'
 
 export { AgentContractError, parseAgentEvent } from './agent.schema'
 
@@ -239,11 +240,11 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
 
 export const agentHistoryApi: AgentHistoryApi = {
   async clear(sessionId: string): Promise<void> {
-    const response = await fetch(`/api/agent/history?session_id=${encodeURIComponent(sessionId)}`, {
-      method: 'DELETE',
-    })
-    if (!response.ok && response.status !== 404) {
-      throw new Error('清空对话记录失败，请稍后重试')
+    try {
+      await authenticatedFetch(`/api/agent/history?session_id=${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return
+      throw new Error('清空对话记录失败，请稍后重试', { cause: error })
     }
   },
 }

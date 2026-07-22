@@ -91,7 +91,7 @@ export default function AuthPage() {
             <Button type="submit" size="lg" disabled={pending} className="w-full" aria-label={isRegister ? '创建账号' : '登录'}>{pending ? '请稍候...' : isRegister ? '注册' : '登录'}</Button>
           </form>
           <p className="auth-form-card__switch">{isRegister ? <>已有账号？ <Link to="/login" state={{ from: returnTarget }}>去登录</Link></> : <>没有账号？ <Link to="/register" state={{ from: returnTarget }}>注册</Link></>}</p>
-          <small>继续即表示你同意以本地演示数据体验此原型。</small>
+          <small>账户与登录状态由服务端安全保存，并通过安全 Cookie 保持会话。</small>
         </div>
       </section>
     </main>

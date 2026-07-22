@@ -1,14 +1,9 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { AuthProvider } from '../AuthContext'
-import { createAuthStorage, type KeyValueStorage } from '../auth.storage'
+import type { AuthApi } from '../auth.types'
 import RequireSession from '../RequireSession'
-
-function memoryStorage(): KeyValueStorage {
-  const values = new Map<string, string>()
-  return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => values.set(key, value), removeItem: (key) => values.delete(key) }
-}
 
 function LoginLocation() {
   const location = useLocation()
@@ -17,9 +12,12 @@ function LoginLocation() {
 
 describe('RequireSession', () => {
   it('redirects signed-out visitors to login and preserves the target', async () => {
-    const adapter = createAuthStorage(memoryStorage())
+    const api: AuthApi = {
+      register: vi.fn(), login: vi.fn(), logout: vi.fn(),
+      getSession: vi.fn().mockResolvedValue(null), updateProfile: vi.fn(),
+    }
     render(
-      <AuthProvider storage={adapter}>
+      <AuthProvider api={api}>
         <MemoryRouter initialEntries={['/tasks']}>
           <Routes>
             <Route path="/login" element={<LoginLocation />} />

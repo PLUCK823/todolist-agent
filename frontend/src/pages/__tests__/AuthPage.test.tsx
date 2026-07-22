@@ -17,6 +17,8 @@ describe('AuthPage', () => {
     expect(screen.getByRole('heading', { name: 'Agent TodoList' })).toBeInTheDocument()
     expect(screen.getByText('登录你的账号')).toBeInTheDocument()
     expect(screen.getByText('登录')).toBeInTheDocument()
+    expect(screen.getByText(/服务端安全保存/)).toBeInTheDocument()
+    expect(screen.queryByText(/本地演示数据/)).not.toBeInTheDocument()
   })
 
   it('renders register link on login page', () => {

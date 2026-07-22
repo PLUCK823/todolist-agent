@@ -37,6 +37,7 @@ describe('ProfilePage', () => {
     await userEvent.click(await screen.findByRole('button', { name: '退出登录' }))
     expect(screen.getByRole('dialog', { name: '确认退出登录' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '确认退出' })).toBeInTheDocument()
+    expect(screen.getByText(/当前设备上的头像偏好仍会保留/)).toBeInTheDocument()
   })
 
   it('opens the avatar picker and applies a preset', async () => {

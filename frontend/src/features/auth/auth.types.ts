@@ -32,7 +32,7 @@ export interface LoginInput {
 
 export type ProfileUpdate = Partial<Pick<Account, 'name' | 'email' | 'timezone' | 'avatar'>>
 
-export interface AuthStorageAdapter {
+export interface AuthApi {
   register(input: RegisterInput): Promise<Account>
   login(input: LoginInput): Promise<Account>
   logout(): Promise<void>

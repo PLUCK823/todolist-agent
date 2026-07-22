@@ -4,7 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { render, type RenderOptions } from '@testing-library/react'
 import { ToastProvider } from '../components/common/ToastRegion'
 import { AuthProvider } from '../features/auth/AuthContext'
-import type { Account, AuthStorageAdapter } from '../features/auth/auth.types'
+import type { Account, AuthApi } from '../features/auth/auth.types'
 import { PreferencesProvider } from '../features/preferences/PreferencesContext'
 
 function createTestQueryClient() {
@@ -30,7 +30,7 @@ export function TestProviders({ children, initialEntries }: { children: ReactNod
   const account: Account = { id: 'test-user', name: 'Plucky HZ', email: 'plucky@example.com', timezone: 'Asia/Shanghai (UTC+8)', avatar: { kind: 'preset', value: 'amber' }, taskCount: 37, agentSessionCount: 12 }
   const current = useRef(account)
   const password = useRef('password1')
-  const storage: AuthStorageAdapter = {
+  const api: AuthApi = {
     register: async (input) => {
       current.current = { ...current.current, name: input.name, email: input.email }
       password.current = input.password
@@ -47,7 +47,7 @@ export function TestProviders({ children, initialEntries }: { children: ReactNod
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <AuthProvider storage={storage} initialAccount={account}>
+        <AuthProvider api={api} initialAccount={account}>
           <PreferencesProvider>
             <MemoryRouter initialEntries={initialEntries || ['/']}>{children}</MemoryRouter>
           </PreferencesProvider>

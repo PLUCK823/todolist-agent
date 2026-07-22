@@ -3,6 +3,7 @@ import type { AvatarValue } from '../auth/auth.types'
 const DB_NAME = 'todolist-profile'
 const STORE_NAME = 'avatars'
 const memoryBlobs = new Map<string, Blob>()
+const memoryPreferences = new Map<string, AvatarValue>()
 
 function openDatabase(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null)
@@ -60,5 +61,35 @@ export async function deleteAvatarBlob(key: string): Promise<void> {
     transaction.oncomplete = () => { database.close(); resolve() }
     transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('头像清理失败')) }
     transaction.onabort = transaction.onerror
+  })
+}
+
+export async function persistAvatarPreference(accountId: string, avatar: AvatarValue): Promise<void> {
+  const key = `preference:${accountId}`
+  const database = await openDatabase()
+  if (!database) {
+    memoryPreferences.set(key, avatar)
+    return
+  }
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, 'readwrite')
+    transaction.objectStore(STORE_NAME).put(avatar, key)
+    transaction.oncomplete = () => { database.close(); resolve() }
+    transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('头像偏好存储失败')) }
+    transaction.onabort = transaction.onerror
+  })
+}
+
+export async function getAvatarPreference(accountId: string): Promise<AvatarValue | null> {
+  const key = `preference:${accountId}`
+  const database = await openDatabase()
+  if (!database) return memoryPreferences.get(key) ?? null
+  return new Promise((resolve, reject) => {
+    const request = database.transaction(STORE_NAME).objectStore(STORE_NAME).get(key)
+    request.onsuccess = () => {
+      database.close()
+      resolve((request.result as AvatarValue | undefined) ?? null)
+    }
+    request.onerror = () => { database.close(); reject(request.error ?? new Error('读取头像偏好失败')) }
   })
 }

@@ -1,6 +1,8 @@
 import { act, renderHook } from '@testing-library/react'
 import { StrictMode, type ReactNode } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { http, HttpResponse } from 'msw'
+import { server } from '../../../mocks/server'
 import { AgentContractError, agentHistoryApi, createAgentStreamClient, parseAgentEvent } from '../agent.api'
 import type {
   AgentClientControl,
@@ -382,7 +384,26 @@ class ControlledClient implements AgentStreamClient {
 
 describe('useAgentSession', () => {
   it('clears history through the documented HTTP endpoint', async () => {
+    let authorized = false
+    let clearCalls = 0
+    let refreshCalls = 0
+    server.use(
+      http.delete('/api/agent/history', ({ request }) => {
+        clearCalls += 1
+        expect(request.credentials).toBe('include')
+        return authorized
+          ? HttpResponse.json({ code: 0, message: 'ok', data: { deleted: true } })
+          : HttpResponse.json({ code: 40101, message: 'expired', data: null }, { status: 401 })
+      }),
+      http.post('/api/auth/refresh', () => {
+        refreshCalls += 1
+        authorized = true
+        return HttpResponse.json({ code: 0, message: 'ok', data: {} })
+      }),
+    )
     await expect(agentHistoryApi.clear('session/with spaces')).resolves.toBeUndefined()
+    expect(clearCalls).toBe(2)
+    expect(refreshCalls).toBe(1)
   })
 
   it('ignores blank/double sends and keeps a stable generated session id', () => {

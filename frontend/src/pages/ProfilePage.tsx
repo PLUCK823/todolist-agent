@@ -59,7 +59,7 @@ export default function ProfilePage() {
       </div>
       <div className="profile-stats" aria-label="使用统计"><div><strong>{account.taskCount}</strong><span>总任务</span></div><div><strong>3</strong><span>已完成</span></div><div><strong>4</strong><span>进行中</span></div><div><strong>{account.agentSessionCount}</strong><span>Agent 对话</span></div></div>
       <AvatarDialog open={avatarOpen} avatar={account.avatar} onOpenChange={setAvatarOpen} onSave={saveAvatar} />
-      <ConfirmDialog isOpen={logoutOpen} title="确认退出登录" message="退出后将返回登录页面，本地账户资料仍会保留。" confirmLabel="确认退出" onConfirm={confirmLogout} onCancel={() => setLogoutOpen(false)} pending={pending} />
+      <ConfirmDialog isOpen={logoutOpen} title="确认退出登录" message="退出后将返回登录页面；当前设备上的头像偏好仍会保留。" confirmLabel="确认退出" onConfirm={confirmLogout} onCancel={() => setLogoutOpen(false)} pending={pending} />
     </section>
   )
 }
