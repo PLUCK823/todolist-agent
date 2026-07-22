@@ -80,7 +80,7 @@ class _RecordingPersistence:
     async def fail(self, code, message, *, uncertain):
         self.failures.append((code, message, uncertain))
 
-    def mark_write_applied(self):
+    async def prepare_write(self):
         self.write_applied = True
 
 
@@ -119,6 +119,151 @@ async def test_step_is_checkpointed_before_send_with_stable_event_id():
     assert [event["type"] for event in sent] == ["step_started", "step_completed"]
     assert all(UUID(event["event_id"]) for event in sent)
     assert sent[0]["event_id"] == sent[1]["event_id"]
+
+
+@pytest.mark.asyncio
+async def test_write_is_not_dispatched_when_durable_uncertainty_barrier_fails():
+    from app.agent import _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    class BarrierFault(_RecordingPersistence):
+        async def prepare_write(self):
+            raise RuntimeError("uncertainty barrier unavailable")
+
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "must not run"})]),
+            _aim("unexpected"),
+        ]
+    )
+    tool = StubTool(result={"id": 1})
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        with pytest.raises(RuntimeError, match="uncertainty barrier unavailable"):
+            await process_message(
+                "barrier-fault",
+                "create",
+                persistence=BarrierFault(),
+            )
+
+    tool.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_write_is_drained_and_reconnect_does_not_dispatch_twice():
+    from app.agent import _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    effects = 0
+
+    async def apply_write(_args):
+        nonlocal effects
+        effects += 1
+        if effects == 1:
+            entered.set()
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                await release.wait()
+                raise
+        return {"id": effects}
+
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "once"})]),
+            _aim("recovered"),
+        ]
+    )
+    tool = StubTool()
+    tool.ainvoke.side_effect = apply_write
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        first = asyncio.create_task(
+            process_message(
+                "cancelled-write",
+                "create once",
+                persistence=_RecordingPersistence(),
+            )
+        )
+        await entered.wait()
+        first.cancel()
+        reconnect = asyncio.create_task(
+            process_message(
+                "cancelled-write",
+                "create once",
+                persistence=_RecordingPersistence(),
+            )
+        )
+        await asyncio.sleep(0)
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        result = await reconnect
+
+    assert result.reply == "recovered"
+    assert effects == 1
+    assert tool.ainvoke.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatched_write_without_known_result_fails_closed_on_reconnect():
+    import time
+
+    from app.agent import AgentExecutionError, _new_incomplete, _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    response = _aim(tool_calls=[_tc("create_todo", {"title": "unknown"})])
+    state = _new_incomplete("create unknown", [SystemMessage(content="system")])
+    state.update(
+        phase="executing_tools",
+        response=response,
+        tool_rounds=1,
+        tool_calls=1,
+        attempted_calls={"1:1"},
+        tool_steps={
+            "1:1": {
+                "step_id": "create_todo-existing",
+                "started": time.monotonic(),
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "started_sent": True,
+                "write_dispatched": True,
+            }
+        },
+    )
+    _conversations["unknown-write"] = {
+        "messages": [SystemMessage(content="system")],
+        "incomplete": state,
+        "generation": 0,
+    }
+    events = []
+    persistence = _RecordingPersistence()
+    tool = StubTool(result={"id": 2})
+    with (
+        patch(
+            "app.agent._build_llm",
+            return_value=FakeToolCallingLLM(responses=[_aim("unexpected")]),
+        ),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+    ):
+        with pytest.raises(AgentExecutionError, match="outcome is unknown"):
+            await process_message(
+                "unknown-write",
+                "create unknown",
+                on_event=events.append,
+                persistence=persistence,
+            )
+
+    tool.ainvoke.assert_not_awaited()
+    failure = next(event for event in events if event["type"] == "step_failed")
+    assert failure["error_code"] == "WRITE_RESULT_UNCERTAIN"
+    assert failure["retryable"] is False
+    assert persistence.write_applied is True
 
 
 @pytest.mark.asyncio
@@ -218,6 +363,8 @@ class _StreamRepository:
         self.starts = []
         self.user_exists = False
         self.completed = False
+        self.result_uncertain = False
+        self.uncertain_marks = 0
         self.failed: list[tuple[str, bool]] = []
         self.steps = []
         self.fail_checkpoint = False
@@ -282,6 +429,12 @@ class _StreamRepository:
         if self.fail_complete:
             raise RuntimeError("terminal commit unavailable")
         self.completed = True
+        self.result_uncertain = False
+
+    async def mark_turn_uncertain(self, owner, turn_id):
+        assert owner == self.owner and turn_id == self.turn_id
+        self.result_uncertain = True
+        self.uncertain_marks += 1
 
     async def fail_turn(self, owner, turn_id, code, message, uncertain):
         self.failed.append((code, uncertain))
@@ -380,6 +533,70 @@ def test_terminal_reply_is_committed_before_reply_and_done(durable_client):
 
     assert events[-1] == {"type": "reply", "content": "committed reply"}
     assert done == {"type": "done"}
+
+
+def test_websocket_disconnect_drains_write_before_reconnect(durable_client):
+    import threading
+
+    from app.agent import _tools_by_name
+    from app.main import _cancel_and_fully_drain
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    entered = threading.Event()
+    drain_started = threading.Event()
+    release = threading.Event()
+    effects = 0
+
+    async def write_once(_args):
+        nonlocal effects
+        effects += 1
+        entered.set()
+        await asyncio.to_thread(release.wait)
+        return {"id": effects}
+
+    async def observe_drain(task, timeout=None):
+        drain_started.set()
+        return await _cancel_and_fully_drain(task, timeout)
+
+    tool = StubTool()
+    tool.ainvoke.side_effect = write_once
+    model = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("create_todo", {"title": "once"})]),
+            _aim("recovered"),
+        ]
+    )
+
+    def release_after_disconnect():
+        assert drain_started.wait(timeout=2)
+        release.set()
+
+    unblocker = threading.Thread(target=release_after_disconnect)
+    unblocker.start()
+    with (
+        patch("app.agent._build_llm", return_value=model),
+        patch.dict(_tools_by_name, {"create_todo": tool}),
+        patch("app.main._cancel_and_fully_drain", new=observe_drain),
+    ):
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("create once")
+            assert entered.wait(timeout=2)
+
+        unblocker.join(timeout=2)
+        assert unblocker.is_alive() is False
+        assert durable_client.repo.completed is False
+        assert durable_client.repo.result_uncertain is True
+
+        with durable_client.websocket_connect(_stream_url(durable_client)) as ws:
+            ws.send_text("create once")
+            events = []
+            while not events or events[-1]["type"] != "done":
+                events.append(ws.receive_json())
+
+    assert effects == 1
+    assert tool.ainvoke.await_count == 1
+    assert durable_client.repo.completed is True
+    assert durable_client.repo.result_uncertain is False
 
 
 @pytest.mark.parametrize("fault_point", ["done", "close"])
@@ -1377,13 +1594,128 @@ async def test_delete_barrier_runs_before_cascade_delete():
             order.append("delete")
             return True
 
-    async def barrier(owner_id, session_id):
-        order.append("barrier")
-        return True
+    async def barrier(owner_id, session_id, delete_operation):
+        order.append("barrier-start")
+        result = await delete_operation()
+        order.append("barrier-finish")
+        return result
 
     service = HistoryService(Repo(), barrier)
     assert await service.delete_session(uuid4(), uuid4()) is True
-    assert order == ["barrier", "delete"]
+    assert order == ["barrier-start", "delete", "barrier-finish"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_coordinator_reclaims_many_chat_and_delete_lifecycles():
+    coordinator = SessionRuntimeCoordinator()
+    task = asyncio.current_task()
+    assert task is not None
+
+    for _ in range(50):
+        owner = uuid4()
+        session_id = uuid4()
+        lease = await coordinator.acquire(owner, session_id)
+        await coordinator.attach(lease, task)
+        await coordinator.detach(lease, task)
+        await coordinator.release(lease)
+        assert await coordinator.delete_barrier(
+            owner, session_id, AsyncMock(return_value=True)
+        )
+
+    assert coordinator.state_size == 0
+    with pytest.raises(HistoryPersistenceError, match="lease.*released"):
+        await coordinator.release(lease)
+
+
+@pytest.mark.asyncio
+async def test_executor_attach_failure_releases_its_acquired_lease():
+    class AttachFaultCoordinator(SessionRuntimeCoordinator):
+        async def attach(self, lease, task):
+            raise RuntimeError("attach failed")
+
+    coordinator = AttachFaultCoordinator()
+    repo = _StreamRepository()
+    detail = await repo.get_session(repo.owner, repo.session_id)
+
+    with pytest.raises(RuntimeError, match="attach failed"):
+        await _execute_durable_message(
+            repo,
+            coordinator,
+            repo.owner,
+            repo.session_id,
+            "hello",
+            detail,
+        )
+
+    assert coordinator.state_size == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_tombstone_survives_decision_and_all_stale_leases():
+    coordinator = SessionRuntimeCoordinator()
+    owner = uuid4()
+    session_id = uuid4()
+    first = await coordinator.acquire(owner, session_id)
+    second = await coordinator.acquire(owner, session_id)
+    deleting = asyncio.Event()
+    finish_delete = asyncio.Event()
+
+    async def delete_operation():
+        deleting.set()
+        await finish_delete.wait()
+        return True
+
+    delete_task = asyncio.create_task(
+        coordinator.delete_barrier(owner, session_id, delete_operation)
+    )
+    await deleting.wait()
+    assert (owner, session_id) in coordinator._tombstones
+    with pytest.raises(HistoryPersistenceError, match="stale"):
+        await coordinator.run(first, AsyncMock())
+
+    await coordinator.release(first)
+    finish_delete.set()
+    assert await delete_task is True
+    assert (owner, session_id) in coordinator._tombstones
+    assert coordinator.state_size == 1
+
+    await coordinator.release(second)
+    assert coordinator.state_size == 0
+
+
+@pytest.mark.asyncio
+async def test_releasing_leases_does_not_replace_lock_with_operations_waiting():
+    coordinator = SessionRuntimeCoordinator()
+    owner = uuid4()
+    session_id = uuid4()
+    first = await coordinator.acquire(owner, session_id)
+    second = await coordinator.acquire(owner, session_id)
+    entered = asyncio.Event()
+    release_operation = asyncio.Event()
+    concurrent = 0
+    maximum = 0
+
+    async def operation():
+        nonlocal concurrent, maximum
+        concurrent += 1
+        maximum = max(maximum, concurrent)
+        entered.set()
+        await release_operation.wait()
+        concurrent -= 1
+
+    first_run = asyncio.create_task(coordinator.run(first, operation))
+    await entered.wait()
+    second_run = asyncio.create_task(coordinator.run(second, operation))
+    while coordinator._operations.get((owner, session_id)) != 2:
+        await asyncio.sleep(0)
+    await coordinator.release(first)
+    await coordinator.release(second)
+    assert coordinator.state_size == 1
+
+    release_operation.set()
+    await asyncio.gather(first_run, second_run)
+    assert maximum == 1
+    assert coordinator.state_size == 0
 
 
 @pytest.mark.asyncio
@@ -1746,6 +2078,101 @@ async def test_real_postgres_stream_persists_complete_turn_before_terminal_deliv
             events[0]["event_id"]
         ]
         assert detail.turns[0].steps[0].status == "completed"
+    finally:
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM users WHERE id = $1", owner)
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_cancelled_write_reconnects_without_second_dispatch():
+    database_url = os.getenv("TEST_DATABASE_URL")
+    if not database_url:
+        pytest.skip("TEST_DATABASE_URL is required for write cancellation recovery")
+
+    import asyncpg
+    from app.agent import _tools_by_name
+    from tests.test_agent import FakeToolCallingLLM, StubTool, _aim, _tc
+
+    pool = await asyncpg.create_pool(database_url)
+    repository = HistoryRepository(pool)
+    owner = uuid4()
+    suffix = uuid4().hex
+    async with pool.acquire() as connection:
+        await connection.execute(
+            """INSERT INTO users (id, email, display_name, password_hash)
+               VALUES ($1, $2, 'Cancelled Write', 'test-only')""",
+            owner,
+            f"cancelled-write-{suffix}@example.test",
+        )
+    try:
+        session = await repository.create_session(owner, "Cancelled write")
+        detail = await repository.get_session(owner, session.id)
+        assert detail is not None
+        coordinator = SessionRuntimeCoordinator()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        effects = 0
+
+        async def write_once(_args):
+            nonlocal effects
+            effects += 1
+            entered.set()
+            await release.wait()
+            return {"id": effects}
+
+        tool = StubTool()
+        tool.ainvoke.side_effect = write_once
+        model = FakeToolCallingLLM(
+            responses=[
+                _aim(tool_calls=[_tc("create_todo", {"title": "once"})]),
+                _aim("recovered"),
+            ]
+        )
+        with (
+            patch("app.agent._build_llm", return_value=model),
+            patch.dict(_tools_by_name, {"create_todo": tool}),
+        ):
+            first = asyncio.create_task(
+                _execute_durable_message(
+                    repository,
+                    coordinator,
+                    owner,
+                    session.id,
+                    "create once",
+                    detail,
+                )
+            )
+            await entered.wait()
+            dispatched = await repository.get_session(owner, session.id)
+            assert dispatched.turns[0].status == "running"
+            assert dispatched.turns[0].result_uncertain is True
+
+            first.cancel()
+            reconnect = asyncio.create_task(
+                _execute_durable_message(
+                    repository,
+                    coordinator,
+                    owner,
+                    session.id,
+                    "create once",
+                    detail,
+                )
+            )
+            await asyncio.sleep(0)
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            result = await reconnect
+
+        completed = await repository.get_session(owner, session.id)
+        assert result.reply == "recovered"
+        assert effects == 1
+        assert tool.ainvoke.await_count == 1
+        assert len(completed.turns) == 1
+        assert completed.turns[0].status == "completed"
+        assert completed.turns[0].result_uncertain is False
+        assert coordinator.state_size == 0
     finally:
         async with pool.acquire() as connection:
             await connection.execute("DELETE FROM users WHERE id = $1", owner)

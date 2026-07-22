@@ -50,6 +50,9 @@ class _TestRepository:
     async def upsert_step(self, owner, turn_id, event):
         return turn_id in self.turns
 
+    async def mark_turn_uncertain(self, owner, turn_id):
+        assert turn_id in self.turns
+
     async def complete_turn(self, owner, turn_id, message_id, content, created_at):
         assert turn_id in self.turns
 

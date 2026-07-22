@@ -207,6 +207,44 @@ async def test_rename_fail_and_interrupt_open_turns(repo):
     assert by_id[interrupted.id].status == "interrupted"
 
 
+async def test_write_dispatch_marks_open_turn_uncertain_before_completion(repo):
+    repository, alice, _ = repo
+    session = await repository.create_session(alice, "Write barrier")
+    now = datetime.now(timezone.utc)
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "write", now
+    )
+
+    await repository.mark_turn_uncertain(alice, turn.id)
+
+    open_detail = await repository.get_session(alice, session.id)
+    assert open_detail.turns[0].status == "running"
+    assert open_detail.turns[0].result_uncertain is True
+
+    await repository.complete_turn(alice, turn.id, uuid.uuid4(), "write complete", now)
+    completed_detail = await repository.get_session(alice, session.id)
+    assert completed_detail.turns[0].status == "completed"
+    assert completed_detail.turns[0].result_uncertain is False
+
+
+async def test_failed_turn_cannot_clear_persisted_write_uncertainty(repo):
+    repository, alice, _ = repo
+    session = await repository.create_session(alice, "Sticky uncertainty")
+    now = datetime.now(timezone.utc)
+    turn = await repository.start_turn(
+        alice, session.id, uuid.uuid4(), uuid.uuid4(), "write", now
+    )
+    await repository.mark_turn_uncertain(alice, turn.id)
+
+    await repository.fail_turn(
+        alice, turn.id, "WRITE_FAILED", "response lost", uncertain=False
+    )
+
+    detail = await repository.get_session(alice, session.id)
+    assert detail.turns[0].status == "failed"
+    assert detail.turns[0].result_uncertain is True
+
+
 async def test_complete_turn_rejects_message_id_owned_by_another_turn_and_rolls_back(
     repo,
 ):

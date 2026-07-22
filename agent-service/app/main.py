@@ -89,6 +89,7 @@ class SessionRuntimeLease:
     owner_id: UUID
     session_id: UUID
     generation: int
+    token: UUID
 
 
 class SessionRuntimeCoordinator:
@@ -99,49 +100,107 @@ class SessionRuntimeCoordinator:
         self._operation_locks: dict[tuple[UUID, UUID], asyncio.Lock] = {}
         self._generations: dict[tuple[UUID, UUID], int] = {}
         self._tombstones: set[tuple[UUID, UUID]] = set()
-        self._tasks: dict[tuple[UUID, UUID], set[asyncio.Task[Any]]] = {}
+        self._leases: dict[tuple[UUID, UUID], set[UUID]] = {}
+        self._tasks: dict[tuple[UUID, UUID], set[tuple[UUID, asyncio.Task[Any]]]] = {}
+        self._operations: dict[tuple[UUID, UUID], int] = {}
+        self._deleting: set[tuple[UUID, UUID]] = set()
+        self._closed = False
+
+    @property
+    def state_size(self) -> int:
+        """Number of owner/session keys retained by runtime coordination."""
+        return len(
+            set(self._operation_locks)
+            | set(self._generations)
+            | self._tombstones
+            | set(self._leases)
+            | set(self._tasks)
+            | set(self._operations)
+            | self._deleting
+        )
 
     async def acquire(self, owner_id: UUID, session_id: UUID) -> SessionRuntimeLease:
         key = (owner_id, session_id)
         async with self._state_lock:
-            if key in self._tombstones:
+            if self._closed or key in self._tombstones:
                 raise HistoryPersistenceError(
                     "session is being deleted", uncertain=False
                 )
             self._operation_locks.setdefault(key, asyncio.Lock())
-            return SessionRuntimeLease(
-                owner_id, session_id, self._generations.get(key, 0)
-            )
+            generation = self._generations.setdefault(key, 0)
+            token = uuid.uuid4()
+            self._leases.setdefault(key, set()).add(token)
+            return SessionRuntimeLease(owner_id, session_id, generation, token)
 
     async def attach(self, lease: SessionRuntimeLease, task: asyncio.Task[Any]) -> None:
         key = (lease.owner_id, lease.session_id)
         async with self._state_lock:
             self._assert_current(lease)
-            self._tasks.setdefault(key, set()).add(task)
+            attachment = (lease.token, task)
+            tasks = self._tasks.setdefault(key, set())
+            if attachment in tasks:
+                raise HistoryPersistenceError(
+                    "task is already attached", uncertain=False
+                )
+            tasks.add(attachment)
 
-    async def release(
-        self, lease: SessionRuntimeLease, task: asyncio.Task[Any]
-    ) -> None:
+    async def detach(self, lease: SessionRuntimeLease, task: asyncio.Task[Any]) -> None:
         key = (lease.owner_id, lease.session_id)
         async with self._state_lock:
+            attachment = (lease.token, task)
             tasks = self._tasks.get(key)
-            if tasks is not None:
-                tasks.discard(task)
-                if not tasks:
-                    self._tasks.pop(key, None)
+            if tasks is None or attachment not in tasks:
+                raise HistoryPersistenceError("task is not attached", uncertain=False)
+            tasks.remove(attachment)
+            if not tasks:
+                self._tasks.pop(key, None)
+            self._cleanup_if_idle(key)
+
+    async def release(self, lease: SessionRuntimeLease) -> None:
+        key = (lease.owner_id, lease.session_id)
+        async with self._state_lock:
+            leases = self._leases.get(key)
+            if leases is None or lease.token not in leases:
+                raise HistoryPersistenceError(
+                    "lease was already released", uncertain=False
+                )
+            if any(token == lease.token for token, _ in self._tasks.get(key, ())):
+                raise HistoryPersistenceError(
+                    "lease still has an attached task", uncertain=False
+                )
+            leases.remove(lease.token)
+            if not leases:
+                self._leases.pop(key, None)
+            self._cleanup_if_idle(key)
 
     async def run(
         self, lease: SessionRuntimeLease, operation: Callable[[], Awaitable[Any]]
     ) -> Any:
         key = (lease.owner_id, lease.session_id)
         async with self._state_lock:
-            lock = self._operation_locks.setdefault(key, asyncio.Lock())
-        async with lock:
+            self._assert_current(lease)
+            lock = self._operation_locks[key]
+            self._operations[key] = self._operations.get(key, 0) + 1
+        try:
+            async with lock:
+                async with self._state_lock:
+                    self._assert_generation_current(lease)
+                return await operation()
+        finally:
             async with self._state_lock:
-                self._assert_current(lease)
-            return await operation()
+                remaining = self._operations[key] - 1
+                if remaining:
+                    self._operations[key] = remaining
+                else:
+                    self._operations.pop(key, None)
+                self._cleanup_if_idle(key)
 
-    async def delete_barrier(self, owner_id: UUID, session_id: UUID) -> bool:
+    async def delete_barrier(
+        self,
+        owner_id: UUID,
+        session_id: UUID,
+        delete_operation: Callable[[], Awaitable[bool]] | None = None,
+    ) -> bool:
         """Tombstone, cancel and drain before the repository cascade executes."""
         key = (owner_id, session_id)
         async with self._state_lock:
@@ -149,26 +208,36 @@ class SessionRuntimeCoordinator:
             generation = self._generations.get(key, 0) + 1
             self._generations[key] = generation
             self._tombstones.add(key)
-            tasks = tuple(self._tasks.get(key, ()))
-        current = asyncio.current_task()
-        for task in tasks:
-            if task is not current:
-                await _cancel_and_fully_drain(
-                    task,
-                    timeout=float(
-                        os.getenv("AGENT_DELETE_DRAIN_TIMEOUT_SECONDS", "30")
-                    ),
-                )
-        # A repository operation already past the generation check must leave
-        # the per-session critical section before the cascade delete begins.
-        async with lock:
-            pass
-        await delete_history(str(session_id))
-        return True
+            self._deleting.add(key)
+            tasks = tuple({task for _, task in self._tasks.get(key, ())})
+        try:
+            current = asyncio.current_task()
+            for task in tasks:
+                if task is not current:
+                    await _cancel_and_fully_drain(
+                        task,
+                        timeout=float(
+                            os.getenv("AGENT_DELETE_DRAIN_TIMEOUT_SECONDS", "30")
+                        ),
+                    )
+            # A repository operation already past the generation check must
+            # leave the critical section before the cascade decision begins.
+            async with lock:
+                await delete_history(str(session_id))
+                if delete_operation is not None:
+                    return await delete_operation()
+                return True
+        finally:
+            async with self._state_lock:
+                self._deleting.discard(key)
+                self._cleanup_if_idle(key)
 
     async def cancel_all(self) -> None:
         async with self._state_lock:
-            tasks = tuple({task for values in self._tasks.values() for task in values})
+            self._closed = True
+            tasks = tuple(
+                {task for values in self._tasks.values() for _, task in values}
+            )
             for key in self._operation_locks:
                 self._generations[key] = self._generations.get(key, 0) + 1
                 self._tombstones.add(key)
@@ -177,7 +246,28 @@ class SessionRuntimeCoordinator:
             if task is not current:
                 await _cancel_and_fully_drain(task)
 
+    def _cleanup_if_idle(self, key: tuple[UUID, UUID]) -> None:
+        if (
+            self._leases.get(key)
+            or self._tasks.get(key)
+            or self._operations.get(key)
+            or key in self._deleting
+        ):
+            return
+        self._operation_locks.pop(key, None)
+        self._generations.pop(key, None)
+        self._tombstones.discard(key)
+        self._leases.pop(key, None)
+        self._tasks.pop(key, None)
+        self._operations.pop(key, None)
+
     def _assert_current(self, lease: SessionRuntimeLease) -> None:
+        self._assert_generation_current(lease)
+        key = (lease.owner_id, lease.session_id)
+        if lease.token not in self._leases.get(key, ()):
+            raise HistoryPersistenceError("lease was released", uncertain=False)
+
+    def _assert_generation_current(self, lease: SessionRuntimeLease) -> None:
         key = (lease.owner_id, lease.session_id)
         if key in self._tombstones or self._generations.get(key, 0) != lease.generation:
             raise HistoryPersistenceError(
@@ -208,7 +298,23 @@ class RepositoryTurnPersistence:
     def uncertain(self) -> bool:
         return self._write_applied
 
-    def mark_write_applied(self) -> None:
+    async def prepare_write(self) -> None:
+        if self.turn_id is None:
+            raise HistoryPersistenceError(
+                "turn was not started", uncertain=self.uncertain
+            )
+
+        async def operation():
+            await self._repository.mark_turn_uncertain(
+                self._lease.owner_id, self.turn_id
+            )
+
+        try:
+            await self._coordinator.run(self._lease, operation)
+        except HistoryPersistenceError:
+            raise
+        except Exception as exc:
+            raise HistoryPersistenceError(str(exc), uncertain=self.uncertain) from exc
         self._write_applied = True
 
     async def start(self, request: DurableTurnRequest) -> None:
@@ -412,7 +518,7 @@ async def _execute_durable_message(
     active_lease = lease or await coordinator.acquire(owner_id, session_id)
     current = asyncio.current_task()
     assert current is not None
-    await coordinator.attach(active_lease, current)
+    attached = False
     persistence = RepositoryTurnPersistence(repository, coordinator, active_lease)
     durable_enabled = "persistence" in inspect.signature(process_message).parameters
     kwargs: dict[str, Any] = {"on_event": on_event}
@@ -424,6 +530,8 @@ async def _execute_durable_message(
             runtime_generation=active_lease.generation,
         )
     try:
+        await coordinator.attach(active_lease, current)
+        attached = True
         try:
             result = await process_message(str(session_id), message, **kwargs)
             if durable_enabled:
@@ -490,7 +598,11 @@ async def _execute_durable_message(
                 )
         return result
     finally:
-        await coordinator.release(active_lease, current)
+        try:
+            if attached:
+                await coordinator.detach(active_lease, current)
+        finally:
+            await coordinator.release(active_lease)
 
 
 def _cors_origins() -> list[str]:
@@ -1148,12 +1260,14 @@ def create_app(
             retry_lease: SessionRuntimeLease | None = None
             retry_current = asyncio.current_task()
             retry_persistence: RepositoryTurnPersistence | None = None
+            retry_attached = False
             try:
                 retry_lease = await coordinator.acquire(
                     principal.user_id, fixed_session_id
                 )
                 assert retry_current is not None
                 await coordinator.attach(retry_lease, retry_current)
+                retry_attached = True
                 retry_persistence = RepositoryTurnPersistence(
                     repository, coordinator, retry_lease
                 )
@@ -1219,7 +1333,11 @@ def create_app(
                 await ws.close(code=1011)
             finally:
                 if retry_lease is not None and retry_current is not None:
-                    await coordinator.release(retry_lease, retry_current)
+                    try:
+                        if retry_attached:
+                            await coordinator.detach(retry_lease, retry_current)
+                    finally:
+                        await coordinator.release(retry_lease)
             return
 
         try:
@@ -1233,19 +1351,23 @@ def create_app(
             reply = result.reply if isinstance(result, ProcessResult) else result[0]
             await writer.send_json({"type": "reply", "content": reply})
 
-        process_task = asyncio.create_task(
-            _execute_durable_message(
-                repository,
-                coordinator,
-                principal.user_id,
-                fixed_session_id,
-                request.message,
-                owned_detail,
-                on_event=writer.send_json,
-                on_terminal=send_reply,
-                lease=lease,
-            )
+        execution = _execute_durable_message(
+            repository,
+            coordinator,
+            principal.user_id,
+            fixed_session_id,
+            request.message,
+            owned_detail,
+            on_event=writer.send_json,
+            on_terminal=send_reply,
+            lease=lease,
         )
+        try:
+            process_task = asyncio.create_task(execution)
+        except BaseException:
+            execution.close()
+            await coordinator.release(lease)
+            raise
         receive_task = asyncio.create_task(ws.receive_json())
         try:
             while True:

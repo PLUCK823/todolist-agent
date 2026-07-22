@@ -9,7 +9,8 @@ from .history_models import SessionDetail, SessionSummary
 from .history_repository import DEFAULT_SESSION_TITLE, HistoryRepository
 
 
-DeleteHistoryCallback = Callable[[UUID, UUID], Awaitable[bool]]
+DeleteOperation = Callable[[], Awaitable[bool]]
+DeleteHistoryCallback = Callable[[UUID, UUID, DeleteOperation], Awaitable[bool]]
 
 
 def title_from_first_message(message: str) -> str:
@@ -51,5 +52,10 @@ class HistoryService:
     async def delete_session(self, owner_id: UUID, session_id: UUID) -> bool:
         if await self._repository.get_session(owner_id, session_id) is None:
             return False
-        await self._delete_history_callback(owner_id, session_id)
-        return await self._repository.delete_session(owner_id, session_id)
+
+        async def delete_operation() -> bool:
+            return await self._repository.delete_session(owner_id, session_id)
+
+        return await self._delete_history_callback(
+            owner_id, session_id, delete_operation
+        )

@@ -110,7 +110,7 @@ class TurnPersistence(Protocol):
 
     async def fail(self, code: str, message: str, *, uncertain: bool) -> None: ...
 
-    def mark_write_applied(self) -> None: ...
+    async def prepare_write(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -764,6 +764,26 @@ async def _emit(on_event: Optional[AgentEventSink], event: dict[str, Any]) -> No
         await result
 
 
+async def _drain_task_through_cancellation(
+    task: asyncio.Task[Any],
+) -> tuple[Any, Exception | None, bool]:
+    """Wait for a task outcome even when the caller is being cancelled."""
+    cancellation_requested = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancellation_requested = True
+        except Exception:
+            break
+    if task.cancelled():
+        return None, RuntimeError("write task cancelled without an outcome"), True
+    try:
+        return task.result(), None, cancellation_requested
+    except Exception as exc:
+        return None, exc, cancellation_requested
+
+
 def _failure_metadata(exc: Exception) -> tuple[str, bool]:
     message = str(exc).lower()
     if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) or any(
@@ -1220,6 +1240,7 @@ async def process_message(
                         state["attempted_calls"].add(journal_key)
                     name = str(tool_call["name"])
                     args = dict(tool_call.get("args") or {})
+                    cancellation_requested = False
                     step = state["tool_steps"].setdefault(
                         journal_key,
                         {
@@ -1250,7 +1271,27 @@ async def process_message(
                         )
                     tool = _tools_by_name.get(name)
                     confirmation_id: str | None = None
-                    if tool is None:
+                    write_result_unknown = bool(
+                        step.get("write_dispatched")
+                        and name not in READ_ONLY_RETRY_TOOLS
+                    )
+                    if write_result_unknown:
+                        if persistence is not None:
+                            await persistence.prepare_write()
+                        message = "Write outcome is unknown after dispatch"
+                        action = {"type": name, "args": args, "error": message}
+                        tool_message = ToolMessage(
+                            content=f"Error: {message}", tool_call_id=call_id
+                        )
+                        event = {
+                            "type": "step_failed",
+                            "step_id": step_id,
+                            "error_code": "WRITE_RESULT_UNCERTAIN",
+                            "message": message,
+                            "retryable": False,
+                            "duration_ms": int((time.monotonic() - started) * 1000),
+                        }
+                    elif tool is None:
                         action = {
                             "type": name,
                             "args": args,
@@ -1397,10 +1438,25 @@ async def process_message(
                                 persistence is not None
                                 and name not in READ_ONLY_RETRY_TOOLS
                             ):
-                                persistence.mark_write_applied()
-                            try:
-                                result = await tool.ainvoke(args)
-                            except Exception as exc:
+                                await persistence.prepare_write()
+                                step["write_dispatched"] = True
+                                record["incomplete"] = state
+                                _save_record(session_id, generation, record)
+                                tool_task = asyncio.create_task(tool.ainvoke(args))
+                                (
+                                    result,
+                                    tool_error,
+                                    cancellation_requested,
+                                ) = await _drain_task_through_cancellation(tool_task)
+                            else:
+                                try:
+                                    result = await tool.ainvoke(args)
+                                except Exception as exc:
+                                    tool_error = exc
+                                else:
+                                    tool_error = None
+                            if tool_error is not None:
+                                exc = tool_error
                                 error_code, retryable = _failure_metadata(exc)
                                 retryable = (
                                     retryable
@@ -1474,6 +1530,19 @@ async def process_message(
                     state["actions"].append(action)
                     record["incomplete"] = state
                     _save_record(session_id, generation, record)
+                    if cancellation_requested:
+                        delivery_task = asyncio.create_task(
+                            _deliver_checkpointed_event(
+                                session_id,
+                                generation,
+                                record,
+                                state,
+                                event_sink,
+                                event,
+                            )
+                        )
+                        _, _, _ = await _drain_task_through_cancellation(delivery_task)
+                        raise asyncio.CancelledError
                     await _deliver_checkpointed_event(
                         session_id,
                         generation,
@@ -1482,6 +1551,12 @@ async def process_message(
                         event_sink,
                         event,
                     )
+                    if write_result_unknown:
+                        raise AgentExecutionError(
+                            event["message"],
+                            phase=step_id,
+                            event_emitted=event_sink is not None,
+                        )
                     tool_messages.append(tool_message)
 
                 state["messages"].extend(tool_messages)

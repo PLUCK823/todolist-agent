@@ -485,6 +485,33 @@ class HistoryRepository:
                 )
         return True
 
+    async def mark_turn_uncertain(self, owner_id: UUID, turn_id: UUID) -> None:
+        """Persist the write-dispatch boundary for an owner-scoped open turn."""
+        async with self._pool.acquire() as conn, conn.transaction():
+            updated = await conn.fetchval(
+                """UPDATE agent_turns t SET result_uncertain=true
+                   FROM agent_sessions s
+                   WHERE t.id=$1 AND t.session_id=s.id AND s.owner_id=$2
+                     AND t.status IN ('running', 'waiting_confirmation')
+                   RETURNING t.id""",
+                turn_id,
+                owner_id,
+            )
+            if updated is not None:
+                return
+            owned = await conn.fetchval(
+                """SELECT EXISTS(
+                     SELECT 1 FROM agent_turns t
+                     JOIN agent_sessions s ON s.id=t.session_id
+                     WHERE t.id=$1 AND s.owner_id=$2
+                   )""",
+                turn_id,
+                owner_id,
+            )
+            if not owned:
+                raise HistoryNotFoundError("turn not found")
+            raise HistoryConflictError("turn terminal state conflict")
+
     async def complete_turn(
         self,
         owner_id: UUID,
@@ -572,11 +599,12 @@ class HistoryRepository:
             )
             if row is None:
                 raise HistoryNotFoundError("turn not found")
+            effective_uncertain = row["result_uncertain"] or uncertain
             if row["status"] == "failed":
                 if (
                     row["failure_code"] == failure_code
                     and row["failure_message"] == message
-                    and row["result_uncertain"] == uncertain
+                    and row["result_uncertain"] == effective_uncertain
                 ):
                     return
                 raise HistoryConflictError("failure terminal conflict")
@@ -584,7 +612,8 @@ class HistoryRepository:
                 raise HistoryConflictError("turn terminal state conflict")
             await conn.execute(
                 """UPDATE agent_turns SET status='failed', completed_at=NOW(), failure_code=$2,
-                       failure_message=$3, result_uncertain=$4
+                       failure_message=$3,
+                       result_uncertain=(result_uncertain OR $4)
                    WHERE id=$1 AND status IN ('running', 'waiting_confirmation')""",
                 turn_id,
                 failure_code,
