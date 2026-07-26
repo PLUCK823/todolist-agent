@@ -15,6 +15,8 @@ const session: AgentSessionValue = {
     messages: [], steps: [], status: 'idle', capabilities: { supportsStepRetry: false },
     send, canRetry: vi.fn().mockReturnValue(false), retry: vi.fn(), confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(),
     cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
+    sessions: [], turns: [], isHistoryLoading: false, createSession: vi.fn(), selectSession: vi.fn(),
+    renameSession: vi.fn(), deleteSession: vi.fn(), reloadHistory: vi.fn(),
     ...overrides,
   }
   render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session}><button type="button">触发来源</button><CommandPalette onOpenAgent={openAgent} /></AgentSessionProvider></QueryClientProvider>)

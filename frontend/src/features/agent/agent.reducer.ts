@@ -82,6 +82,7 @@ export function reduceAgent(
     case 'step_started': {
       const step: AgentStep = {
         id: action.step_id,
+        eventId: action.event_id,
         label: action.label,
         status: 'running',
         tool: action.tool,

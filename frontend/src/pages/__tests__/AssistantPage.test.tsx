@@ -16,6 +16,8 @@ function makeSession(value?: Partial<AgentSessionValue>): AgentSessionValue {
     steps: [{ id: 'search', label: '查询未完成任务', status: 'completed', durationMs: 520, tool: 'list_todos' }],
     status: 'done', canSend: true, isClearing: false, capabilities: { supportsStepRetry: false }, send: vi.fn().mockReturnValue(true), canRetry: vi.fn().mockReturnValue(false), retry: vi.fn(),
     confirm: vi.fn(), reject: vi.fn(), resolveConfirmation: vi.fn(), cancel: vi.fn(), clear: vi.fn().mockResolvedValue(undefined),
+    sessions: [], turns: [], isHistoryLoading: false, createSession: vi.fn(), selectSession: vi.fn(),
+    renameSession: vi.fn(), deleteSession: vi.fn(), reloadHistory: vi.fn(),
     ...value,
   }
 }

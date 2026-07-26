@@ -133,7 +133,9 @@ export function createAgentStreamClient(options: AgentStreamClientOptions = {}):
         const currentGeneration = ++generation
         let current: WebSocket
         try {
-          current = socketFactory(endpoint)
+          const socketUrl = new URL(endpoint)
+          if (input.session_id) socketUrl.searchParams.set('session_id', input.session_id)
+          current = socketFactory(socketUrl.toString())
         } catch {
           retryOrTerminate(
             { code: 'SOCKET_ERROR', message: failureMessage.SOCKET_ERROR, retryable: true },

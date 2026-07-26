@@ -3,11 +3,16 @@ import { Button } from '../../shared/ui/Button'
 import type { AgentCapabilities, AgentStep } from './agent.types'
 import { safeSerializeAgentResult } from './agent-display'
 
+function isResultRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 const statusLabels: Record<AgentStep['status'], string> = {
   waiting: '等待中',
   running: '运行中',
   completed: '已完成',
   failed: '失败',
+  interrupted: '已中断',
   waiting_confirmation: '等待确认',
 }
 
@@ -51,7 +56,7 @@ function AgentStepItem({ step, retryAllowed, onRetry, onConfirm, onReject }: {
         {elapsed !== undefined ? <time className="agent-step__timer tabular-nums">{formatDuration(elapsed)}</time> : null}
         {step.tool ? <code className="agent-step__tool">{step.tool}</code> : null}
         {step.errorMessage ? <p className="agent-step__error" role="alert">{step.errorMessage}</p> : null}
-        {step.action && step.result ? <ActionResult action={step.action} result={step.result} /> : null}
+        {step.action && isResultRecord(step.result) ? <ActionResult action={step.action} result={step.result} /> : null}
         {step.status === 'failed' && step.retryable && retryAllowed ? (
           <Button variant="secondary" size="sm" onClick={() => onRetry(step.id)} aria-label={`重试${step.label}`}>重试</Button>
         ) : null}

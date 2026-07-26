@@ -1,9 +1,9 @@
 export type AgentEvent =
-  | { type: 'step_started'; step_id: string; label: string; tool?: string; args?: Record<string, unknown>; started_at?: string }
-  | { type: 'step_completed'; step_id: string; duration_ms: number }
-  | { type: 'step_failed'; step_id: string; error_code: string; message: string; retryable: boolean; retry_token?: string; duration_ms: number }
-  | { type: 'confirmation_required'; step_id: string; message: string; confirmation_id: string }
-  | { type: 'action_completed'; step_id: string; action: string; result: Record<string, unknown>; duration_ms: number }
+  | { type: 'step_started'; event_id?: string; step_id: string; label: string; tool?: string; args?: Record<string, unknown>; started_at?: string }
+  | { type: 'step_completed'; event_id?: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; duration_ms: number }
+  | { type: 'step_failed'; event_id?: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; error_code: string; message: string; retryable: boolean; retry_token?: string; duration_ms: number }
+  | { type: 'confirmation_required'; event_id?: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; message: string; confirmation_id: string }
+  | { type: 'action_completed'; event_id?: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; confirmation_approved?: boolean; action: string; result: Record<string, unknown>; duration_ms: number }
   | { type: 'reply'; content: string }
   | { type: 'done' }
 
@@ -62,15 +62,26 @@ export type AgentSessionStatus =
 
 export interface AgentMessage {
   id: string
-  role: 'user' | 'assistant'
+  role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
   createdAt: string
 }
 
+export type AgentTurnStatus = 'running' | 'waiting_confirmation' | 'completed' | 'failed' | 'interrupted'
+
+export interface AgentSessionSummary {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  lastMessageAt: string
+}
+
 export interface AgentStep {
   id: string
+  eventId?: string
   label: string
-  status: 'waiting' | 'running' | 'waiting_confirmation' | 'completed' | 'failed'
+  status: 'waiting' | 'running' | 'waiting_confirmation' | 'completed' | 'failed' | 'interrupted'
   tool?: string
   args?: Record<string, unknown>
   startedAt?: string
@@ -82,7 +93,36 @@ export interface AgentStep {
   confirmationId?: string
   confirmationMessage?: string
   action?: string
-  result?: Record<string, unknown>
+  result?: unknown
+  resultPreview?: string
+  resultTruncated?: boolean
+  confirmationApproved?: boolean
+  completedAt?: string
+}
+
+export interface AgentTurn {
+  id: string
+  ordinal: number
+  status: AgentTurnStatus
+  startedAt: string
+  completedAt?: string
+  failureCode?: string
+  failureMessage?: string
+  resultUncertain: boolean
+  messages: AgentMessage[]
+  steps: AgentStep[]
+}
+
+export interface AgentSessionDetail extends AgentSessionSummary {
+  turns: AgentTurn[]
+}
+
+export interface AgentSessionsApi {
+  list(signal?: AbortSignal): Promise<AgentSessionSummary[]>
+  create(input?: { title?: string; firstMessage?: string }, signal?: AbortSignal): Promise<AgentSessionSummary>
+  detail(sessionId: string, signal?: AbortSignal): Promise<AgentSessionDetail>
+  rename(sessionId: string, title: string, signal?: AbortSignal): Promise<AgentSessionSummary>
+  delete(sessionId: string, signal?: AbortSignal): Promise<void>
 }
 
 export interface PendingConfirmation {
@@ -100,6 +140,7 @@ export interface AgentSessionState {
   pendingConfirmation?: PendingConfirmation
   lastRequest?: string
   activeAssistantMessageId?: string
+  resultUncertain?: boolean
 }
 
 export type AgentReducerAction = AgentEvent | {
@@ -108,6 +149,7 @@ export type AgentReducerAction = AgentEvent | {
   sessionId: string
   messageId: string
   createdAt: string
+  turnId?: string
 } | {
   type: 'connected'
 } | {
@@ -148,4 +190,15 @@ export interface AgentSessionValue {
   resolveConfirmation(confirmationId: string, approved: boolean): void
   cancel(): void
   clear(): Promise<void>
+  sessions: AgentSessionSummary[]
+  selectedSessionId?: string
+  displayedSessionId?: string
+  turns: AgentTurn[]
+  isHistoryLoading: boolean
+  historyError?: string
+  createSession(title?: string): Promise<void>
+  selectSession(sessionId: string): void
+  renameSession(sessionId: string, title: string): Promise<void>
+  deleteSession(sessionId: string): Promise<void>
+  reloadHistory(): Promise<void>
 }

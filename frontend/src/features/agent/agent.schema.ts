@@ -91,11 +91,21 @@ function jsonObjectField(value: Record<string, unknown>, field: string): Record<
   return result as Record<string, unknown>
 }
 
+function addStepContext<T extends object>(parsed: T, event: Record<string, unknown>): T {
+  const target = parsed as unknown as Record<string, unknown>
+  if (event.event_id !== undefined) target['event_id'] = stringField(event, 'event_id')
+  if (event.label !== undefined) target['label'] = stringField(event, 'label')
+  if (event.tool !== undefined) target['tool'] = stringField(event, 'tool')
+  if (event.args !== undefined) target['args'] = jsonObjectField(event, 'args')
+  if (event.started_at !== undefined) target['started_at'] = stringField(event, 'started_at')
+  return parsed
+}
+
 export function parseAgentEvent(value: unknown): AgentEvent {
   const event = eventRecord(value)
   switch (event.type) {
     case 'step_started': {
-      exactKeys(event, ['type', 'step_id', 'label', 'tool', 'args', 'started_at'])
+      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at'])
       const parsed: Extract<AgentEvent, { type: 'step_started' }> = {
         type: 'step_started',
         step_id: stringField(event, 'step_id'),
@@ -104,18 +114,19 @@ export function parseAgentEvent(value: unknown): AgentEvent {
       if (event.tool !== undefined) parsed.tool = stringField(event, 'tool')
       if (event.started_at !== undefined) parsed.started_at = stringField(event, 'started_at')
       if (event.args !== undefined) parsed.args = jsonObjectField(event, 'args')
-      return parsed
+      return addStepContext(parsed, event)
     }
-    case 'step_completed':
-      exactKeys(event, ['type', 'step_id', 'duration_ms'])
-      return { type: 'step_completed', step_id: stringField(event, 'step_id'), duration_ms: durationField(event) }
+    case 'step_completed': {
+      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'duration_ms'])
+      return addStepContext({ type: 'step_completed', step_id: stringField(event, 'step_id'), duration_ms: durationField(event) }, event)
+    }
     case 'step_failed':
-      exactKeys(event, ['type', 'step_id', 'error_code', 'message', 'retryable', 'retry_token', 'duration_ms'])
+      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'error_code', 'message', 'retryable', 'retry_token', 'duration_ms'])
       if (typeof event.retryable !== 'boolean') throw new AgentContractError('Invalid retryable')
       if (event.retry_token !== undefined && (!event.retryable || stringField(event, 'retry_token').length < 32)) {
         throw new AgentContractError('Invalid retry_token')
       }
-      return {
+      return addStepContext({
         type: 'step_failed',
         step_id: stringField(event, 'step_id'),
         error_code: stringField(event, 'error_code'),
@@ -123,24 +134,28 @@ export function parseAgentEvent(value: unknown): AgentEvent {
         retryable: event.retryable,
         ...(event.retry_token !== undefined && { retry_token: stringField(event, 'retry_token') }),
         duration_ms: durationField(event),
-      }
+      }, event)
     case 'confirmation_required':
-      exactKeys(event, ['type', 'step_id', 'message', 'confirmation_id'])
-      return {
+      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'message', 'confirmation_id'])
+      return addStepContext({
         type: 'confirmation_required',
         step_id: stringField(event, 'step_id'),
         message: stringField(event, 'message'),
         confirmation_id: stringField(event, 'confirmation_id'),
-      }
+      }, event)
     case 'action_completed':
-      exactKeys(event, ['type', 'step_id', 'action', 'result', 'duration_ms'])
-      return {
+      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'confirmation_approved', 'action', 'result', 'duration_ms'])
+      if (event.confirmation_approved !== undefined && typeof event.confirmation_approved !== 'boolean') {
+        throw new AgentContractError('Invalid confirmation_approved')
+      }
+      return addStepContext({
         type: 'action_completed',
         step_id: stringField(event, 'step_id'),
         action: stringField(event, 'action'),
         result: jsonObjectField(event, 'result'),
         duration_ms: durationField(event),
-      }
+        ...(event.confirmation_approved !== undefined && { confirmation_approved: event.confirmation_approved }),
+      }, event)
     case 'reply':
       exactKeys(event, ['type', 'content'])
       return { type: 'reply', content: stringField(event, 'content') }

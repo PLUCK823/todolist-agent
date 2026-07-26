@@ -66,8 +66,8 @@ function createSocketFactory() {
 describe('agent event contract', () => {
   it('parses every target event and rejects unknown or malformed payloads', () => {
     const events: AgentEvent[] = [
-      { type: 'step_started', step_id: 's', label: '理解请求' },
-      { type: 'step_completed', step_id: 's', duration_ms: 12 },
+      { type: 'step_started', event_id: 'event-1', step_id: 's', label: '理解请求' },
+      { type: 'step_completed', event_id: 'event-1', step_id: 's', label: '理解请求', started_at: '2026-07-26T00:00:00Z', duration_ms: 12 },
       { type: 'step_failed', step_id: 's', error_code: 'X', message: '失败', retryable: true, retry_token: 'r'.repeat(32), duration_ms: 12 },
       { type: 'confirmation_required', step_id: 's', message: '确认？', confirmation_id: 'c' },
       { type: 'action_completed', step_id: 's', action: 'create_todo', result: { id: 1 }, duration_ms: 12 },
@@ -157,7 +157,7 @@ describe('createAgentStreamClient', () => {
     const client = createAgentStreamClient({ socketFactory: factory, endpoint: '/api/agent/stream' })
     client.send({ message: '你好', session_id: 'session-1' }, { onEvent: (event) => events.push(event) })
 
-    expect(factory).toHaveBeenCalledWith('ws://localhost:3000/api/agent/stream')
+    expect(factory).toHaveBeenCalledWith('ws://localhost:3000/api/agent/stream?session_id=session-1')
     expect(sockets[0].sent).toEqual([])
     sockets[0].open()
     expect(JSON.parse(sockets[0].sent[0])).toEqual({ message: '你好', session_id: 'session-1' })
