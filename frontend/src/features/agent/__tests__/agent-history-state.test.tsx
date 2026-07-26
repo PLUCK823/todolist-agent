@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentHandlers, AgentSessionDetail, AgentSessionSummary, AgentSessionsApi, AgentStreamClient } from '../agent.types'
+import { parseAgentSessionDetail } from '../agent-history.api'
 import { useAgentSession } from '../useAgentSession'
 
 const first: AgentSessionSummary = {
@@ -20,6 +21,31 @@ function detail(session: AgentSessionSummary, content: string, stepId = 'step'):
     ],
     steps: [{ id: stepId, eventId: `${session.id}-event`, label: content, status: 'completed', startedAt: session.createdAt }],
   }] }
+}
+
+function parsedFailedDetail(resultUncertain = false): AgentSessionDetail {
+  return parseAgentSessionDetail({
+    session: {
+      id: first.id, title: first.title, created_at: first.createdAt,
+      updated_at: first.updatedAt, last_message_at: first.lastMessageAt,
+    },
+    turns: [{
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ordinal: 1,
+      status: resultUncertain ? 'interrupted' : 'failed', started_at: first.createdAt, completed_at: first.updatedAt,
+      failure_code: 'TOOL_TIMEOUT', failure_message: '超时', result_uncertain: resultUncertain,
+      messages: [{
+        id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', role: 'user', content: '查询', ordinal: 1, created_at: first.createdAt,
+      }],
+      steps: [{
+        id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        event_id: '99999999-9999-4999-8999-999999999999', ordinal: 1, label: '查询', tool: 'list_todos',
+        status: 'failed', args: {}, result: null, result_preview: null, result_truncated: false, duration_ms: 5,
+        error_code: 'TOOL_TIMEOUT', error_message: '超时', retryable: true,
+        confirmation_id: null, confirmation_message: null, confirmation_approved: null,
+        started_at: first.createdAt, completed_at: first.updatedAt,
+      }],
+    }],
+  })
 }
 
 function deferred<T>() {
@@ -64,6 +90,104 @@ function renderHistory(sessionsApi: AgentSessionsApi, client = new ControlledCli
 }
 
 describe('durable Agent session state', () => {
+  it('retains a safe wire retry capability after done replaces the step with its DB identity', async () => {
+    const persisted = parsedFailedDetail()
+    const detailMock = vi.fn().mockResolvedValueOnce({ ...first, turns: [] }).mockResolvedValueOnce(persisted)
+    const client = new ControlledClient()
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first]), detail: detailMock }), client)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().send('查询'))
+    act(() => {
+      client.handlers[0].onEvent({
+        type: 'step_started', event_id: '99999999-9999-4999-8999-999999999999',
+        step_id: 'wire-S', label: '查询', tool: 'list_todos',
+      })
+      client.handlers[0].onEvent({
+        type: 'step_failed', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-S',
+        error_code: 'TOOL_TIMEOUT', message: '超时', retryable: true,
+        retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 5,
+      })
+      client.handlers[0].onEvent({
+        type: 'step_failed', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-S',
+        error_code: 'TOOL_TIMEOUT', message: '重复帧', retryable: true,
+        retry_token: 'different-duplicate-token-is-long-enough', duration_ms: 5,
+      })
+      client.handlers[0].onEvent({ type: 'done' })
+    })
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+
+    const dbStepId = persisted.turns[0].steps[0].id
+    expect(dbStepId).not.toBe('wire-S')
+    expect(hook.current().canRetry(dbStepId)).toBe(true)
+    act(() => hook.current().retry(dbStepId))
+    expect(client.requests.at(-1)).toMatchObject({
+      type: 'retry_step', step_id: 'wire-S', retry_token: 'opaque-server-token-that-is-long-enough',
+    })
+  })
+
+  it('does not retain a retry capability for an uncertain persisted result', async () => {
+    const persisted = parsedFailedDetail(true)
+    const detailMock = vi.fn().mockResolvedValueOnce({ ...first, turns: [] }).mockResolvedValueOnce(persisted)
+    const client = new ControlledClient()
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first]), detail: detailMock }), client)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().send('查询'))
+    act(() => {
+      client.handlers[0].onEvent({
+        type: 'step_started', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-S', label: '查询', tool: 'list_todos',
+      })
+      client.handlers[0].onEvent({
+        type: 'step_failed', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-S', error_code: 'X',
+        message: '失败', retryable: true, retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 1,
+      })
+      client.handlers[0].onEvent({ type: 'done' })
+    })
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    expect(hook.current().canRetry(persisted.turns[0].steps[0].id)).toBe(false)
+  })
+
+  it('clears an ephemeral retry capability when switching away and back', async () => {
+    const persisted = parsedFailedDetail()
+    const detailMock = vi.fn()
+      .mockResolvedValueOnce({ ...first, turns: [] })
+      .mockResolvedValueOnce(persisted)
+      .mockResolvedValueOnce({ ...second, turns: [] })
+      .mockResolvedValueOnce(persisted)
+    const client = new ControlledClient()
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first, second]), detail: detailMock }), client)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().send('查询'))
+    act(() => {
+      client.handlers[0].onEvent({
+        type: 'step_started', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-S', label: '查询', tool: 'list_todos',
+      })
+      client.handlers[0].onEvent({
+        type: 'step_failed', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-S', error_code: 'X',
+        message: '失败', retryable: true, retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 1,
+      })
+      client.handlers[0].onEvent({ type: 'done' })
+    })
+    await waitFor(() => expect(hook.current().canRetry(persisted.turns[0].steps[0].id)).toBe(true))
+    act(() => hook.current().selectSession(second.id))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().selectSession(first.id))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    expect(hook.current().canRetry(persisted.turns[0].steps[0].id)).toBe(false)
+  })
+
+  it('blocks sending from a persisted uncertain interrupted turn', async () => {
+    const client = new ControlledClient()
+    const persisted = parsedFailedDetail(true)
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first]), detail: vi.fn().mockResolvedValue(persisted) }), client)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    const turnsBefore = hook.current().turns
+    let accepted = true
+    act(() => { accepted = hook.current().send('不能继续') })
+    expect(accepted).toBe(false)
+    expect(client.requests).toEqual([])
+    expect(hook.current().turns).toBe(turnsBefore)
+  })
+
   it('retries an initial list failure and then selects and loads the first session', async () => {
     const list = vi.fn().mockRejectedValueOnce(new Error('list offline')).mockResolvedValueOnce([first])
     const hook = renderHistory(api({ list }))
@@ -139,6 +263,97 @@ describe('durable Agent session state', () => {
     expect(hook.current().selectedSessionId).toBe(created.id)
     await act(() => hook.current().deleteSession(created.id))
     expect(hook.current().selectedSessionId).toBe(second.id)
+  })
+
+  it('serializes overlapping renames so an already-resolved B remains authoritative after A completes', async () => {
+    const renameA = deferred<void>()
+    const renameB = deferred<void>()
+    let serverTitle = first.title
+    const rename = vi.fn(async (_id: string, title: string) => {
+      await (title === 'A' ? renameA.promise : renameB.promise)
+      serverTitle = title
+      return { ...first, title }
+    })
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first]), rename }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let a!: Promise<void>
+    let b!: Promise<void>
+    act(() => {
+      a = hook.current().renameSession(first.id, 'A')
+      b = hook.current().renameSession(first.id, 'B')
+    })
+    renameB.resolve()
+    renameA.resolve()
+    await act(() => Promise.all([a, b]))
+    expect(serverTitle).toBe('B')
+    expect(hook.current().sessions[0].title).toBe('B')
+  })
+
+  it('continues the same-session rename queue after failure and confirms the later title', async () => {
+    const renameA = deferred<void>()
+    const renameB = deferred<void>()
+    const rename = vi.fn(async (_id: string, title: string) => {
+      await (title === 'A' ? renameA.promise : renameB.promise)
+      return { ...first, title }
+    })
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first]), rename }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let a!: Promise<void>
+    let b!: Promise<void>
+    act(() => {
+      a = hook.current().renameSession(first.id, 'A')
+      b = hook.current().renameSession(first.id, 'B')
+    })
+    await waitFor(() => expect(rename).toHaveBeenCalledTimes(1))
+    renameA.reject(new Error('A failed'))
+    await act(async () => { await expect(a).rejects.toThrow('A failed') })
+    await waitFor(() => expect(rename).toHaveBeenCalledTimes(2))
+    renameB.resolve()
+    await act(() => b)
+    expect(hook.current().sessions[0].title).toBe('B')
+  })
+
+  it('restores the last confirmed title when every queued rename fails', async () => {
+    const renameA = deferred<void>()
+    const renameB = deferred<void>()
+    const rename = vi.fn(async (_id: string, title: string) => {
+      await (title === 'A' ? renameA.promise : renameB.promise)
+      return { ...first, title }
+    })
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first]), rename }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let a!: Promise<void>
+    let b!: Promise<void>
+    act(() => {
+      a = hook.current().renameSession(first.id, 'A')
+      b = hook.current().renameSession(first.id, 'B')
+    })
+    renameA.reject(new Error('A failed'))
+    await act(async () => { await expect(a).rejects.toThrow('A failed') })
+    renameB.reject(new Error('B failed'))
+    await act(async () => { await expect(b).rejects.toThrow('B failed') })
+    expect(hook.current().sessions[0].title).toBe(first.title)
+  })
+
+  it('allows different sessions to rename in parallel', async () => {
+    const pendingFirst = deferred<void>()
+    const pendingSecond = deferred<void>()
+    const rename = vi.fn(async (id: string, title: string) => {
+      await (id === first.id ? pendingFirst.promise : pendingSecond.promise)
+      return { ...(id === first.id ? first : second), title }
+    })
+    const hook = renderHistory(api({ rename }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let one!: Promise<void>
+    let two!: Promise<void>
+    act(() => {
+      one = hook.current().renameSession(first.id, '一')
+      two = hook.current().renameSession(second.id, '二')
+    })
+    await waitFor(() => expect(rename).toHaveBeenCalledTimes(2))
+    pendingFirst.resolve()
+    pendingSecond.resolve()
+    await act(() => Promise.all([one, two]))
   })
 
   it('deduplicates identical stable events but allows the same event_id to advance status', async () => {
@@ -326,23 +541,35 @@ describe('durable Agent session state', () => {
   })
 
   it('refreshes both detail and list after retry done', async () => {
-    const failed = detail(first, '查询失败')
-    failed.turns[0] = {
-      ...failed.turns[0], status: 'failed',
-      steps: [{ id: 'read', eventId: '99999999-9999-4999-8999-999999999999', label: '查询', status: 'failed',
-        tool: 'list_todos', retryable: true, retryToken: 'opaque-server-token-that-is-long-enough' }],
-    }
+    const failed = parsedFailedDetail()
     const restored = detail(first, '重试后服务端轮次', 'server-retry-step')
     const list = vi.fn().mockResolvedValue([first])
-    const detailMock = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(restored)
+    const detailMock = vi.fn()
+      .mockResolvedValueOnce({ ...first, turns: [] })
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(restored)
     const client = new ControlledClient()
     const hook = renderHistory(api({ list, detail: detailMock }), client)
-    await waitFor(() => expect(hook.current().canRetry('read')).toBe(true))
-    act(() => hook.current().retry('read'))
-    act(() => client.handlers[0].onEvent({ type: 'done' }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().send('查询'))
+    act(() => {
+      client.handlers[0].onEvent({
+        type: 'step_started', event_id: '99999999-9999-4999-8999-999999999999',
+        step_id: 'wire-read', label: '查询', tool: 'list_todos',
+      })
+      client.handlers[0].onEvent({
+        type: 'step_failed', event_id: '99999999-9999-4999-8999-999999999999', step_id: 'wire-read',
+        error_code: 'X', message: '失败', retryable: true,
+        retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 1,
+      })
+      client.handlers[0].onEvent({ type: 'done' })
+    })
+    await waitFor(() => expect(hook.current().canRetry(failed.turns[0].steps[0].id)).toBe(true))
+    act(() => hook.current().retry(failed.turns[0].steps[0].id))
+    act(() => client.handlers[1].onEvent({ type: 'done' }))
 
-    await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(3))
     expect(hook.current().turns[0].steps[0].id).toBe('server-retry-step')
   })
 

@@ -32,6 +32,15 @@ const activeStatuses = new Set<AgentSessionState['status']>([
 
 const readOnlyRetryTools = new Set(['list_todos', 'get_todo'])
 
+interface EphemeralRetryCapability {
+  eventId: string
+  wireStepId: string
+  retryToken: string
+  sessionId: string
+  streamGeneration: number
+  ready: boolean
+}
+
 export function canRetryServerStep(state: AgentSessionState, stepId: string): boolean {
   const failedStep = state.steps.find((step) => step.id === stepId)
   const toolSteps = state.steps.filter((step) => typeof step.tool === 'string')
@@ -78,6 +87,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const [turns, setTurns] = useState<AgentTurn[]>([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(durableHistory)
   const [historyError, setHistoryError] = useState<string>()
+  const [hasReadyRetryCapability, setHasReadyRetryCapability] = useState(false)
   const sessionsRef = useRef<AgentSessionSummary[]>([])
   const stateRef = useRef(state)
   const cancelRef = useRef<(() => void) | undefined>(undefined)
@@ -99,7 +109,36 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const deletedIdsRef = useRef(new Set<string>())
   const seenEventsRef = useRef(new Set<string>())
   const renameGenerationsRef = useRef(new Map<string, number>())
+  const renameQueuesRef = useRef(new Map<string, Promise<void>>())
+  const confirmedSessionsRef = useRef(new Map<string, AgentSessionSummary>())
   const deleteGenerationsRef = useRef(new Map<string, number>())
+  const retryCapabilitiesRef = useRef(new Map<string, EphemeralRetryCapability>())
+
+  const clearRetryCapabilities = useCallback(() => {
+    retryCapabilitiesRef.current.clear()
+    setHasReadyRetryCapability(false)
+  }, [])
+
+  const captureRetryCapability = useCallback((event: AgentReducerAction, sessionId: string, streamGeneration: number) => {
+    if (event.type !== 'step_failed' || !event.retry_token) return
+    const current = stateRef.current
+    const failedStep = current.steps.find((step) => step.id === event.step_id)
+    const toolSteps = current.steps.filter((step) => typeof step.tool === 'string')
+    const safe = failedStep?.tool !== undefined
+      && readOnlyRetryTools.has(failedStep.tool)
+      && toolSteps.length > 0
+      && toolSteps.every((step) => readOnlyRetryTools.has(step.tool!))
+      && !current.steps.some((step) => step.status === 'completed' && Boolean(step.action))
+    if (!safe) return
+    retryCapabilitiesRef.current.set(event.event_id, {
+      eventId: event.event_id,
+      wireStepId: event.step_id,
+      retryToken: event.retry_token,
+      sessionId,
+      streamGeneration,
+      ready: false,
+    })
+  }, [])
 
   const updateSessions = useCallback((update: (current: AgentSessionSummary[]) => AgentSessionSummary[]) => {
     setSessions((current) => {
@@ -139,13 +178,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const dispatch = useCallback((action: AgentReducerAction) => {
     if (durableHistory && 'event_id' in action) {
       const eventKey = `${action.event_id}:${action.type}`
-      if (seenEventsRef.current.has(eventKey)) return
+      if (seenEventsRef.current.has(eventKey)) return false
       seenEventsRef.current.add(eventKey)
     }
     const next = reduceAgent(stateRef.current, action)
     stateRef.current = next
     setState(next)
-    if (!durableHistory) return
+    if (!durableHistory) return true
     if (action.type === 'request_started') {
       const active: AgentTurn = {
         id: action.turnId ?? `pending-${action.messageId}`,
@@ -154,10 +193,10 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
         messages: [next.messages.at(-1)!], steps: [],
       }
       commitTurns([...turnsRef.current, active])
-      return
+      return true
     }
     const current = turnsRef.current.at(-1)
-    if (!current) return
+    if (!current) return true
     const assistant = next.activeAssistantMessageId
       ? next.messages.find((message) => message.id === next.activeAssistantMessageId)
       : undefined
@@ -171,6 +210,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       ...turnsRef.current.slice(0, -1),
       { ...current, messages: currentMessages, steps: next.steps, status: turnStatus },
     ])
+    return true
   }, [commitTurns, durableHistory])
 
   const closeStream = useCallback(() => {
@@ -204,10 +244,14 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     try {
       const detail = await sessionsApi.detail(sessionId, controller.signal)
       if (!mountedRef.current || generation !== historyGenerationRef.current || selectedRef.current !== sessionId) return
-      commitDetail(sessionId, detail.turns)
-      updateSessions((current) => current.map((item) => item.id === sessionId ? {
+      const detailSummary = {
         id: detail.id, title: detail.title, createdAt: detail.createdAt,
         updatedAt: detail.updatedAt, lastMessageAt: detail.lastMessageAt,
+      }
+      confirmedSessionsRef.current.set(sessionId, detailSummary)
+      commitDetail(sessionId, detail.turns)
+      updateSessions((current) => current.map((item) => item.id === sessionId ? {
+        ...detailSummary,
       } : item))
     } catch (error) {
       if (!mountedRef.current || generation !== historyGenerationRef.current || controller.signal.aborted) return
@@ -221,6 +265,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     if (!sessions.some((item) => item.id === sessionId) || deletedIdsRef.current.has(sessionId)) return
     generationRef.current++
     closeStream()
+    clearRetryCapabilities()
     selectionGenerationRef.current++
     selectedRef.current = sessionId
     setSelectedSessionId(sessionId)
@@ -231,7 +276,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       return
     }
     void loadDetail(sessionId)
-  }, [closeStream, displayedSessionId, historyError, loadDetail, sessions])
+  }, [clearRetryCapabilities, closeStream, displayedSessionId, historyError, loadDetail, sessions])
 
   const loadSessions = useCallback(async (): Promise<void> => {
     const generation = ++listGenerationRef.current
@@ -244,6 +289,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       const listed = await sessionsApi.list(controller.signal)
       if (!mountedRef.current || generation !== listGenerationRef.current) return
       const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
+      for (const item of visible) confirmedSessionsRef.current.set(item.id, item)
       sessionsRef.current = visible
       setSessions(visible)
       const target = visible.some((item) => item.id === selectedRef.current)
@@ -266,7 +312,11 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     listAbortRef.current?.abort()
   }, [])
 
-  const syncDurableSession = useCallback(async (sessionId: string, expectedSelectionGeneration: number): Promise<void> => {
+  const syncDurableSession = useCallback(async (
+    sessionId: string,
+    expectedSelectionGeneration: number,
+    sourceStreamGeneration: number,
+  ): Promise<void> => {
     const generation = ++syncGenerationRef.current
     syncAbortRef.current?.abort()
     const controller = new AbortController()
@@ -285,9 +335,25 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       ])
       if (!isCurrentOperation()) return
       const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
+      for (const item of visible) confirmedSessionsRef.current.set(item.id, item)
       sessionsRef.current = visible
       setSessions(visible)
       commitDetail(sessionId, detail.turns)
+      const latest = detail.turns.at(-1)
+      const failedEventIds = new Set(latest?.steps
+        .filter((step) => step.status === 'failed')
+        .map((step) => step.eventId) ?? [])
+      const nextCapabilities = new Map<string, EphemeralRetryCapability>()
+      for (const capability of retryCapabilitiesRef.current.values()) {
+        const ready = capability.sessionId === sessionId
+          && capability.streamGeneration === sourceStreamGeneration
+          && latest?.resultUncertain === false
+          && failedEventIds.has(capability.eventId)
+        if (ready) nextCapabilities.set(capability.eventId, { ...capability, ready: true })
+        else if (capability.streamGeneration !== sourceStreamGeneration) nextCapabilities.set(capability.eventId, capability)
+      }
+      retryCapabilitiesRef.current = nextCapabilities
+      setHasReadyRetryCapability([...nextCapabilities.values()].some((capability) => capability.ready))
     } catch (error) {
       if (!isCurrentOperation()) return
       setHistoryError(error instanceof Error ? error.message : '同步会话失败')
@@ -308,9 +374,11 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     const operation = (async () => {
       const created = await sessionsApi.create(title ? { title } : {})
       if (!mountedRef.current || deletedIdsRef.current.has(created.id)) return
+      confirmedSessionsRef.current.set(created.id, created)
       updateSessions((current) => [created, ...current.filter((item) => item.id !== created.id)])
       if (selectedRef.current !== selectionAtStart || historyGenerationRef.current !== historyGeneration) return
       selectionGenerationRef.current++
+      clearRetryCapabilities()
       selectedRef.current = created.id
       setSelectedSessionId(created.id)
       await loadDetail(created.id)
@@ -319,33 +387,50 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     })
     createPromiseRef.current = operation
     return operation
-  }, [loadDetail, sessionsApi, updateSessions])
+  }, [clearRetryCapabilities, loadDetail, sessionsApi, updateSessions])
 
   const renameSession = useCallback(async (sessionId: string, title: string): Promise<void> => {
     if (deletedIdsRef.current.has(sessionId)) return
     const generation = (renameGenerationsRef.current.get(sessionId) ?? 0) + 1
     renameGenerationsRef.current.set(sessionId, generation)
-    const previous = sessions.find((item) => item.id === sessionId)
+    const current = sessionsRef.current.find((item) => item.id === sessionId)
+    if (current && !confirmedSessionsRef.current.has(sessionId)) confirmedSessionsRef.current.set(sessionId, current)
     updateSessions((current) => current.map((item) => item.id === sessionId ? { ...item, title } : item))
-    try {
-      const renamed = await sessionsApi.rename(sessionId, title)
-      if (deletedIdsRef.current.has(sessionId) || renameGenerationsRef.current.get(sessionId) !== generation) return
-      updateSessions((current) => current.map((item) => item.id === sessionId ? renamed : item))
-    } catch (error) {
-      if (previous && !deletedIdsRef.current.has(sessionId) && renameGenerationsRef.current.get(sessionId) === generation) {
-        updateSessions((current) => current.map((item) => item.id === sessionId ? previous : item))
+    const previousQueue = renameQueuesRef.current.get(sessionId) ?? Promise.resolve()
+    const operation = previousQueue.then(async () => {
+      if (deletedIdsRef.current.has(sessionId)) return
+      try {
+        const renamed = await sessionsApi.rename(sessionId, title)
+        if (deletedIdsRef.current.has(sessionId)) return
+        confirmedSessionsRef.current.set(sessionId, renamed)
+        if (renameGenerationsRef.current.get(sessionId) === generation) {
+          updateSessions((current) => current.map((item) => item.id === sessionId ? renamed : item))
+        }
+      } catch (error) {
+        if (!deletedIdsRef.current.has(sessionId) && renameGenerationsRef.current.get(sessionId) === generation) {
+          const confirmed = confirmedSessionsRef.current.get(sessionId)
+          if (confirmed) updateSessions((current) => current.map((item) => item.id === sessionId ? confirmed : item))
+        }
+        throw error
       }
-      throw error
-    }
-  }, [sessions, sessionsApi, updateSessions])
+    })
+    const tail = operation.then(() => undefined, () => undefined)
+    renameQueuesRef.current.set(sessionId, tail)
+    void tail.then(() => {
+      if (renameQueuesRef.current.get(sessionId) === tail) renameQueuesRef.current.delete(sessionId)
+    })
+    return operation
+  }, [sessionsApi, updateSessions])
 
   const deleteSession = useCallback(async (sessionId: string): Promise<void> => {
     if (deletedIdsRef.current.has(sessionId)) return
+    if (selectedRef.current === sessionId) clearRetryCapabilities()
     const deleteGeneration = (deleteGenerationsRef.current.get(sessionId) ?? 0) + 1
     deleteGenerationsRef.current.set(sessionId, deleteGeneration)
     const orderToken = sessionsRef.current.map((item) => item.id)
     const previous = sessionsRef.current.find((item) => item.id === sessionId)
     deletedIdsRef.current.add(sessionId)
+    confirmedSessionsRef.current.delete(sessionId)
     renameGenerationsRef.current.set(sessionId, (renameGenerationsRef.current.get(sessionId) ?? 0) + 1)
     const wasCurrent = selectedRef.current === sessionId
     updateSessions((current) => current)
@@ -362,6 +447,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       if (!(error instanceof ApiError && error.status === 404)) {
         if (deleteGenerationsRef.current.get(sessionId) === deleteGeneration && deletedIdsRef.current.has(sessionId)) {
           deletedIdsRef.current.delete(sessionId)
+          if (previous) confirmedSessionsRef.current.set(sessionId, previous)
           if (previous) updateSessions((current) => {
             if (current.some((item) => item.id === sessionId)) return current
             const originalIndex = orderToken.indexOf(sessionId)
@@ -389,7 +475,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       setState(initialAgentState)
       setIsHistoryLoading(false)
     }
-  }, [closeStream, commitTurns, loadSessions, sessionsApi, updateSessions])
+  }, [clearRetryCapabilities, closeStream, commitTurns, loadSessions, sessionsApi, updateSessions])
 
   const dispatchSynchronousFailure = useCallback((error: unknown) => {
     dispatch({
@@ -407,6 +493,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     if (!trimmed
       || clearingRef.current
       || (durableHistory && (isHistoryLoading || selectedRef.current !== displayedSessionId))
+      || stateRef.current.resultUncertain === true
       || !stateRef.current.serverDone
       || activeStatuses.has(stateRef.current.status)) return false
     let sessionId: string
@@ -423,6 +510,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
 
     const generation = ++generationRef.current
     closeStream()
+    if (durableHistory) clearRetryCapabilities()
     dispatch({
       type: 'request_started',
       message: trimmed,
@@ -439,15 +527,19 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
           onOpen: () => { if (isCurrent()) dispatch({ type: 'connected' }) },
           onEvent: (event) => {
             if (!isCurrent()) return
-            dispatch(event)
+            const accepted = dispatch(event)
+            if (accepted) captureRetryCapability(event, sessionId, generation)
             if (event.type === 'done') {
               const selectionGeneration = selectionGenerationRef.current
               invalidateRequest(generation)
-              if (durableHistory && selectedRef.current === sessionId) void syncDurableSession(sessionId, selectionGeneration)
+              if (durableHistory && selectedRef.current === sessionId) {
+                void syncDurableSession(sessionId, selectionGeneration, generation)
+              }
             }
           },
           onFailure: (failure) => {
             if (!isCurrent()) return
+            clearRetryCapabilities()
             dispatch({ type: 'client_failed', failure })
             invalidateRequest(generation)
           },
@@ -465,19 +557,31 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       }
     }
     return true
-  }, [client, closeStream, dispatch, dispatchSynchronousFailure, displayedSessionId, durableHistory, idFactory, invalidateRequest, isHistoryLoading, messageIdFactory, now, sessionIdFactory, syncDurableSession])
+  }, [captureRetryCapability, clearRetryCapabilities, client, closeStream, dispatch, dispatchSynchronousFailure, displayedSessionId, durableHistory, idFactory, invalidateRequest, isHistoryLoading, messageIdFactory, now, sessionIdFactory, syncDurableSession])
 
   const send = useCallback((message: string) => startRequest(message), [startRequest])
 
-  const canRetry = useCallback((stepId: string) => (
-    canRetryServerStep(stateRef.current, stepId)
-  ), [])
+  const canRetry = useCallback((stepId: string) => {
+    if (!durableHistory) return canRetryServerStep(stateRef.current, stepId)
+    const step = stateRef.current.steps.find((candidate) => candidate.id === stepId)
+    const capability = step?.eventId ? retryCapabilitiesRef.current.get(step.eventId) : undefined
+    return capability?.ready === true
+      && capability.sessionId === selectedRef.current
+      && stateRef.current.serverDone
+      && stateRef.current.status === 'failed'
+      && stateRef.current.resultUncertain !== true
+  }, [durableHistory])
 
   const retry = useCallback((stepId: string) => {
     const current = stateRef.current
     const step = current.steps.find((candidate) => candidate.id === stepId)
-    if (!canRetryServerStep(current, stepId) || !current.sessionId || !step?.retryToken) return
+    const capability = durableHistory && step?.eventId ? retryCapabilitiesRef.current.get(step.eventId) : undefined
+    if (durableHistory ? !canRetry(stepId) || !capability : !canRetryServerStep(current, stepId) || !step?.retryToken) return
+    if (!current.sessionId) return
     const sessionId = current.sessionId
+    const wireStepId = capability?.wireStepId ?? stepId
+    const retryToken = capability?.retryToken ?? step!.retryToken!
+    if (capability) clearRetryCapabilities()
     const generation = ++generationRef.current
     closeStream()
     dispatch({ type: 'retry_started', stepId })
@@ -487,24 +591,26 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
         {
           type: 'retry_step',
           session_id: sessionId,
-          step_id: stepId,
-          retry_token: step.retryToken,
+          step_id: wireStepId,
+          retry_token: retryToken,
         },
         {
           onOpen: () => { if (isCurrent()) dispatch({ type: 'connected' }) },
           onEvent: (event) => {
             if (!isCurrent()) return
-            dispatch(event)
+            const accepted = dispatch(event)
+            if (accepted) captureRetryCapability(event, sessionId, generation)
             if (event.type === 'done') {
               const selectionGeneration = selectionGenerationRef.current
               invalidateRequest(generation)
               if (durableHistory && selectedRef.current === sessionId) {
-                void syncDurableSession(sessionId, selectionGeneration)
+                void syncDurableSession(sessionId, selectionGeneration, generation)
               }
             }
           },
           onFailure: (failure) => {
             if (!isCurrent()) return
+            clearRetryCapabilities()
             dispatch({ type: 'client_failed', failure })
             invalidateRequest(generation)
           },
@@ -518,7 +624,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
         invalidateRequest(generation)
       }
     }
-  }, [client, closeStream, dispatch, dispatchSynchronousFailure, durableHistory, invalidateRequest, syncDurableSession])
+  }, [canRetry, captureRetryCapability, clearRetryCapabilities, client, closeStream, dispatch, dispatchSynchronousFailure, durableHistory, invalidateRequest, syncDurableSession])
 
   const resolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
     if (clearingRef.current) return
@@ -544,11 +650,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const cancel = useCallback(() => {
     if (clearingRef.current) return
     generationRef.current++
+    clearRetryCapabilities()
     closeStream()
     dispatch({ type: 'cancelled' })
-  }, [closeStream, dispatch])
+  }, [clearRetryCapabilities, closeStream, dispatch])
 
   const clear = useCallback((): Promise<void> => {
+    clearRetryCapabilities()
     if (durableHistory && selectedRef.current) return deleteSession(selectedRef.current)
     if (clearPromiseRef.current) return clearPromiseRef.current
     const currentSessionId = stateRef.current.sessionId
@@ -589,7 +697,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     })()
     clearPromiseRef.current = operation
     return operation
-  }, [closeStream, deleteSession, dispatch, durableHistory, historyApi])
+  }, [clearRetryCapabilities, closeStream, deleteSession, dispatch, durableHistory, historyApi])
 
   const deactivateLifecycle = useCallback(() => {
     mountedRef.current = false
@@ -599,8 +707,9 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     cancelSessionList()
     syncGenerationRef.current++
     syncAbortRef.current?.abort()
+    clearRetryCapabilities()
     closeStream()
-  }, [cancelSessionList, closeStream])
+  }, [cancelSessionList, clearRetryCapabilities, closeStream])
 
   useEffect(() => {
     if (!durableHistory) return
@@ -627,9 +736,12 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     status: state.status,
     capabilities: {
       supportsStepRetry: state.serverDone
-        && state.steps.some((step) => typeof step.retryToken === 'string'),
+        && (durableHistory
+          ? hasReadyRetryCapability
+          : state.steps.some((step) => typeof step.retryToken === 'string')),
     },
     canSend: !isClearing && state.serverDone && !activeStatuses.has(state.status)
+      && state.resultUncertain !== true
       && (!durableHistory || (Boolean(selectedSessionId) && !isHistoryLoading && selectedSessionId === displayedSessionId)),
     isClearing,
     send,
