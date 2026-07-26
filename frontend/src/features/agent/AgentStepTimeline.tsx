@@ -29,9 +29,11 @@ function ActionResult({ action, result }: { action: string; result: Record<strin
   )
 }
 
-function AgentStepItem({ step, retryAllowed, onRetry, onConfirm, onReject }: {
+function AgentStepItem({ step, retryAllowed, confirmationAllowed, actionPending, onRetry, onConfirm, onReject }: {
   step: AgentStep
   retryAllowed: boolean
+  confirmationAllowed: boolean
+  actionPending: boolean
   onRetry(stepId: string): void
   onConfirm(confirmationId: string): void
   onReject(confirmationId: string): void
@@ -53,19 +55,19 @@ function AgentStepItem({ step, retryAllowed, onRetry, onConfirm, onReject }: {
           <strong>{step.label}</strong>
           <span>{statusLabels[step.status]}</span>
         </div>
-        {elapsed !== undefined ? <time className="agent-step__timer tabular-nums">{formatDuration(elapsed)}</time> : null}
+        {elapsed !== undefined ? <time className="agent-step__timer tabular-nums" aria-hidden="true">{formatDuration(elapsed)}</time> : null}
         {step.tool ? <code className="agent-step__tool">{step.tool}</code> : null}
-        {step.errorMessage ? <p className="agent-step__error" role="alert">{step.errorMessage}</p> : null}
+        {step.errorMessage ? <p className="agent-step__error">{step.errorMessage}</p> : null}
         {step.action && isResultRecord(step.result) ? <ActionResult action={step.action} result={step.result} /> : null}
         {step.status === 'failed' && step.retryable && retryAllowed ? (
-          <Button variant="secondary" size="sm" onClick={() => onRetry(step.id)} aria-label={`重试${step.label}`}>重试</Button>
+          <Button variant="secondary" size="sm" disabled={actionPending} onClick={() => onRetry(step.id)} aria-label={`重试${step.label}`}>重试</Button>
         ) : null}
-        {step.status === 'waiting_confirmation' && step.confirmationId ? (
+        {step.status === 'waiting_confirmation' && step.confirmationId && confirmationAllowed ? (
           <div className="agent-step__confirmation">
             <p>{step.confirmationMessage}</p>
             <div>
-              <Button variant="ghost" size="sm" onClick={() => onReject(step.confirmationId!)} aria-label={`取消${step.label}`}>取消</Button>
-              <Button size="sm" onClick={() => onConfirm(step.confirmationId!)} aria-label={`确认${step.label}`}>确认</Button>
+              <Button variant="ghost" size="sm" disabled={actionPending} onClick={() => onReject(step.confirmationId!)} aria-label={`取消${step.label}`}>取消</Button>
+              <Button size="sm" disabled={actionPending} onClick={() => onConfirm(step.confirmationId!)} aria-label={`确认${step.label}`}>确认</Button>
             </div>
           </div>
         ) : null}
@@ -74,18 +76,36 @@ function AgentStepItem({ step, retryAllowed, onRetry, onConfirm, onReject }: {
   )
 }
 
-export default function AgentStepTimeline({ steps, canRetry, onRetry, onConfirm, onReject }: {
+export default function AgentStepTimeline({ steps, canRetry, activeRetryStepId, activeConfirmationId, pendingActionId, onRetry, onConfirm, onReject }: {
   steps: AgentStep[]
-  capabilities: AgentCapabilities
+  capabilities?: AgentCapabilities
   canRetry?(stepId: string): boolean
+  activeRetryStepId?: string | null
+  activeConfirmationId?: string | null
+  pendingActionId?: string
   onRetry(stepId: string): void
   onConfirm(confirmationId: string): void
   onReject(confirmationId: string): void
 }) {
   if (!steps.length) return null
+  const retryStepId = activeRetryStepId === undefined
+    ? steps.find((step) => step.status === 'failed' && canRetry?.(step.id) === true)?.id
+    : activeRetryStepId
+  const confirmationId = activeConfirmationId === undefined
+    ? steps.filter((step) => step.status === 'waiting_confirmation' && step.confirmationId).at(-1)?.confirmationId
+    : activeConfirmationId
   return (
     <ol className="agent-timeline" aria-label="Agent 执行步骤">
-      {steps.map((step) => <AgentStepItem key={step.id} step={step} retryAllowed={canRetry?.(step.id) === true} onRetry={onRetry} onConfirm={onConfirm} onReject={onReject} />)}
+      {steps.map((step) => <AgentStepItem
+        key={step.id}
+        step={step}
+        retryAllowed={step.id === retryStepId}
+        confirmationAllowed={step.confirmationId === confirmationId}
+        actionPending={Boolean(pendingActionId) && (pendingActionId === step.id || pendingActionId === step.confirmationId)}
+        onRetry={onRetry}
+        onConfirm={onConfirm}
+        onReject={onReject}
+      />)}
     </ol>
   )
 }
