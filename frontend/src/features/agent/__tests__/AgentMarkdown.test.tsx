@@ -1,7 +1,9 @@
 import { render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import styles from '../../../styles/global.css?raw'
 import { AgentMarkdown } from '../AgentMarkdown'
+
+afterEach(() => vi.restoreAllMocks())
 
 describe('AgentMarkdown', () => {
   it('renders semantic Markdown and GFM content', () => {
@@ -102,6 +104,57 @@ const status = 'ready'
     expect(screen.getByRole('alert', { name: 'Markdown 渲染失败' })).toHaveTextContent(content)
     expect(screen.queryByText('保留原始回复')).not.toBeInTheDocument()
     consoleError.mockRestore()
+  })
+
+  it('recovers for the same content when the failing renderer is replaced', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const content = '**渲染已恢复**'
+    function ThrowingParagraph(): never {
+      throw new Error('renderer failed')
+    }
+    const view = render(<AgentMarkdown content={content} components={{ p: ThrowingParagraph }} />)
+    expect(screen.getByRole('alert', { name: 'Markdown 渲染失败' })).toBeVisible()
+
+    view.rerender(<AgentMarkdown content={content} />)
+
+    expect(screen.queryByRole('alert', { name: 'Markdown 渲染失败' })).not.toBeInTheDocument()
+    expect(screen.getByText('渲染已恢复').tagName).toBe('STRONG')
+  })
+
+  it('retries rendering when the content changes', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    let shouldThrow = true
+    function RecoveringParagraph({ children }: { children?: React.ReactNode }) {
+      if (shouldThrow) throw new Error('renderer failed')
+      return <p>{children}</p>
+    }
+    const components = { p: RecoveringParagraph }
+    const view = render(<AgentMarkdown content="旧回复" components={components} />)
+    expect(screen.getByRole('alert', { name: 'Markdown 渲染失败' })).toHaveTextContent('旧回复')
+
+    shouldThrow = false
+    view.rerender(<AgentMarkdown content="新回复" components={components} />)
+
+    expect(screen.queryByRole('alert', { name: 'Markdown 渲染失败' })).not.toBeInTheDocument()
+    expect(screen.getByText('新回复')).toBeVisible()
+  })
+
+  it('keeps the fallback stable while the same renderer continues throwing', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const attempts = vi.fn()
+    function ThrowingParagraph(): never {
+      attempts()
+      throw new Error('persistent renderer failure')
+    }
+    const firstComponents = { p: ThrowingParagraph }
+    const view = render(<AgentMarkdown content="持续失败" components={firstComponents} />)
+    expect(screen.getByRole('alert', { name: 'Markdown 渲染失败' })).toBeVisible()
+    const attemptsAfterFallback = attempts.mock.calls.length
+
+    view.rerender(<AgentMarkdown content="持续失败" components={{ p: ThrowingParagraph }} />)
+
+    expect(screen.getByRole('alert', { name: 'Markdown 渲染失败' })).toBeVisible()
+    expect(attempts).toHaveBeenCalledTimes(attemptsAfterFallback)
   })
 })
 

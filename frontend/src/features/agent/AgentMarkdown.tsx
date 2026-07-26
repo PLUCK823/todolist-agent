@@ -111,10 +111,19 @@ const safeComponents: Components = {
 interface MarkdownErrorBoundaryProps {
   children: ReactNode
   content: string
+  resetComponents?: Components
 }
 
 interface MarkdownErrorBoundaryState {
   failed: boolean
+}
+
+function hasSameComponents(previous?: Components, next?: Components) {
+  if (previous === next) return true
+  const previousEntries = Object.entries(previous ?? {})
+  const nextEntries = Object.entries(next ?? {})
+  return previousEntries.length === nextEntries.length
+    && previousEntries.every(([name, component]) => (next ?? {})[name as keyof Components] === component)
 }
 
 class MarkdownErrorBoundary extends Component<MarkdownErrorBoundaryProps, MarkdownErrorBoundaryState> {
@@ -130,6 +139,15 @@ class MarkdownErrorBoundary extends Component<MarkdownErrorBoundaryProps, Markdo
     // The original response remains visible; host-level observability can capture React errors.
   }
 
+  componentDidUpdate(previous: MarkdownErrorBoundaryProps) {
+    if (this.state.failed && (
+      previous.content !== this.props.content
+      || !hasSameComponents(previous.resetComponents, this.props.resetComponents)
+    )) {
+      this.setState({ failed: false })
+    }
+  }
+
   render() {
     if (this.state.failed) {
       return <pre className="agent-markdown agent-markdown--fallback" role="alert" aria-label="Markdown 渲染失败">{this.props.content}</pre>
@@ -140,7 +158,7 @@ class MarkdownErrorBoundary extends Component<MarkdownErrorBoundaryProps, Markdo
 
 export function AgentMarkdown({ content, components }: AgentMarkdownProps) {
   return (
-    <MarkdownErrorBoundary key={content} content={content}>
+    <MarkdownErrorBoundary content={content} resetComponents={components}>
       <div className="agent-markdown">
         <ReactMarkdown
           allowedElements={allowedElements}
