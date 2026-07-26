@@ -103,7 +103,7 @@ export default function AssistantPage() {
 
   return (
     <div className="assistant-workspace">
-      <aside className="assistant-sessions" data-open={mobileSessionsOpen || undefined} aria-label="会话列表">
+      <aside id="assistant-session-drawer" className="assistant-sessions" data-open={mobileSessionsOpen || undefined} aria-label="会话列表">
         <header>
           <span className="agent-spark" aria-hidden="true">✦</span><strong>Agent</strong>
           <button type="button" className="assistant-sessions__close" aria-label="关闭会话列表" onClick={() => setMobileSessionsOpen(false)}>×</button>
@@ -118,7 +118,15 @@ export default function AssistantPage() {
 
       <section className="assistant-conversation" id="current">
         <header className="assistant-conversation__header">
-          <Button className="assistant-sessions__open" variant="ghost" size="sm" aria-label="打开会话列表" onClick={() => setMobileSessionsOpen(true)}>会话</Button>
+          <Button
+            className="assistant-sessions__open"
+            variant="ghost"
+            size="sm"
+            aria-label="打开会话列表"
+            aria-controls="assistant-session-drawer"
+            aria-expanded={mobileSessionsOpen}
+            onClick={() => setMobileSessionsOpen(true)}
+          >会话</Button>
           <div><p>WORKSPACE / TODAY</p><h1>智能助手</h1><span>{agentStatus.label}</span></div>
           <Button variant="ghost" size="sm" disabled={session.isClearing || !session.displayedSessionId} onClick={() => { setClearError(''); setClearOpen(true) }}>
             {session.isClearing ? '正在清空…' : '清空对话'}

@@ -38,7 +38,7 @@ describe('assistant workspace layout contract', () => {
     expect(globalStyles).toMatch(/\.assistant-conversation\s*\{[\s\S]*?grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/)
     expect(globalStyles).not.toMatch(/\.assistant-(?:workspace|conversation|empty)[^{]*\{[^}]*min-height:\s*(?:100%|100vh|100dvh)/)
     expect(globalStyles).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.assistant-conversation[\s\S]*?min-width:\s*0/)
-    expect(globalStyles).toMatch(/@media \(max-width:\s*760px\)[\s\S]*?\.assistant-sessions\s*\{[\s\S]*?visibility:\s*hidden/)
+    expect(globalStyles).toMatch(/@media \(max-width:\s*860px\)[\s\S]*?\.assistant-sessions\s*\{[\s\S]*?visibility:\s*hidden/)
     expect(globalStyles).toMatch(/\.assistant-sessions\[data-open="true"\][^{]*\{[^}]*visibility:\s*visible/)
   })
 })
