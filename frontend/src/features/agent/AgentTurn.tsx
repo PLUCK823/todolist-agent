@@ -61,8 +61,8 @@ export default function AgentTurn({
   pendingConfirmationId,
   canRetry,
   onRetry = noop,
-  onConfirm = noop,
-  onReject = noop,
+  onConfirm,
+  onReject,
 }: AgentTurnProps) {
   const disclosureId = useId()
   const buttonId = `${disclosureId}-button`
@@ -85,12 +85,13 @@ export default function AgentTurn({
   const activeRetryStepId = turn.resultUncertain
     ? null
     : turn.steps.find((step) => step.status === 'failed' && step.retryable && retryAllowed(step.id))?.id ?? null
-  const confirmationSteps = turn.steps.filter((step) => step.status === 'waiting_confirmation' && step.confirmationId)
-  const activeConfirmationId = turn.resultUncertain || turn.status !== 'waiting_confirmation'
+  const activeConfirmationId = turn.resultUncertain
+    || turn.status !== 'waiting_confirmation'
+    || !onConfirm
+    || !onReject
+    || !pendingConfirmationId
     ? null
-    : confirmationSteps.find((step) => step.confirmationId === pendingConfirmationId)?.confirmationId
-      ?? confirmationSteps.at(-1)?.confirmationId
-      ?? null
+    : turn.steps.find((step) => step.status === 'waiting_confirmation' && step.confirmationId === pendingConfirmationId)?.confirmationId ?? null
   const actionableKey = `${activeRetryStepId ?? ''}:${activeConfirmationId ?? ''}`
 
   const pendingActionId = pendingAction?.key === actionableKey ? pendingAction.id : undefined
@@ -103,8 +104,8 @@ export default function AgentTurn({
   const submitConfirmation = (confirmationId: string, approved: boolean) => {
     if (pendingActionId) return
     setPendingAction({ key: actionableKey, id: confirmationId })
-    if (approved) onConfirm(confirmationId)
-    else onReject(confirmationId)
+    if (approved) onConfirm?.(confirmationId)
+    else onReject?.(confirmationId)
   }
 
   return (

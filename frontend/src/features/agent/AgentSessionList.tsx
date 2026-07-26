@@ -11,6 +11,11 @@ interface SessionGroup {
   sessions: AgentSessionSummary[]
 }
 
+interface DialogTarget {
+  session: AgentSessionSummary
+  returnTarget: HTMLButtonElement | null
+}
+
 export interface AgentSessionListProps {
   sessions: AgentSessionSummary[]
   selectedSessionId?: string
@@ -67,8 +72,8 @@ function SessionItem({
   disabled: boolean
   selectRef(element: HTMLButtonElement | null): void
   onSelect(): void
-  onRename(): void
-  onDelete(): void
+  onRename(returnTarget: HTMLButtonElement | null): void
+  onDelete(returnTarget: HTMLButtonElement | null): void
 }) {
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -97,8 +102,8 @@ function SessionItem({
       />
       <Popover open={open} anchorRef={triggerRef} onOpenChange={setOpen} ariaLabel={`“${session.title}”会话操作`}>
         <div className="agent-session-list__actions">
-          <button type="button" onClick={() => { setOpen(false); onRename() }}>重命名会话</button>
-          <button type="button" onClick={() => { setOpen(false); onDelete() }}>删除会话</button>
+          <button type="button" onClick={() => { const target = triggerRef.current; setOpen(false); onRename(target) }}>重命名会话</button>
+          <button type="button" onClick={() => { const target = triggerRef.current; setOpen(false); onDelete(target) }}>删除会话</button>
         </div>
       </Popover>
     </li>
@@ -121,8 +126,8 @@ export default function AgentSessionList({
   onRename,
   onDelete,
 }: AgentSessionListProps) {
-  const [renameTarget, setRenameTarget] = useState<AgentSessionSummary>()
-  const [deleteTarget, setDeleteTarget] = useState<AgentSessionSummary>()
+  const [renameTarget, setRenameTarget] = useState<DialogTarget>()
+  const [deleteTarget, setDeleteTarget] = useState<DialogTarget>()
   const [renameValue, setRenameValue] = useState('')
   const [renameError, setRenameError] = useState('')
   const [deleteError, setDeleteError] = useState('')
@@ -134,16 +139,26 @@ export default function AgentSessionList({
   const sessionRefs = useRef(new Map<string, HTMLButtonElement>())
   const groups = groupAgentSessions(sessions, now)
 
-  const openRename = (item: AgentSessionSummary) => {
+  const focusAfterDialog = (target: DialogTarget) => {
+    window.setTimeout(() => {
+      const sessionItem = sessionRefs.current.get(target.session.id)
+      const candidates = [target.returnTarget, sessionItem, newSessionRef.current]
+      candidates.find((candidate) => candidate?.isConnected && !candidate.disabled)?.focus()
+    }, 0)
+  }
+
+  const openRename = (item: AgentSessionSummary, returnTarget: HTMLButtonElement | null) => {
     setRenameValue(item.title)
     setRenameError('')
-    setRenameTarget(item)
+    setRenameTarget({ session: item, returnTarget })
   }
 
   const closeRename = () => {
-    if (renamePending) return
+    if (renamePending || !renameTarget) return
+    const target = renameTarget
     setRenameTarget(undefined)
     setRenameError('')
+    focusAfterDialog(target)
   }
 
   const submitRename = async (event: FormEvent) => {
@@ -157,10 +172,10 @@ export default function AgentSessionList({
     setRenameError('')
     setRenamePending(true)
     try {
-      await onRename(renameTarget.id, title)
-      const focusTarget = sessionRefs.current.get(renameTarget.id)
+      await onRename(renameTarget.session.id, title)
+      const target = renameTarget
       setRenameTarget(undefined)
-      window.setTimeout(() => focusTarget?.focus(), 0)
+      focusAfterDialog(target)
     } catch (error) {
       setRenameError(errorMessage(error, '重命名失败，请重试。'))
     } finally {
@@ -168,29 +183,35 @@ export default function AgentSessionList({
     }
   }
 
-  const openDelete = (item: AgentSessionSummary) => {
+  const openDelete = (item: AgentSessionSummary, returnTarget: HTMLButtonElement | null) => {
     setDeleteError('')
-    setDeleteTarget(item)
+    setDeleteTarget({ session: item, returnTarget })
   }
 
   const closeDelete = () => {
-    if (deletePending) return
+    if (deletePending || !deleteTarget) return
+    const target = deleteTarget
     setDeleteTarget(undefined)
     setDeleteError('')
+    focusAfterDialog(target)
   }
 
   const submitDelete = async () => {
     if (!deleteTarget || deletePending) return
     setDeleteError('')
     setDeletePending(true)
-    const targetIndex = sessions.findIndex((item) => item.id === deleteTarget.id)
-    const fallbackId = sessions[targetIndex + 1]?.id ?? sessions[targetIndex - 1]?.id
+    const visualSessionIds = groups.flatMap((group) => group.sessions.map((item) => item.id))
+    const targetIndex = visualSessionIds.indexOf(deleteTarget.session.id)
+    const fallbackIds = [visualSessionIds[targetIndex + 1], visualSessionIds[targetIndex - 1]].filter(Boolean)
     try {
-      await onDelete(deleteTarget.id)
+      await onDelete(deleteTarget.session.id)
       setDeleteTarget(undefined)
       window.setTimeout(() => {
-        const fallback = fallbackId ? sessionRefs.current.get(fallbackId) : undefined
-        ;(fallback ?? newSessionRef.current)?.focus()
+        const fallback = fallbackIds
+          .map((id) => sessionRefs.current.get(id))
+          .find((candidate) => candidate?.isConnected && !candidate.disabled)
+        const newSession = newSessionRef.current
+        ;(fallback ?? (newSession?.isConnected && !newSession.disabled ? newSession : undefined))?.focus()
       }, 0)
     } catch (error) {
       setDeleteError(errorMessage(error, '删除失败，请重试。'))
@@ -225,8 +246,8 @@ export default function AgentSessionList({
                   else sessionRefs.current.delete(item.id)
                 }}
                 onSelect={() => onSelect(item.id)}
-                onRename={() => openRename(item)}
-                onDelete={() => openDelete(item)}
+                onRename={(returnTarget) => openRename(item, returnTarget)}
+                onDelete={(returnTarget) => openDelete(item, returnTarget)}
               />
             ))}
           </ul>
@@ -276,7 +297,7 @@ export default function AgentSessionList({
           </>
         )}
       >
-        <p>会话“{deleteTarget?.title}”将从历史记录中移除。</p>
+        <p>会话“{deleteTarget?.session.title}”将从历史记录中移除。</p>
         {deleteError ? <p className="agent-session-list__dialog-error" role="alert">{deleteError}</p> : null}
       </Dialog>
     </nav>

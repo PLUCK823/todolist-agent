@@ -94,7 +94,7 @@ describe('AgentTurn', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('操作可能已生效，请检查任务状态')
   })
 
-  it('renders one confirmation control and does not expose a historical retry without a token', () => {
+  it('keeps historical confirmations read-only without explicit callbacks', () => {
     render(<AgentTurn
       turn={makeTurn({
         status: 'waiting_confirmation',
@@ -103,12 +103,24 @@ describe('AgentTurn', () => {
           { id: 'failed', label: '查询任务', status: 'failed', retryable: true, errorMessage: '超时' },
         ],
       })}
+    />)
+
+    expect(screen.queryByRole('button', { name: '确认删除任务' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '取消删除任务' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试查询任务' })).not.toBeInTheDocument()
+  })
+
+  it('hides confirmation controls when the canonical id does not match a waiting step', () => {
+    render(<AgentTurn
+      turn={makeTurn({
+        status: 'waiting_confirmation',
+        steps: [{ id: 'confirm', label: '删除任务', status: 'waiting_confirmation', confirmationId: 'confirmation-1' }],
+      })}
+      pendingConfirmationId="stale-confirmation"
       onConfirm={vi.fn()}
       onReject={vi.fn()}
     />)
-
-    expect(screen.getAllByRole('button', { name: '确认删除任务' })).toHaveLength(1)
-    expect(screen.queryByRole('button', { name: '重试查询任务' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '确认删除任务' })).not.toBeInTheDocument()
   })
 
   it('chooses only one canonical confirmation and prevents duplicate submission', async () => {
@@ -124,6 +136,7 @@ describe('AgentTurn', () => {
       })}
       pendingConfirmationId="confirmation-1"
       onConfirm={onConfirm}
+      onReject={vi.fn()}
     />)
 
     const confirm = screen.getByRole('button', { name: '确认删除任务一' })

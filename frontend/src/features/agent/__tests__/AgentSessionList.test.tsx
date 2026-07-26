@@ -108,7 +108,8 @@ describe('AgentSessionList', () => {
     const pending = deferred<void>()
     const onRename = vi.fn().mockReturnValue(pending.promise)
     renderList({ onRename })
-    await user.click(screen.getByRole('button', { name: '打开“今天第一条”会话操作' }))
+    const trigger = screen.getByRole('button', { name: '打开“今天第一条”会话操作' })
+    await user.click(trigger)
     await user.click(within(screen.getByRole('dialog', { name: '“今天第一条”会话操作' })).getByRole('button', { name: '重命名会话' }))
 
     const dialog = screen.getByRole('dialog', { name: '重命名会话' })
@@ -133,6 +134,32 @@ describe('AgentSessionList', () => {
     expect(submit).toBeDisabled()
     pending.resolve()
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '重命名会话' })).not.toBeInTheDocument())
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('returns focus to the explicit operation trigger when rename is cancelled', async () => {
+    const user = userEvent.setup()
+    renderList()
+    const trigger = screen.getByRole('button', { name: '打开“今天第一条”会话操作' })
+    await user.click(trigger)
+    await user.click(screen.getByRole('button', { name: '重命名会话' }))
+    await user.click(within(screen.getByRole('dialog', { name: '重命名会话' })).getByRole('button', { name: '取消' }))
+    expect(screen.queryByRole('dialog', { name: '重命名会话' })).not.toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
+  })
+
+  it('falls back to the new-session button when a renamed target disappears before completion', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<void>()
+    const view = renderList({ onRename: vi.fn().mockReturnValue(pending.promise) })
+    await user.click(screen.getByRole('button', { name: '打开“今天第一条”会话操作' }))
+    await user.click(screen.getByRole('button', { name: '重命名会话' }))
+    await user.click(screen.getByRole('button', { name: '保存名称' }))
+
+    view.rerender(<AgentSessionList {...view.props} sessions={view.props.sessions.filter((item) => item.id !== 'today-1')} />)
+    pending.resolve()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '重命名会话' })).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: '新建会话' })).toHaveFocus())
   })
 
   it('keeps rename authoritative data and dialog open when the callback fails', async () => {
@@ -146,7 +173,9 @@ describe('AgentSessionList', () => {
     await user.click(screen.getByRole('button', { name: '保存名称' }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('重命名保存失败')
-    expect(screen.getByRole('dialog', { name: '重命名会话' })).toBeVisible()
+    const dialog = screen.getByRole('dialog', { name: '重命名会话' })
+    expect(dialog).toBeVisible()
+    expect(dialog).toContainElement(document.activeElement as HTMLElement)
     expect(screen.getByText('今天第一条')).toBeVisible()
   })
 
@@ -155,7 +184,8 @@ describe('AgentSessionList', () => {
     const pending = deferred<void>()
     const onDelete = vi.fn().mockReturnValue(pending.promise)
     renderList({ onDelete })
-    await user.click(screen.getByRole('button', { name: '打开“今天第一条”会话操作' }))
+    const trigger = screen.getByRole('button', { name: '打开“今天第一条”会话操作' })
+    await user.click(trigger)
     await user.click(screen.getByRole('button', { name: '删除会话' }))
 
     let dialog = screen.getByRole('dialog', { name: '删除会话' })
@@ -163,6 +193,7 @@ describe('AgentSessionList', () => {
     expect(within(dialog).getByRole('button', { name: '取消删除' })).toHaveFocus()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('dialog', { name: '删除会话' })).not.toBeInTheDocument()
+    await waitFor(() => expect(trigger).toHaveFocus())
 
     await user.click(screen.getByRole('button', { name: '打开“今天第一条”会话操作' }))
     await user.click(screen.getByRole('button', { name: '删除会话' }))
@@ -175,7 +206,7 @@ describe('AgentSessionList', () => {
     expect(confirm).toBeDisabled()
     pending.resolve()
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '删除会话' })).not.toBeInTheDocument())
-    expect(screen.getByRole('button', { name: '打开会话：最近第一条' })).toHaveFocus()
+    expect(screen.getByRole('button', { name: '打开会话：今天第二条' })).toHaveFocus()
   })
 
   it('keeps delete confirmation open on failure and falls back to the new button when no sibling exists', async () => {
@@ -187,6 +218,7 @@ describe('AgentSessionList', () => {
     await user.click(screen.getByRole('button', { name: '确认删除会话' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('删除失败')
     expect(screen.getByText('唯一会话')).toBeVisible()
+    expect(screen.getByRole('dialog', { name: '删除会话' })).toContainElement(document.activeElement as HTMLElement)
 
     view.rerender(<AgentSessionList {...view.props} onDelete={vi.fn().mockResolvedValue(undefined)} />)
     await user.click(screen.getByRole('button', { name: '确认删除会话' }))
