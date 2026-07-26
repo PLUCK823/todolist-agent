@@ -1,11 +1,12 @@
 import { useState } from 'react'
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentSessionProvider } from '../../features/agent/AgentSessionContext'
-import type { AgentSessionValue, AgentTurn } from '../../features/agent/agent.types'
+import type { AgentSessionDetail, AgentSessionSummary, AgentSessionValue, AgentSessionsApi, AgentTurn } from '../../features/agent/agent.types'
 import { ShellProvider } from '../../features/shell/ShellContext'
 import { useShell } from '../../features/shell/shell-context'
+import { useAgentSession } from '../../features/agent/useAgentSession'
 import { renderWithProviders } from '../../test/render'
 import AssistantPage from '../AssistantPage'
 
@@ -75,6 +76,31 @@ function renderPage(value: Partial<AgentSessionValue> = {}) {
       result.rerender(renderSession({ ...session, ...next }))
     },
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+const persistedSession: AgentSessionSummary = {
+  id: '11111111-1111-4111-8111-111111111111', title: '真实会话',
+  createdAt: '2026-07-26T08:00:00Z', updatedAt: '2026-07-26T08:00:02Z', lastMessageAt: '2026-07-26T08:00:02Z',
+}
+const otherPersistedSession: AgentSessionSummary = {
+  ...persistedSession, id: '22222222-2222-4222-8222-222222222222', title: '外部切换会话',
+}
+
+function persistedDetail(session = persistedSession): AgentSessionDetail {
+  return { ...session, turns: [makeTurn({ id: `${session.id}-turn` })] }
+}
+
+function RealSessionPage({ sessionsApi, observe }: { sessionsApi: AgentSessionsApi; observe?: (session: AgentSessionValue) => void }) {
+  const session = useAgentSession({ sessionsApi })
+  observe?.(session)
+  return <ShellProvider><AgentSessionProvider value={session}><AssistantPage /></AgentSessionProvider></ShellProvider>
 }
 
 describe('AssistantPage', () => {
@@ -267,6 +293,51 @@ describe('AssistantPage', () => {
     await user.click(within(dialog).getByRole('button', { name: '确认清空' }))
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '清空当前会话' })).not.toBeInTheDocument())
     expect(clear).toHaveBeenCalledTimes(2)
+  })
+
+  it('retains a real durable clear dialog across its own loading state, rejection, retry, and success', async () => {
+    const user = userEvent.setup()
+    const firstDelete = deferred<void>()
+    const retryDelete = deferred<void>()
+    const remove = vi.fn()
+      .mockImplementationOnce(() => firstDelete.promise)
+      .mockImplementationOnce(() => retryDelete.promise)
+    let liveSession!: AgentSessionValue
+    const sessionsApi: AgentSessionsApi = {
+      list: vi.fn().mockResolvedValue([persistedSession, otherPersistedSession]),
+      detail: vi.fn(async (id) => persistedDetail(id === otherPersistedSession.id ? otherPersistedSession : persistedSession)),
+      create: vi.fn().mockResolvedValue(persistedSession),
+      rename: vi.fn().mockResolvedValue(persistedSession),
+      delete: remove,
+    }
+    renderWithProviders(<RealSessionPage sessionsApi={sessionsApi} observe={(session) => { liveSession = session }} />)
+    const clearButton = await screen.findByRole('button', { name: '清空对话' })
+    await waitFor(() => expect(clearButton).toBeEnabled())
+    await user.click(clearButton)
+    act(() => liveSession.selectSession(otherPersistedSession.id))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '清空当前会话' })).not.toBeInTheDocument())
+    expect(remove).not.toHaveBeenCalled()
+    await waitFor(() => expect(clearButton).toBeEnabled())
+    await user.click(clearButton)
+    let dialog = screen.getByRole('dialog', { name: '清空当前会话' })
+    await user.click(within(dialog).getByRole('button', { name: '确认清空' }))
+
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1))
+    dialog = screen.getByRole('dialog', { name: '清空当前会话' })
+    expect(within(dialog).getByRole('button', { name: '确认清空' })).toBeDisabled()
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeDisabled()
+
+    firstDelete.reject(new Error('删除失败'))
+    dialog = await screen.findByRole('dialog', { name: '清空当前会话' })
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('清空失败')
+    const retry = within(dialog).getByRole('button', { name: '确认清空' })
+    expect(retry).toBeEnabled()
+    await user.click(retry)
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('dialog', { name: '清空当前会话' })).toBeInTheDocument()
+
+    retryDelete.resolve()
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '清空当前会话' })).not.toBeInTheDocument())
   })
 
   it('collapses the side Agent on entry and restores the previous state on leave', async () => {

@@ -19,6 +19,16 @@ const turnStatusLabels: Record<AgentTurnStatus, string> = {
   interrupted: '已中断',
 }
 
+function isUsableFocusTarget(element: HTMLElement | null | undefined): element is HTMLElement {
+  if (!element?.isConnected || element.matches(':disabled') || element.hidden) return false
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+    if (current.hidden || current.getAttribute('aria-hidden') === 'true') return false
+    const style = getComputedStyle(current)
+    if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return false
+  }
+  return true
+}
+
 export default function AssistantPage() {
   const session = useAgentSessionContext()
   const { agentExpanded, setAgentExpanded } = useShell()
@@ -26,6 +36,7 @@ export default function AssistantPage() {
   const [draft, setDraft] = useState('')
   const [clearOpen, setClearOpen] = useState(false)
   const [clearTargetId, setClearTargetId] = useState<string>()
+  const [clearOperation, setClearOperation] = useState<symbol>()
   const [clearError, setClearError] = useState('')
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false)
   const compactAssistant = useMediaQuery('(max-width: 860px)')
@@ -34,6 +45,7 @@ export default function AssistantPage() {
   const sessionDrawerOpenerRef = useRef<HTMLButtonElement>(null)
   const conversationRef = useRef<HTMLElement>(null)
   const inspectorRef = useRef<HTMLElement>(null)
+  const resizeFocusFallbackRef = useRef<HTMLElement | undefined>(undefined)
   const {
     ref: composerRef,
     reset: resetComposer,
@@ -66,7 +78,8 @@ export default function AssistantPage() {
   const clearDialogTargetReady = clearTargetReady
     && clearTargetId === session.displayedSessionId
     && clearTargetId === session.selectedSessionId
-  const clearDialogOpen = clearOpen && clearDialogTargetReady
+  const clearOperationPending = clearOperation !== undefined
+  const clearDialogOpen = clearOpen && (clearDialogTargetReady || clearOperationPending)
 
   useEffect(() => {
     const shouldRestore = restoreExpanded.current
@@ -77,17 +90,22 @@ export default function AssistantPage() {
   const restoreDrawerFocus = useCallback((target: 'opener' | 'session' = 'opener') => {
     requestAnimationFrame(() => {
       if (target === 'session') {
-        const targetElement = sessionDrawerRef.current?.querySelector<HTMLElement>('[aria-current="page"]')
-          ?? sessionDrawerRef.current?.querySelector<HTMLElement>('[aria-label="新建会话"]')
-          ?? conversationRef.current?.querySelector<HTMLElement>(
-          'textarea:not(:disabled), button:not(:disabled), [tabindex]:not([tabindex="-1"])',
-        )
-        targetElement?.focus()
+        const candidates = [
+          sessionDrawerRef.current?.querySelector<HTMLElement>('[aria-current="page"]'),
+          sessionDrawerRef.current?.querySelector<HTMLElement>('[aria-label="新建会话"]'),
+          composerRef.current,
+          conversationRef.current,
+        ]
+        const targetElement = candidates.find(isUsableFocusTarget)
+        if (targetElement) {
+          targetElement.focus()
+          resizeFocusFallbackRef.current = targetElement === conversationRef.current ? targetElement : undefined
+        }
         return
       }
       sessionDrawerOpenerRef.current?.focus()
     })
-  }, [])
+  }, [composerRef])
 
   const closeMobileSessions = useCallback(() => {
     setMobileSessionsOpen(false)
@@ -104,13 +122,24 @@ export default function AssistantPage() {
   }, [compactAssistant, mobileSessionsOpen, restoreDrawerFocus])
 
   useEffect(() => {
-    if (!clearOpen || clearDialogTargetReady) return
+    const fallback = resizeFocusFallbackRef.current
+    if (!fallback || session.isHistoryLoading) return
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    if (activeElement !== fallback && isUsableFocusTarget(activeElement)) {
+      resizeFocusFallbackRef.current = undefined
+      return
+    }
+    restoreDrawerFocus('session')
+  }, [restoreDrawerFocus, session.isHistoryLoading])
+
+  useEffect(() => {
+    if (!clearOpen || clearDialogTargetReady || clearOperationPending) return
     const frame = requestAnimationFrame(() => {
       setClearOpen(false)
       setClearTargetId(undefined)
     })
     return () => cancelAnimationFrame(frame)
-  }, [clearDialogTargetReady, clearOpen])
+  }, [clearDialogTargetReady, clearOpen, clearOperationPending])
 
   useEffect(() => {
     if (!mobileSessionsOpen) return
@@ -173,17 +202,21 @@ export default function AssistantPage() {
   }
 
   async function clear() {
-    if (!clearDialogTargetReady || session.isClearing) {
+    if (!clearDialogTargetReady || clearOperationPending || session.isClearing) {
       setClearOpen(false)
       setClearTargetId(undefined)
       return
     }
+    const operation = Symbol('clear-operation')
+    setClearOperation(operation)
     setClearError('')
     try {
       await session.clear()
       setClearOpen(false)
       setClearTargetId(undefined)
+      setClearOperation((current) => current === operation ? undefined : current)
     } catch {
+      setClearOperation((current) => current === operation ? undefined : current)
       setClearError('清空失败，对话记录已保留。')
     }
   }
@@ -219,7 +252,7 @@ export default function AssistantPage() {
 
       {mobileSessionsOpen ? <button type="button" className="assistant-sessions__backdrop" aria-label="关闭会话列表遮罩" onClick={closeMobileSessions} /> : null}
 
-      <section ref={conversationRef} className="assistant-conversation" id="current">
+      <section ref={conversationRef} className="assistant-conversation" id="current" tabIndex={-1}>
         <header className="assistant-conversation__header">
           <Button
             className="assistant-sessions__open"
@@ -317,8 +350,8 @@ export default function AssistantPage() {
         message={<><span>将删除当前会话及其执行记录，此操作无法撤销。</span>{clearError ? <p className="assistant-clear-error" role="alert">{clearError}</p> : null}</>}
         confirmLabel="确认清空"
         onConfirm={() => { void clear() }}
-        onCancel={() => { if (!session.isClearing) { setClearOpen(false); setClearTargetId(undefined) } }}
-        pending={session.isClearing}
+        onCancel={() => { if (!clearOperationPending && !session.isClearing) { setClearOpen(false); setClearTargetId(undefined) } }}
+        pending={clearOperationPending || session.isClearing}
       />
     </div>
   )

@@ -58,16 +58,22 @@ function renderRealAssistant(width: number, controller = mediaController(width <
   vi.stubGlobal('matchMedia', vi.fn(() => controller.media))
   localStorage.setItem('todolist:shell', JSON.stringify({ navExpanded: true, agentExpanded: false }))
   const session = { ...makeSession(), ...overrides }
-  const view = render(
+  const renderSession = (value: AgentSessionValue) => (
     <MemoryRouter initialEntries={['/assistant']}>
       <QueryClientProvider client={new QueryClient()}>
-        <ShellProvider><AgentSessionProvider value={session}>
+        <ShellProvider><AgentSessionProvider value={value}>
           <Routes><Route element={<AppShell />}><Route path="/assistant" element={<AssistantPage />} /></Route></Routes>
         </AgentSessionProvider></ShellProvider>
       </QueryClientProvider>
-    </MemoryRouter>,
+    </MemoryRouter>
   )
-  return { ...view, session, controller }
+  const view = render(renderSession(session))
+  return {
+    ...view, session, controller,
+    rerenderSession(next: Partial<AgentSessionValue>) {
+      view.rerender(renderSession({ ...session, ...next }))
+    },
+  }
 }
 
 describe('AssistantPage real AppShell responsive width chain', () => {
@@ -206,14 +212,15 @@ describe('AssistantPage real AppShell responsive width chain', () => {
     expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: false })
   })
 
-  it('moves focus to the desktop new-session action when an empty drawer crosses the breakpoint', async () => {
+  it('hands loading fallback focus to the new-session action when history becomes usable', async () => {
     const user = userEvent.setup()
     const controller = mediaController(true)
-    const { session } = renderRealAssistant(760, controller, {
+    const { session, rerenderSession } = renderRealAssistant(760, controller, {
       sessionId: undefined,
       selectedSessionId: undefined,
       displayedSessionId: undefined,
       sessions: [], turns: [], messages: [], steps: [],
+      isHistoryLoading: true, canSend: false,
     })
     await user.click(screen.getByRole('button', { name: '打开会话列表' }))
     expect(screen.getByRole('button', { name: '关闭会话列表' })).toHaveFocus()
@@ -221,11 +228,34 @@ describe('AssistantPage real AppShell responsive width chain', () => {
     act(() => controller.set(false))
 
     const create = screen.getByRole('button', { name: '新建会话' })
+    const fallback = document.querySelector('.assistant-conversation') as HTMLElement
+    await waitFor(() => expect(fallback).toHaveFocus())
+    expect(screen.getByRole('button', { name: '打开会话列表' })).not.toHaveFocus()
+
+    rerenderSession({ isHistoryLoading: false, canSend: true })
     await waitFor(() => expect(create).toHaveFocus())
     expect(create).toBeVisible()
     expect(create).toBeEnabled()
     await user.click(create)
     expect(session.createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not steal focus after the user leaves a resize fallback', async () => {
+    const controller = mediaController(true)
+    const { rerenderSession } = renderRealAssistant(760, controller, {
+      sessionId: undefined, selectedSessionId: undefined, displayedSessionId: undefined,
+      sessions: [], turns: [], messages: [], steps: [], isHistoryLoading: true, canSend: false,
+    })
+    await userEvent.click(screen.getByRole('button', { name: '打开会话列表' }))
+    act(() => controller.set(false))
+    const fallback = document.querySelector('.assistant-conversation') as HTMLElement
+    await waitFor(() => expect(fallback).toHaveFocus())
+    const settings = screen.getByRole('button', { name: '设置' })
+    settings.focus()
+
+    rerenderSession({ isHistoryLoading: false, canSend: true })
+
+    await waitFor(() => expect(settings).toHaveFocus())
   })
 
   it('removes media-query listeners when the assistant shell unmounts', () => {
