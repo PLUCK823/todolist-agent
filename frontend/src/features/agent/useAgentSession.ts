@@ -273,25 +273,26 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     syncAbortRef.current = controller
     setIsHistoryLoading(true)
     setHistoryError(undefined)
+    const isCurrentOperation = () => mountedRef.current
+      && !controller.signal.aborted
+      && generation === syncGenerationRef.current
+      && selectionGenerationRef.current === expectedSelectionGeneration
+      && selectedRef.current === sessionId
     try {
       const [detail, listed] = await Promise.all([
         sessionsApi.detail(sessionId, controller.signal),
         sessionsApi.list(controller.signal),
       ])
-      if (!mountedRef.current
-        || controller.signal.aborted
-        || generation !== syncGenerationRef.current
-        || selectionGenerationRef.current !== expectedSelectionGeneration
-        || selectedRef.current !== sessionId) return
+      if (!isCurrentOperation()) return
       const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
       sessionsRef.current = visible
       setSessions(visible)
       commitDetail(sessionId, detail.turns)
     } catch (error) {
-      if (!mountedRef.current || controller.signal.aborted || generation !== syncGenerationRef.current) return
+      if (!isCurrentOperation()) return
       setHistoryError(error instanceof Error ? error.message : '同步会话失败')
     } finally {
-      if (mountedRef.current && generation === syncGenerationRef.current) setIsHistoryLoading(false)
+      if (isCurrentOperation()) setIsHistoryLoading(false)
     }
   }, [commitDetail, sessionsApi])
 
@@ -342,6 +343,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     if (deletedIdsRef.current.has(sessionId)) return
     const deleteGeneration = (deleteGenerationsRef.current.get(sessionId) ?? 0) + 1
     deleteGenerationsRef.current.set(sessionId, deleteGeneration)
+    const orderToken = sessionsRef.current.map((item) => item.id)
     const previous = sessionsRef.current.find((item) => item.id === sessionId)
     deletedIdsRef.current.add(sessionId)
     renameGenerationsRef.current.set(sessionId, (renameGenerationsRef.current.get(sessionId) ?? 0) + 1)
@@ -358,9 +360,21 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       await sessionsApi.delete(sessionId)
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 404)) {
-        if (deleteGenerationsRef.current.get(sessionId) === deleteGeneration) {
+        if (deleteGenerationsRef.current.get(sessionId) === deleteGeneration && deletedIdsRef.current.has(sessionId)) {
           deletedIdsRef.current.delete(sessionId)
-          if (previous) updateSessions((current) => current.some((item) => item.id === sessionId) ? current : [...current, previous])
+          if (previous) updateSessions((current) => {
+            if (current.some((item) => item.id === sessionId)) return current
+            const originalIndex = orderToken.indexOf(sessionId)
+            for (let index = originalIndex - 1; index >= 0; index--) {
+              const previousIndex = current.findIndex((item) => item.id === orderToken[index])
+              if (previousIndex >= 0) return [...current.slice(0, previousIndex + 1), previous, ...current.slice(previousIndex + 1)]
+            }
+            for (let index = originalIndex + 1; index < orderToken.length; index++) {
+              const nextIndex = current.findIndex((item) => item.id === orderToken[index])
+              if (nextIndex >= 0) return [...current.slice(0, nextIndex), previous, ...current.slice(nextIndex)]
+            }
+            return [...current, previous]
+          })
           if (wasCurrent) setIsHistoryLoading(false)
         }
         throw error

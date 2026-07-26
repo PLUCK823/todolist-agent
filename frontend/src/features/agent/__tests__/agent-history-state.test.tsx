@@ -266,13 +266,29 @@ describe('durable Agent session state', () => {
       succeeded = hook.current().deleteSession(second.id)
     })
     deleteFirst.reject(new Error('delete failed'))
+    await act(async () => { await expect(failed).rejects.toThrow('delete failed') })
+    expect(hook.current().sessions.map((item) => item.id)).toEqual([first.id, third.id])
     deleteSecond.resolve()
-    await act(async () => {
-      await expect(failed).rejects.toThrow('delete failed')
-      await succeeded
+    await act(() => succeeded)
+  })
+
+  it.each([
+    { removed: first, expected: [first.id, second.id, third.id] },
+    { removed: second, expected: [first.id, second.id, third.id] },
+  ])('restores a failed delete of $removed.title at its original relative position', async ({ removed, expected }) => {
+    const pendingDelete = deferred<void>()
+    const sessionsApi = api({
+      list: vi.fn().mockResolvedValue([first, second, third]),
+      delete: vi.fn(() => pendingDelete.promise),
     })
-    expect(hook.current().sessions.some((item) => item.id === first.id)).toBe(true)
-    expect(hook.current().sessions.some((item) => item.id === second.id)).toBe(false)
+    const hook = renderHistory(sessionsApi)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let deletion!: Promise<void>
+    act(() => { deletion = hook.current().deleteSession(removed.id) })
+    expect(hook.current().sessions.some((item) => item.id === removed.id)).toBe(false)
+    pendingDelete.reject(new Error('delete failed'))
+    await act(async () => { await expect(deletion).rejects.toThrow('delete failed') })
+    expect(hook.current().sessions.map((item) => item.id)).toEqual(expected)
   })
 
   it('restores uncertain interrupted turns without enabling replay', async () => {
@@ -328,5 +344,31 @@ describe('durable Agent session state', () => {
     await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
     expect(hook.current().turns[0].steps[0].id).toBe('server-retry-step')
+  })
+
+  it('ignores an old done-sync rejection after selection and keeps the new detail loading', async () => {
+    const staleSync = deferred<AgentSessionDetail>()
+    const newDetail = deferred<AgentSessionDetail>()
+    const detailMock = vi.fn()
+      .mockResolvedValueOnce({ ...first, turns: [] })
+      .mockImplementationOnce(() => staleSync.promise)
+      .mockImplementationOnce(() => newDetail.promise)
+    const client = new ControlledClient()
+    const hook = renderHistory(api({ list: vi.fn().mockResolvedValue([first, second]), detail: detailMock }), client)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().send('旧会话请求'))
+    act(() => client.handlers[0].onEvent({ type: 'done' }))
+    await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(2))
+    act(() => hook.current().selectSession(second.id))
+    await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(3))
+    expect(hook.current().isHistoryLoading).toBe(true)
+
+    staleSync.reject(new Error('stale sync failed'))
+    await act(async () => { await Promise.resolve() })
+    expect(hook.current().historyError).toBeUndefined()
+    expect(hook.current().isHistoryLoading).toBe(true)
+
+    newDetail.resolve(detail(second, '新会话内容'))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
   })
 })
