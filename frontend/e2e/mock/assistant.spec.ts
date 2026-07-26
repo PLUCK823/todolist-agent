@@ -113,13 +113,36 @@ test('retry before done is rejected without consuming the token', async ({ page,
   await page.goto('/login')
   const result = await page.evaluate(() => new Promise<string[]>((resolve, reject) => {
     const results: string[] = []
+    let retryFrame: { type: string; session_id: string; step_id: string; retry_token: string } | undefined
+    let earlyRejected = false
+    let originalDone = false
+    let terminalStarted = false
+    const startTerminalRetry = () => {
+      if (!retryFrame || !earlyRejected || !originalDone || terminalStarted) return
+      terminalStarted = true
+      const terminal = new WebSocket('/api/agent/stream')
+      terminal.onerror = () => reject(new Error('terminal retry socket failed'))
+      terminal.onopen = () => terminal.send(JSON.stringify(retryFrame))
+      terminal.onmessage = (terminalMessage) => {
+        const terminalEvent = JSON.parse(String(terminalMessage.data)) as { type: string }
+        if (terminalEvent.type === 'action_completed') {
+          results.push(terminalEvent.type)
+          resolve(results)
+        }
+      }
+    }
     const first = new WebSocket('/api/agent/stream')
     first.onerror = () => reject(new Error('initial socket failed'))
     first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: 'terminal-gate' }))
     first.onmessage = (message) => {
       const event = JSON.parse(String(message.data)) as { type: string; step_id?: string; retry_token?: string }
-      if (event.type !== 'step_failed' || !event.step_id || !event.retry_token) return
-      const retryFrame = {
+      if (event.type === 'done') {
+        originalDone = true
+        startTerminalRetry()
+        return
+      }
+      if (event.type !== 'step_failed' || !event.step_id || !event.retry_token || retryFrame) return
+      retryFrame = {
         type: 'retry_step', session_id: 'terminal-gate', step_id: event.step_id,
         retry_token: event.retry_token,
       }
@@ -130,18 +153,8 @@ test('retry before done is rejected without consuming the token', async ({ page,
         const earlyEvent = JSON.parse(String(earlyMessage.data)) as { type: string; error_code?: string }
         if (earlyEvent.type !== 'step_failed') return
         results.push(earlyEvent.error_code ?? '')
-        setTimeout(() => {
-          const terminal = new WebSocket('/api/agent/stream')
-          terminal.onerror = () => reject(new Error('terminal retry socket failed'))
-          terminal.onopen = () => terminal.send(JSON.stringify(retryFrame))
-          terminal.onmessage = (terminalMessage) => {
-            const terminalEvent = JSON.parse(String(terminalMessage.data)) as { type: string }
-            if (terminalEvent.type === 'action_completed') {
-              results.push(terminalEvent.type)
-              resolve(results)
-            }
-          }
-        }, 100)
+        earlyRejected = true
+        startTerminalRetry()
       }
     }
   }))
@@ -238,7 +251,12 @@ test('keeps a token locked when the panel disconnects before done', async ({ pag
   await expect(page.getByRole('heading', { name: '今天要做什么？' })).toBeVisible()
   await page.goto('/assistant')
   await page.getByRole('button', { name: '新建会话' }).click()
-  await page.goto('/tasks')
+  const newSession = page.getByRole('button', { name: '打开会话：新会话' }).first()
+  await expect(newSession).toBeEnabled()
+  await newSession.click()
+  await expect(newSession).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByLabel('智能助手消息')).toBeEnabled()
+  await page.getByRole('link', { name: '我的任务' }).click()
   await expect(page.getByLabel('消息输入框')).toBeEnabled()
 })
 
