@@ -185,9 +185,10 @@ export interface AgentSessionValue {
   send(message: string): boolean
   canRetry(stepId: string): boolean
   retry(stepId: string): void
-  confirm(confirmationId: string): void
-  reject(confirmationId: string): void
-  resolveConfirmation(confirmationId: string, approved: boolean): void
+  canConfirm(confirmationId: string): boolean
+  confirm(confirmationId: string): boolean
+  reject(confirmationId: string): boolean
+  resolveConfirmation(confirmationId: string, approved: boolean): boolean
   cancel(): void
   clear(): Promise<void>
   sessions: AgentSessionSummary[]

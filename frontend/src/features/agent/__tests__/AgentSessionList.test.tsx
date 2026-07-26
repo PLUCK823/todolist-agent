@@ -67,6 +67,68 @@ describe('AgentSessionList', () => {
     expect(onCreate).toHaveBeenCalledTimes(1)
   })
 
+  it('catches create failures, announces them, and restores the create button', async () => {
+    const user = userEvent.setup()
+    renderList({ onCreate: vi.fn().mockRejectedValue(new Error('新建会话失败')) })
+    const create = screen.getByRole('button', { name: '新建会话' })
+
+    await user.click(create)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('新建会话失败')
+    expect(create).toBeEnabled()
+    expect(create).toHaveFocus()
+  })
+
+  it('prevents duplicate creates while pending and exposes progress', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<void>()
+    const onCreate = vi.fn().mockReturnValue(pending.promise)
+    renderList({ onCreate })
+    const create = screen.getByRole('button', { name: '新建会话' })
+
+    await user.click(create)
+    await user.click(create)
+
+    expect(onCreate).toHaveBeenCalledTimes(1)
+    expect(create).toBeDisabled()
+    expect(screen.getByRole('status')).toHaveTextContent('正在新建会话')
+    pending.resolve()
+    await waitFor(() => expect(create).toBeEnabled())
+  })
+
+  it('clears a create error when a retry succeeds', async () => {
+    const user = userEvent.setup()
+    const onCreate = vi.fn()
+      .mockRejectedValueOnce(new Error('第一次失败'))
+      .mockResolvedValueOnce(undefined)
+    renderList({ onCreate })
+    const create = screen.getByRole('button', { name: '新建会话' })
+
+    await user.click(create)
+    expect(await screen.findByRole('alert')).toHaveTextContent('第一次失败')
+    await user.click(create)
+
+    await waitFor(() => expect(screen.queryByText('第一次失败')).not.toBeInTheDocument())
+    expect(onCreate).toHaveBeenCalledTimes(2)
+    expect(create).toBeEnabled()
+  })
+
+  it('does not update state after an in-flight create unmounts', async () => {
+    const user = userEvent.setup()
+    const pending = deferred<void>()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const view = renderList({ onCreate: vi.fn().mockReturnValue(pending.promise) })
+    await user.click(screen.getByRole('button', { name: '新建会话' }))
+
+    view.unmount()
+    pending.resolve()
+    await pending.promise
+    await Promise.resolve()
+
+    expect(consoleError).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
   it('retains the old list with busy disabled semantics and a non-disruptive status', () => {
     renderList({ isLoading: true })
     expect(screen.getByRole('navigation', { name: 'Agent 会话' })).toHaveAttribute('aria-busy', 'true')

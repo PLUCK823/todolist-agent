@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type RefObject } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from 'react'
 import { Button } from '../../shared/ui/Button'
 import { Dialog } from '../../shared/ui/Dialog'
 import { IconButton } from '../../shared/ui/IconButton'
@@ -133,11 +133,23 @@ export default function AgentSessionList({
   const [deleteError, setDeleteError] = useState('')
   const [renamePending, setRenamePending] = useState(false)
   const [deletePending, setDeletePending] = useState(false)
+  const [createPending, setCreatePending] = useState(false)
+  const [createError, setCreateError] = useState('')
   const renameInputRef = useRef<HTMLInputElement>(null)
   const deleteCancelRef = useRef<HTMLButtonElement>(null)
   const newSessionRef = useRef<HTMLButtonElement>(null)
+  const createPromiseRef = useRef<Promise<void> | null>(null)
+  const mountedRef = useRef(true)
   const sessionRefs = useRef(new Map<string, HTMLButtonElement>())
   const groups = groupAgentSessions(sessions, now)
+
+  useEffect(() => {
+    mountedRef.current = true
+
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
 
   const focusAfterDialog = (target: DialogTarget) => {
     window.setTimeout(() => {
@@ -220,11 +232,49 @@ export default function AgentSessionList({
     }
   }
 
+  const createSession = () => {
+    if (createPromiseRef.current) {
+      return createPromiseRef.current
+    }
+
+    setCreateError('')
+    setCreatePending(true)
+
+    const operation = (async () => {
+      try {
+        await onCreate()
+      } catch (error) {
+        if (mountedRef.current) {
+          setCreateError(errorMessage(error, '新建会话失败，请重试。'))
+          window.setTimeout(() => {
+            if (mountedRef.current && newSessionRef.current?.isConnected) {
+              newSessionRef.current.focus()
+            }
+          }, 0)
+        }
+      } finally {
+        createPromiseRef.current = null
+        if (mountedRef.current) {
+          setCreatePending(false)
+        }
+      }
+    })()
+
+    createPromiseRef.current = operation
+    return operation
+  }
+
   return (
-    <nav className="agent-session-list" aria-label="Agent 会话" aria-busy={isLoading || undefined}>
-      <Button buttonRef={newSessionRef} variant="secondary" className="agent-session-list__new" aria-label="新建会话" disabled={isLoading} onClick={() => void onCreate()}>
-        ＋ 新建会话
+    <nav className="agent-session-list" aria-label="Agent 会话" aria-busy={isLoading || createPending || undefined}>
+      <Button buttonRef={newSessionRef} variant="secondary" className="agent-session-list__new" aria-label="新建会话" disabled={isLoading || createPending} onClick={() => void createSession()}>
+        ＋ {createPending ? '新建中…' : '新建会话'}
       </Button>
+      {createPending ? <p role="status">正在新建会话…</p> : null}
+      {createError ? (
+        <div className="agent-session-list__error" role="alert">
+          <p>{createError}</p>
+        </div>
+      ) : null}
       {historyError ? (
         <div className="agent-session-list__error" role="alert">
           <p>{historyError}</p>

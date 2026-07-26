@@ -49,9 +49,10 @@ export interface AgentTurnProps {
   turn: AgentTurnModel
   pendingConfirmationId?: string
   canRetry?(stepId: string): boolean
+  canConfirm?(confirmationId: string): boolean
   onRetry?(stepId: string): void
-  onConfirm?(confirmationId: string): void
-  onReject?(confirmationId: string): void
+  onConfirm?(confirmationId: string): boolean | Promise<boolean>
+  onReject?(confirmationId: string): boolean | Promise<boolean>
 }
 
 const noop = () => undefined
@@ -60,6 +61,7 @@ export default function AgentTurn({
   turn,
   pendingConfirmationId,
   canRetry,
+  canConfirm,
   onRetry = noop,
   onConfirm,
   onReject,
@@ -70,6 +72,8 @@ export default function AgentTurn({
   const previousStatus = useRef(turn.status)
   const [expanded, setExpanded] = useState(() => isAttentionStatus(turn.status))
   const [pendingAction, setPendingAction] = useState<{ key: string; id: string }>()
+  const [submittingAction, setSubmittingAction] = useState<{ key: string; id: string }>()
+  const [actionError, setActionError] = useState<{ key: string; message: string }>()
 
   useEffect(() => {
     if (previousStatus.current === turn.status) return
@@ -85,27 +89,45 @@ export default function AgentTurn({
   const activeRetryStepId = turn.resultUncertain
     ? null
     : turn.steps.find((step) => step.status === 'failed' && step.retryable && retryAllowed(step.id))?.id ?? null
-  const activeConfirmationId = turn.resultUncertain
+  const matchingConfirmationId = turn.resultUncertain
     || turn.status !== 'waiting_confirmation'
     || !onConfirm
     || !onReject
     || !pendingConfirmationId
     ? null
     : turn.steps.find((step) => step.status === 'waiting_confirmation' && step.confirmationId === pendingConfirmationId)?.confirmationId ?? null
+  const activeConfirmationId = matchingConfirmationId && canConfirm?.(matchingConfirmationId) === true
+    ? matchingConfirmationId
+    : null
   const actionableKey = `${activeRetryStepId ?? ''}:${activeConfirmationId ?? ''}`
 
-  const pendingActionId = pendingAction?.key === actionableKey ? pendingAction.id : undefined
+  const acceptedActionId = pendingAction?.key === actionableKey ? pendingAction.id : undefined
+  const submittingActionId = submittingAction?.key === actionableKey ? submittingAction.id : undefined
+  const pendingActionId = acceptedActionId ?? submittingActionId
+  const visibleActionError = actionError?.key === actionableKey ? actionError.message : undefined
 
   const submitRetry = (stepId: string) => {
     if (pendingActionId) return
     setPendingAction({ key: actionableKey, id: stepId })
     onRetry(stepId)
   }
-  const submitConfirmation = (confirmationId: string, approved: boolean) => {
+  const submitConfirmation = async (confirmationId: string, approved: boolean) => {
     if (pendingActionId) return
-    setPendingAction({ key: actionableKey, id: confirmationId })
-    if (approved) onConfirm?.(confirmationId)
-    else onReject?.(confirmationId)
+    const submission = { key: actionableKey, id: confirmationId }
+    setActionError(undefined)
+    setSubmittingAction(submission)
+    try {
+      const accepted = await (approved ? onConfirm?.(confirmationId) : onReject?.(confirmationId))
+      if (accepted === true) setPendingAction(submission)
+      else setActionError({ key: actionableKey, message: '操作未发送，请重试。' })
+    } catch (error) {
+      setActionError({
+        key: actionableKey,
+        message: error instanceof Error && error.message ? error.message : '操作未发送，请重试。',
+      })
+    } finally {
+      setSubmittingAction((current) => current?.key === submission.key && current.id === submission.id ? undefined : current)
+    }
   }
 
   return (
@@ -124,6 +146,7 @@ export default function AgentTurn({
         {turn.resultUncertain ? (
           <p className="agent-turn__uncertain" role="alert">操作可能已生效，请检查任务状态。</p>
         ) : null}
+        {visibleActionError ? <p className="agent-turn__uncertain" role="alert">{visibleActionError}</p> : null}
         <button
           id={buttonId}
           type="button"
@@ -157,8 +180,8 @@ export default function AgentTurn({
             activeConfirmationId={activeConfirmationId}
             pendingActionId={pendingActionId}
             onRetry={submitRetry}
-            onConfirm={(confirmationId) => submitConfirmation(confirmationId, true)}
-            onReject={(confirmationId) => submitConfirmation(confirmationId, false)}
+            onConfirm={(confirmationId) => { void submitConfirmation(confirmationId, true) }}
+            onReject={(confirmationId) => { void submitConfirmation(confirmationId, false) }}
           />
         </div>
       </div>

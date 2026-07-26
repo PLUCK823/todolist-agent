@@ -486,7 +486,10 @@ describe('useAgentSession', () => {
       type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
     expect(result.current.status).toBe('waiting_confirmation')
-    act(() => result.current.confirm('confirm-1'))
+    expect(result.current.canConfirm('confirm-1')).toBe(true)
+    let accepted = false
+    act(() => { accepted = result.current.confirm('confirm-1') })
+    expect(accepted).toBe(true)
     expect(client.controls).toEqual([{ type: 'confirmation_response', confirmation_id: 'confirm-1', approved: true }])
     expect(result.current.status).toBe('running')
     act(() => client.handlers[0].onEvent({ type: 'reply', content: '已删除' }))
@@ -520,8 +523,29 @@ describe('useAgentSession', () => {
     act(() => client.handlers[0].onEvent({
       type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
-    act(() => result.current.confirm('confirm-1'))
+    expect(result.current.canConfirm('confirm-1')).toBe(false)
+    let accepted = true
+    act(() => { accepted = result.current.confirm('confirm-1') })
 
+    expect(accepted).toBe(false)
+    expect(result.current.status).toBe('waiting_confirmation')
+  })
+
+  it('keeps a live confirmation retryable when the ready sender rejects dispatch', () => {
+    const client = new ControlledClient()
+    client.controlAccepted = false
+    const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
+    act(() => result.current.send('删除任务'))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({
+      type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+    }))
+
+    expect(result.current.canConfirm('confirm-1')).toBe(true)
+    let accepted = true
+    act(() => { accepted = result.current.confirm('confirm-1') })
+    expect(accepted).toBe(false)
+    expect(result.current.canConfirm('confirm-1')).toBe(true)
     expect(result.current.status).toBe('waiting_confirmation')
   })
 
@@ -536,6 +560,7 @@ describe('useAgentSession', () => {
     act(() => client.handlers[0].onFailure?.({
       code: 'CONNECTION_CLOSED', message: '断线', retryable: false,
     }))
+    expect(result.current.canConfirm('confirm-1')).toBe(false)
     act(() => result.current.confirm('confirm-1'))
 
     expect(result.current.status).toBe('failed')

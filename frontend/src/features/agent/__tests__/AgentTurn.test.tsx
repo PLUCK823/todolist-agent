@@ -125,7 +125,7 @@ describe('AgentTurn', () => {
 
   it('chooses only one canonical confirmation and prevents duplicate submission', async () => {
     const user = userEvent.setup()
-    const onConfirm = vi.fn()
+    const onConfirm = vi.fn().mockReturnValue(true)
     render(<AgentTurn
       turn={makeTurn({
         status: 'waiting_confirmation',
@@ -135,6 +135,7 @@ describe('AgentTurn', () => {
         ],
       })}
       pendingConfirmationId="confirmation-1"
+      canConfirm={() => true}
       onConfirm={onConfirm}
       onReject={vi.fn()}
     />)
@@ -145,6 +146,38 @@ describe('AgentTurn', () => {
     await user.click(confirm)
     expect(confirm).toBeDisabled()
     expect(onConfirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('requires the authoritative live capability even when callbacks and ids match', () => {
+    render(<AgentTurn
+      turn={makeTurn({
+        status: 'waiting_confirmation',
+        steps: [{ id: 'confirm', label: '删除任务', status: 'waiting_confirmation', confirmationId: 'confirmation-1' }],
+      })}
+      pendingConfirmationId="confirmation-1"
+      canConfirm={() => false}
+      onConfirm={() => true}
+      onReject={() => true}
+    />)
+    expect(screen.queryByRole('button', { name: '确认删除任务' })).not.toBeInTheDocument()
+  })
+
+  it('keeps confirmation enabled and reports when live dispatch is rejected', async () => {
+    const user = userEvent.setup()
+    render(<AgentTurn
+      turn={makeTurn({
+        status: 'waiting_confirmation',
+        steps: [{ id: 'confirm', label: '删除任务', status: 'waiting_confirmation', confirmationId: 'confirmation-1' }],
+      })}
+      pendingConfirmationId="confirmation-1"
+      canConfirm={() => true}
+      onConfirm={() => false}
+      onReject={() => false}
+    />)
+    const confirm = screen.getByRole('button', { name: '确认删除任务' })
+    await user.click(confirm)
+    expect(confirm).toBeEnabled()
+    expect(screen.getByRole('alert')).toHaveTextContent('操作未发送，请重试')
   })
 
   it('offers only one live-authorized retry and suppresses all retries for uncertain results', () => {

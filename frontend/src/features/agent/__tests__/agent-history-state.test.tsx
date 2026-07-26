@@ -23,6 +23,18 @@ function detail(session: AgentSessionSummary, content: string, stepId = 'step'):
   }] }
 }
 
+function confirmationDetail(session: AgentSessionSummary): AgentSessionDetail {
+  return { ...session, turns: [{
+    id: `${session.id}-confirmation-turn`, ordinal: 1, status: 'waiting_confirmation', startedAt: session.createdAt,
+    resultUncertain: false,
+    messages: [{ id: `${session.id}-user`, role: 'user', content: '删除任务', createdAt: session.createdAt }],
+    steps: [{
+      id: 'delete-step', eventId: `${session.id}-event`, label: '删除任务', status: 'waiting_confirmation',
+      confirmationId: 'persisted-confirmation', confirmationMessage: '确定删除？', startedAt: session.createdAt,
+    }],
+  }] }
+}
+
 function parsedFailedDetail(resultUncertain = false): AgentSessionDetail {
   return parseAgentSessionDetail({
     session: {
@@ -90,6 +102,18 @@ function renderHistory(sessionsApi: AgentSessionsApi, client = new ControlledCli
 }
 
 describe('durable Agent session state', () => {
+  it('never treats a persisted confirmation as a live socket capability', async () => {
+    const hook = renderHistory(api({
+      list: vi.fn().mockResolvedValue([first]),
+      detail: vi.fn().mockResolvedValue(confirmationDetail(first)),
+    }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+
+    expect(hook.current().status).toBe('waiting_confirmation')
+    expect(hook.current().canConfirm('persisted-confirmation')).toBe(false)
+    expect(hook.current().confirm('persisted-confirmation')).toBe(false)
+  })
+
   it('retains a safe wire retry capability after done replaces the step with its DB identity', async () => {
     const persisted = parsedFailedDetail()
     const detailMock = vi.fn().mockResolvedValueOnce({ ...first, turns: [] }).mockResolvedValueOnce(persisted)

@@ -41,6 +41,12 @@ interface EphemeralRetryCapability {
   ready: boolean
 }
 
+interface EphemeralConfirmationCapability {
+  send: AgentControlSender
+  sessionId: string
+  streamGeneration: number
+}
+
 export function canRetryServerStep(state: AgentSessionState, stepId: string): boolean {
   const failedStep = state.steps.find((step) => step.id === stepId)
   const toolSteps = state.steps.filter((step) => typeof step.tool === 'string')
@@ -91,7 +97,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const sessionsRef = useRef<AgentSessionSummary[]>([])
   const stateRef = useRef(state)
   const cancelRef = useRef<(() => void) | undefined>(undefined)
-  const controlRef = useRef<AgentControlSender | undefined>(undefined)
+  const controlRef = useRef<EphemeralConfirmationCapability | undefined>(undefined)
   const generationRef = useRef(0)
   const clearingRef = useRef(false)
   const clearPromiseRef = useRef<Promise<void> | undefined>(undefined)
@@ -544,7 +550,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
             invalidateRequest(generation)
           },
           onControlReady: (sendControl) => {
-            if (isCurrent()) controlRef.current = sendControl
+            if (isCurrent()) controlRef.current = { send: sendControl, sessionId, streamGeneration: generation }
           },
         },
       )
@@ -626,16 +632,38 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     }
   }, [canRetry, captureRetryCapability, clearRetryCapabilities, client, closeStream, dispatch, dispatchSynchronousFailure, durableHistory, invalidateRequest, syncDurableSession])
 
-  const resolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
-    if (clearingRef.current) return
-    if (stateRef.current.pendingConfirmation?.confirmationId !== confirmationId) return
-    const sent = controlRef.current?.({
-      type: 'confirmation_response',
-      confirmation_id: confirmationId,
-      approved,
-    })
-    if (sent) dispatch({ type: 'confirmation_submitted' })
-  }, [dispatch])
+  const canConfirm = useCallback((confirmationId: string) => {
+    const current = stateRef.current
+    const capability = controlRef.current
+    if (!capability) return false
+    return !clearingRef.current
+      && current.status === 'waiting_confirmation'
+      && current.resultUncertain !== true
+      && current.pendingConfirmation?.confirmationId === confirmationId
+      && Boolean(current.sessionId)
+      && capability.sessionId === current.sessionId
+      && capability.streamGeneration === generationRef.current
+      && (!durableHistory || selectedRef.current === current.sessionId)
+  }, [durableHistory])
+
+  const resolveConfirmation = useCallback((confirmationId: string, approved: boolean): boolean => {
+    if (!canConfirm(confirmationId)) return false
+    const capability = controlRef.current
+    if (!capability) return false
+    let sent: boolean
+    try {
+      sent = capability.send({
+        type: 'confirmation_response',
+        confirmation_id: confirmationId,
+        approved,
+      })
+    } catch {
+      return false
+    }
+    if (!sent) return false
+    dispatch({ type: 'confirmation_submitted' })
+    return true
+  }, [canConfirm, dispatch])
 
   const confirm = useCallback(
     (confirmationId: string) => resolveConfirmation(confirmationId, true),
@@ -747,6 +775,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     send,
     canRetry,
     retry,
+    canConfirm,
     confirm,
     reject,
     resolveConfirmation,
