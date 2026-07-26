@@ -223,6 +223,23 @@ describe('AssistantPage', () => {
     await waitFor(() => expect(session.clear).toHaveBeenCalledTimes(1))
   })
 
+  it('keeps a failed clear dialog open with a visible error and allows retry', async () => {
+    const user = userEvent.setup()
+    const clear = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined)
+    renderPage({ clear })
+    await user.click(screen.getByRole('button', { name: '清空对话' }))
+    let dialog = screen.getByRole('dialog', { name: '清空当前会话' })
+    await user.click(within(dialog).getByRole('button', { name: '确认清空' }))
+
+    dialog = screen.getByRole('dialog', { name: '清空当前会话' })
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('清空失败，对话记录已保留')
+    await user.click(within(dialog).getByRole('button', { name: '确认清空' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '清空当前会话' })).not.toBeInTheDocument())
+    expect(clear).toHaveBeenCalledTimes(2)
+  })
+
   it('collapses the side Agent on entry and restores the previous state on leave', async () => {
     const user = userEvent.setup()
     const value = makeSession()

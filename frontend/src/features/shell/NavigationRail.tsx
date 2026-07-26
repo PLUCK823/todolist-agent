@@ -56,15 +56,16 @@ function navClassName(isActive: boolean) {
   return `nav-rail__control${isActive ? ' nav-rail__control--active' : ''}`
 }
 
-export default function NavigationRail() {
+export default function NavigationRail({ expanded: expandedOverride }: { expanded?: boolean }) {
   const { navExpanded, toggleNav } = useShell()
+  const expanded = expandedOverride ?? navExpanded
   const account = useOptionalAuth()?.account ?? { name: 'Plucky HZ', email: 'plucky@example.com', avatar: { kind: 'preset' as const, value: 'amber' as const } }
-  const labelState = navExpanded ? 'expanded' : 'collapsed'
+  const labelState = expanded ? 'expanded' : 'collapsed'
 
   return (
     <nav
       className="nav-rail"
-      data-expanded={navExpanded}
+      data-expanded={expanded}
       aria-label="主导航"
     >
       <div className="nav-rail__brand" role="img" aria-label="Agent TodoList">
@@ -72,7 +73,7 @@ export default function NavigationRail() {
         <strong
           className="nav-rail__label"
           data-state={labelState}
-          aria-hidden={!navExpanded}
+          aria-hidden={!expanded}
         >
           Agent TodoList
         </strong>
@@ -90,7 +91,7 @@ export default function NavigationRail() {
               <span
                 className="nav-rail__label"
                 data-state={labelState}
-                aria-hidden={!navExpanded}
+                aria-hidden={!expanded}
               >
                 {item.label}
               </span>
@@ -111,7 +112,7 @@ export default function NavigationRail() {
         <span
           className="nav-rail__label"
           data-state={labelState}
-          aria-hidden={!navExpanded}
+          aria-hidden={!expanded}
         >
           设置
         </span>
@@ -126,10 +127,10 @@ export default function NavigationRail() {
         <span
           className="nav-rail__user"
           data-state={labelState}
-          aria-hidden={!navExpanded}
+          aria-hidden={!expanded}
         >
-          <strong data-state={labelState} aria-hidden={!navExpanded}>{account.name}</strong>
-          <small aria-hidden={!navExpanded}>{account.email}</small>
+          <strong data-state={labelState} aria-hidden={!expanded}>{account.name}</strong>
+          <small aria-hidden={!expanded}>{account.email}</small>
         </span>
       </NavLink>
 
@@ -137,14 +138,14 @@ export default function NavigationRail() {
         type="button"
         className="nav-rail__control"
         onClick={toggleNav}
-        aria-label={navExpanded ? '收起导航' : '展开导航'}
-        aria-expanded={navExpanded}
+        aria-label={expanded ? '收起导航' : '展开导航'}
+        aria-expanded={expanded}
       >
-        <PanelIcon className={navExpanded ? 'nav-rail__toggle-icon--expanded' : ''} />
+        <PanelIcon className={expanded ? 'nav-rail__toggle-icon--expanded' : ''} />
         <span
           className="nav-rail__label"
           data-state={labelState}
-          aria-hidden={!navExpanded}
+          aria-hidden={!expanded}
         >
           收起导航
         </span>

@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentSessionProvider } from '../../features/agent/AgentSessionContext'
 import type { AgentSessionValue, AgentTurn } from '../../features/agent/agent.types'
 import AppShell from '../../features/shell/AppShell'
@@ -33,8 +33,29 @@ function makeSession(): AgentSessionValue {
   }
 }
 
-function renderRealAssistant(width: number) {
+function mediaController(initial: boolean) {
+  let matches = initial
+  const listeners = new Set<(event: MediaQueryListEvent) => void>()
+  const media = {
+    media: '(max-width: 860px)',
+    get matches() { return matches },
+    onchange: null,
+    addEventListener: vi.fn((_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.add(listener)),
+    removeEventListener: vi.fn((_type: string, listener: (event: MediaQueryListEvent) => void) => listeners.delete(listener)),
+    addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: vi.fn(),
+  } as unknown as MediaQueryList
+  return {
+    media,
+    set(next: boolean) {
+      matches = next
+      listeners.forEach((listener) => listener({ matches: next, media: media.media } as MediaQueryListEvent))
+    },
+  }
+}
+
+function renderRealAssistant(width: number, controller = mediaController(width <= 860)) {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
+  vi.stubGlobal('matchMedia', vi.fn(() => controller.media))
   localStorage.setItem('todolist:shell', JSON.stringify({ navExpanded: true, agentExpanded: false }))
   const session = makeSession()
   const view = render(
@@ -46,11 +67,12 @@ function renderRealAssistant(width: number) {
       </QueryClientProvider>
     </MemoryRouter>,
   )
-  return { ...view, session }
+  return { ...view, session, controller }
 }
 
 describe('AssistantPage real AppShell responsive width chain', () => {
   beforeEach(() => localStorage.clear())
+  afterEach(() => vi.unstubAllGlobals())
 
   it.each([827, 761, 760, 390])('keeps controls reachable at a %ipx viewport without changing the expanded preference', async (width) => {
     const user = userEvent.setup()
@@ -61,8 +83,11 @@ describe('AssistantPage real AppShell responsive width chain', () => {
     const conversation = document.querySelector('.assistant-conversation') as HTMLElement
     const openSessions = screen.getByRole('button', { name: '打开会话列表' })
 
-    expect(shell).toHaveStyle({ '--nav-width': 'var(--nav-width-expanded)' })
-    expect(nav).toHaveAttribute('data-expanded', 'true')
+    expect(shell).toHaveStyle({ '--nav-width': 'var(--nav-width-collapsed)' })
+    expect(nav).toHaveAttribute('data-expanded', 'false')
+    expect(screen.getByRole('button', { name: '展开导航' })).toHaveAttribute('aria-expanded', 'false')
+    expect(nav.querySelector('.nav-rail__label')).toHaveAttribute('data-state', 'collapsed')
+    expect(nav.querySelector('.nav-rail__label')).toHaveAttribute('aria-hidden', 'true')
     expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
     expect(workspace).toContainElement(conversation)
     expect(screen.getByRole('textbox', { name: '智能助手消息' })).toBeVisible()
@@ -81,9 +106,8 @@ describe('AssistantPage real AppShell responsive width chain', () => {
   })
 
   it('switches to a compact rail and one-column assistant before the content can be clipped', () => {
-    const breakpoint = Number(globalStyles.match(/@media \(max-width:\s*(\d+)px\)\s*\{\s*\.app-shell:has\([^)]*assistant-workspace/)?.[1])
-    expect(breakpoint).toBeGreaterThanOrEqual(827)
-    expect(globalStyles).toMatch(/\.app-shell:has\([^{]*assistant-workspace[^{]*\)\s*\{[^}]*--nav-width:\s*var\(--nav-width-collapsed\)\s*!important/)
+    expect(globalStyles).toMatch(/@media \(max-width:\s*860px\)[\s\S]*?\.assistant-workspace\s*\{\s*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
+    expect(globalStyles).not.toMatch(/\.app-shell:has\([^{]*assistant-workspace[^{]*\)\s*\{[^}]*--nav-width:\s*var\(--nav-width-collapsed\)\s*!important/)
     expect(globalStyles).toMatch(/@media \(max-width:\s*8\d\dpx\)[\s\S]*?\.assistant-workspace\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/)
     expect(globalStyles).toMatch(/\.assistant-conversation\s*\{[^}]*min-width:\s*0/)
     expect(globalStyles).not.toMatch(/@media \(max-width:\s*8\d\dpx\)[\s\S]*?\.assistant-conversation\s*\{[^}]*min-width:\s*400px/)
@@ -95,5 +119,86 @@ describe('AssistantPage real AppShell responsive width chain', () => {
       expect(visibleMain).toBeGreaterThanOrEqual(320)
       expect(shellGutter + compactRail + visibleMain).toBe(width)
     }
+  })
+
+  it('opens as a modal drawer, traps Tab, and returns focus on Escape', async () => {
+    const user = userEvent.setup()
+    renderRealAssistant(760)
+    const opener = screen.getByRole('button', { name: '打开会话列表' })
+    opener.focus()
+    await user.keyboard('{Enter}')
+    const drawer = screen.getByRole('complementary', { name: '会话列表' })
+    const close = screen.getByRole('button', { name: '关闭会话列表' })
+    const drawerButtons = Array.from(drawer.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+
+    expect(close).toHaveFocus()
+    expect(document.querySelector('.assistant-conversation')).toHaveAttribute('inert')
+    expect(screen.getByRole('navigation', { name: '主导航' })).toHaveAttribute('inert')
+    drawerButtons.at(-1)!.focus()
+    await user.tab()
+    expect(close).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(drawerButtons.at(-1)).toHaveFocus()
+
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(opener).toHaveFocus())
+    expect(opener).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('closes by mask or close control and restores the exact opener', async () => {
+    const user = userEvent.setup()
+    renderRealAssistant(760)
+    const opener = screen.getByRole('button', { name: '打开会话列表' })
+    await user.click(opener)
+    await user.click(screen.getByRole('button', { name: '关闭会话列表遮罩' }))
+    await waitFor(() => expect(opener).toHaveFocus())
+
+    await user.click(opener)
+    await user.click(screen.getByRole('button', { name: '关闭会话列表' }))
+    await waitFor(() => expect(opener).toHaveFocus())
+  })
+
+  it('cleans an open drawer when crossing above the compact breakpoint', async () => {
+    const user = userEvent.setup()
+    const controller = mediaController(true)
+    renderRealAssistant(760, controller)
+    const opener = screen.getByRole('button', { name: '打开会话列表' })
+    await user.click(opener)
+    expect(opener).toHaveAttribute('aria-expanded', 'true')
+
+    act(() => controller.set(false))
+
+    await waitFor(() => expect(opener).toHaveAttribute('aria-expanded', 'false'))
+    await waitFor(() => expect(screen.getByRole('button', { name: '打开会话：今天计划' })).toHaveFocus())
+    expect(document.querySelector('.assistant-conversation')).not.toHaveAttribute('inert')
+  })
+
+  it('restores the persisted expanded navigation preference above the assistant breakpoint', async () => {
+    const controller = mediaController(true)
+    renderRealAssistant(760, controller)
+    const shell = screen.getByTestId('app-shell')
+    const nav = screen.getByRole('navigation', { name: '主导航' })
+
+    expect(nav).toHaveAttribute('data-expanded', 'false')
+    expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
+
+    act(() => controller.set(false))
+
+    await waitFor(() => expect(nav).toHaveAttribute('data-expanded', 'true'))
+    expect(shell).toHaveStyle({ '--nav-width': 'var(--nav-width-expanded)' })
+    expect(screen.getByRole('button', { name: '收起导航' })).toHaveAttribute('aria-expanded', 'true')
+    expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
+  })
+
+  it('removes media-query listeners when the assistant shell unmounts', () => {
+    const controller = mediaController(true)
+    const view = renderRealAssistant(760, controller)
+    expect(controller.media.addEventListener).toHaveBeenCalled()
+
+    view.unmount()
+
+    expect(controller.media.removeEventListener).toHaveBeenCalledTimes(
+      vi.mocked(controller.media.addEventListener).mock.calls.length,
+    )
   })
 })

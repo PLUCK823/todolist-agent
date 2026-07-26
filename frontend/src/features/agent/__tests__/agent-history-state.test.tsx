@@ -102,6 +102,58 @@ function renderHistory(sessionsApi: AgentSessionsApi, client = new ControlledCli
 }
 
 describe('durable Agent session state', () => {
+  it('shares one durable clear operation and owns pending state until deletion settles', async () => {
+    const pendingDelete = deferred<void>()
+    const remove = vi.fn(() => pendingDelete.promise)
+    const hook = renderHistory(api({ delete: remove }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let firstClear!: Promise<void>
+    let secondClear!: Promise<void>
+
+    act(() => {
+      firstClear = hook.current().clear()
+      secondClear = hook.current().clear()
+    })
+
+    expect(firstClear).toBe(secondClear)
+    expect(remove).toHaveBeenCalledTimes(1)
+    expect(hook.current().isClearing).toBe(true)
+    expect(hook.current().canSend).toBe(false)
+    pendingDelete.resolve()
+    await act(() => firstClear)
+    expect(hook.current().isClearing).toBe(false)
+  })
+
+  it('releases durable clear ownership after rejection and allows a retry without losing visible turns', async () => {
+    const remove = vi.fn()
+      .mockRejectedValueOnce(new Error('删除会话失败'))
+      .mockResolvedValueOnce(undefined)
+    const hook = renderHistory(api({ delete: remove }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    const visibleTurn = hook.current().turns[0]
+
+    await act(async () => { await expect(hook.current().clear()).rejects.toThrow('删除会话失败') })
+    expect(hook.current().isClearing).toBe(false)
+    expect(hook.current().turns).toContainEqual(visibleTurn)
+    await act(() => hook.current().clear())
+    expect(remove).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not update durable clear state after unmount', async () => {
+    const pendingDelete = deferred<void>()
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const hook = renderHistory(api({ delete: vi.fn(() => pendingDelete.promise) }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let clearing!: Promise<void>
+    act(() => { clearing = hook.current().clear() })
+
+    hook.unmount()
+    pendingDelete.resolve()
+    await clearing
+    expect(consoleError).not.toHaveBeenCalled()
+    consoleError.mockRestore()
+  })
+
   it('never treats a persisted confirmation as a live socket capability', async () => {
     const hook = renderHistory(api({
       list: vi.fn().mockResolvedValue([first]),

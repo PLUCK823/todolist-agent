@@ -684,29 +684,28 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   }, [clearRetryCapabilities, closeStream, dispatch])
 
   const clear = useCallback((): Promise<void> => {
-    clearRetryCapabilities()
-    if (durableHistory && selectedRef.current) return deleteSession(selectedRef.current)
     if (clearPromiseRef.current) return clearPromiseRef.current
+    clearRetryCapabilities()
     const currentSessionId = stateRef.current.sessionId
-    if (!currentSessionId) {
-      generationRef.current++
-      closeStream()
-      dispatch({ type: 'clear' })
-      return Promise.resolve()
-    }
+    const durableSessionId = durableHistory ? selectedRef.current : undefined
     const generation = ++generationRef.current
     clearingRef.current = true
     setIsClearing(true)
     closeStream()
 
-    const operation = (async () => {
-      try {
-        if (currentSessionId) await historyApi.clear(currentSessionId)
-        if (mountedRef.current && generationRef.current === generation) {
-          dispatch({ type: 'clear' })
-        }
-      } catch (error) {
-        if (mountedRef.current && generationRef.current === generation) {
+    const execute = async () => {
+      if (durableSessionId) {
+        await deleteSession(durableSessionId)
+        return
+      }
+      if (currentSessionId) await historyApi.clear(currentSessionId)
+      if (mountedRef.current && generationRef.current === generation) {
+        dispatch({ type: 'clear' })
+      }
+    }
+    const operation = execute()
+      .catch((error: unknown) => {
+        if (!durableHistory && mountedRef.current && generationRef.current === generation) {
           dispatch({
             type: 'client_failed',
             failure: {
@@ -717,12 +716,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
           })
         }
         throw error
-      } finally {
+      })
+      .finally(() => {
+        if (clearPromiseRef.current !== operation) return
         clearingRef.current = false
         if (mountedRef.current) setIsClearing(false)
         clearPromiseRef.current = undefined
-      }
-    })()
+      })
     clearPromiseRef.current = operation
     return operation
   }, [clearRetryCapabilities, closeStream, deleteSession, dispatch, durableHistory, historyApi])

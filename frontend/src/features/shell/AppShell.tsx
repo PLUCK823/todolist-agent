@@ -8,6 +8,7 @@ import { IconButton } from '../../shared/ui/IconButton'
 import NavigationRail from './NavigationRail'
 import { useShell } from './shell-context'
 import SettingsDialog from '../preferences/SettingsDialog'
+import { useMediaQuery } from '../../hooks/useMediaQuery'
 
 type ShellStyle = CSSProperties & {
   '--nav-width': string
@@ -17,10 +18,12 @@ type ShellStyle = CSSProperties & {
 function AppShellContent() {
   const { navExpanded, agentExpanded, closeAgent, openAgent, headerActionsElement } = useShell()
   const location = useLocation()
+  const compactAssistant = useMediaQuery('(max-width: 860px)')
   const [agentDraft, setAgentDraft] = useState('')
   const sparkRef = useRef<HTMLButtonElement>(null)
   const restoreSparkFocusRef = useRef(false)
   const showPanel = agentExpanded && location.pathname !== '/assistant'
+  const effectiveNavExpanded = navExpanded && !(location.pathname === '/assistant' && compactAssistant)
 
   const collapseAgent = useCallback(() => {
     restoreSparkFocusRef.current = true
@@ -45,7 +48,7 @@ function AppShellContent() {
   }, [collapseAgent, showPanel])
 
   const style: ShellStyle = {
-    '--nav-width': navExpanded
+    '--nav-width': effectiveNavExpanded
       ? 'var(--nav-width-expanded)'
       : 'var(--nav-width-collapsed)',
     '--agent-width': showPanel ? 'var(--agent-width-expanded)' : '0px',
@@ -57,7 +60,7 @@ function AppShellContent() {
 
   return (
     <div className="app-shell" data-testid="app-shell" style={style}>
-      <NavigationRail />
+      <NavigationRail expanded={effectiveNavExpanded} />
       <main className="app-shell__main">
         <Outlet />
       </main>

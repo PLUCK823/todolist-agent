@@ -1044,6 +1044,16 @@ figcaption {
 .assistant-sessions__open,
 .assistant-sessions__close { display: none; }
 
+.assistant-sessions__backdrop {
+  position: absolute;
+  z-index: 19;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: rgb(20 23 35 / 36%);
+  backdrop-filter: blur(2px);
+}
+
 .assistant-sessions section > p,
 .assistant-inspector > p {
   margin: 24px 8px 9px;
@@ -1508,21 +1518,6 @@ figcaption {
 }
 
 @media (max-width: 860px) {
-  .app-shell:has(.assistant-workspace) {
-    --nav-width: var(--nav-width-collapsed) !important;
-    grid-template-columns: var(--nav-width-collapsed) minmax(0, 1fr);
-  }
-  .app-shell:has(.assistant-workspace) .nav-rail__label,
-  .app-shell:has(.assistant-workspace) .nav-rail__user {
-    max-width: 0;
-    opacity: 0;
-    transform: translateX(-8px);
-    pointer-events: none;
-  }
-  .app-shell:has(.assistant-workspace) .nav-rail__control {
-    justify-content: center;
-    padding-inline: 0;
-  }
   .assistant-workspace { grid-template-columns: minmax(0, 1fr); }
   .assistant-sessions {
     position: absolute;
