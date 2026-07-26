@@ -1,3 +1,5 @@
+import { serializeAuthCookieMutation } from './auth-mutation-coordinator'
+
 export const API_AUTH_EXPIRED_EVENT = 'todolist:auth-expired'
 
 interface ApiEnvelope<T> {
@@ -108,7 +110,7 @@ function refreshSession(expectedGeneration: number): Promise<void> {
   if (!refreshPromise) {
     const controller = new AbortController()
     refreshController = controller
-    const pending = apiFetch('/api/auth/refresh', { method: 'POST', signal: controller.signal })
+    const pending = serializeAuthCookieMutation(() => apiFetch('/api/auth/refresh', { method: 'POST', signal: controller.signal }))
       .then(() => {
         if (sessionEpoch !== expectedGeneration) return
         sessionEpoch += 1

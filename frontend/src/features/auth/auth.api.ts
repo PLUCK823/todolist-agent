@@ -1,4 +1,5 @@
 import { ApiError, apiFetch, authenticatedFetch, beginAuthTransition, getAuthGeneration } from '../../shared/api/authenticated-fetch'
+import { serializeAuthCookieMutation } from '../../shared/api/auth-mutation-coordinator'
 import { applyStoredAvatar, clearLegacyAuthStorage, saveStoredAvatar } from './auth.storage'
 import type { Account, AuthApi, LoginInput, ProfileUpdate, RegisterInput, Session } from './auth.types'
 
@@ -54,14 +55,15 @@ export function createAuthApi(): AuthApi {
 
     async login(input: LoginInput) {
       const generation = beginAuthTransition()
-      const account = await applyStoredAvatar(parseAccount(await apiFetch<unknown>('/api/auth/login', jsonRequest('POST', input))))
+      const value = await serializeAuthCookieMutation(() => apiFetch<unknown>('/api/auth/login', jsonRequest('POST', input)))
+      const account = await applyStoredAvatar(parseAccount(value))
       if (generation !== getAuthGeneration()) throw new ApiError('登录状态已发生变化，请重试', 409)
       return account
     },
 
     async logout() {
       beginAuthTransition()
-      await apiFetch<void>('/api/auth/logout', { method: 'POST' })
+      await serializeAuthCookieMutation(() => apiFetch<void>('/api/auth/logout', { method: 'POST' }))
     },
 
     async getSession(): Promise<Session | null> {

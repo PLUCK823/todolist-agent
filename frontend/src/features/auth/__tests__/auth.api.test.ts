@@ -159,4 +159,95 @@ describe('authApi', () => {
 
     await expect(createAuthApi().getSession()).rejects.toThrow('账户响应格式错误')
   })
+
+  it('linearizes overlapping logins so the last invocation owns the final Cookie session', async () => {
+    const alice = { ...account, id: 'linear-alice', email: 'alice-linear@example.com' }
+    const bob = { ...account, id: 'linear-bob', email: 'bob-linear@example.com' }
+    let cookieSession = ''
+    let releaseAlice!: () => void
+    let markAliceStarted!: () => void
+    let markBobStarted!: () => void
+    const aliceGate = new Promise<void>((resolve) => { releaseAlice = resolve })
+    const aliceStarted = new Promise<void>((resolve) => { markAliceStarted = resolve })
+    const bobStarted = new Promise<void>((resolve) => { markBobStarted = resolve })
+    server.use(http.post('/api/auth/login', async ({ request }) => {
+      const input = await request.json() as { email: string }
+      if (input.email === alice.email) {
+        markAliceStarted()
+        await aliceGate
+        cookieSession = alice.id
+        return ok(alice)
+      }
+      markBobStarted()
+      cookieSession = bob.id
+      return ok(bob)
+    }))
+    const api = createAuthApi()
+
+    const first = api.login({ email: alice.email, password: 'password1' })
+    await aliceStarted
+    const second = api.login({ email: bob.email, password: 'password1' })
+    setTimeout(releaseAlice, 10)
+    await bobStarted
+
+    await expect(first).rejects.toMatchObject({ status: 409 })
+    await expect(second).resolves.toMatchObject({ id: bob.id })
+    expect(cookieSession).toBe(bob.id)
+  })
+
+  it('linearizes logout after an in-flight login so a late login Cookie cannot restore the session', async () => {
+    const alice = { ...account, id: 'logout-alice', email: 'logout-alice@example.com' }
+    let cookieSession = ''
+    let releaseLogin!: () => void
+    let markLoginStarted!: () => void
+    let markLogoutStarted!: () => void
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    const loginStarted = new Promise<void>((resolve) => { markLoginStarted = resolve })
+    const logoutStarted = new Promise<void>((resolve) => { markLogoutStarted = resolve })
+    server.use(
+      http.post('/api/auth/login', async () => {
+        markLoginStarted()
+        await loginGate
+        cookieSession = alice.id
+        return ok(alice)
+      }),
+      http.post('/api/auth/logout', () => {
+        markLogoutStarted()
+        cookieSession = ''
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const api = createAuthApi()
+
+    const login = api.login({ email: alice.email, password: 'password1' })
+    await loginStarted
+    const logout = api.logout()
+    setTimeout(releaseLogin, 10)
+    await logoutStarted
+
+    await expect(login).rejects.toMatchObject({ status: 409 })
+    await expect(logout).resolves.toBeUndefined()
+    expect(cookieSession).toBe('')
+  })
+
+  it('continues the Cookie mutation queue after a failed login', async () => {
+    const bob = { ...account, id: 'after-failure-bob', email: 'after-failure@example.com' }
+    let cookieSession = ''
+    server.use(http.post('/api/auth/login', async ({ request }) => {
+      const input = await request.json() as { email: string }
+      if (input.email === 'fail@example.com') {
+        return HttpResponse.json({ code: 40102, message: '失败', data: null }, { status: 401 })
+      }
+      cookieSession = bob.id
+      return ok(bob)
+    }))
+    const api = createAuthApi()
+
+    const failed = api.login({ email: 'fail@example.com', password: 'password1' })
+    const succeeded = api.login({ email: bob.email, password: 'password1' })
+
+    await expect(failed).rejects.toBeInstanceOf(Error)
+    await expect(succeeded).resolves.toMatchObject({ id: bob.id })
+    expect(cookieSession).toBe(bob.id)
+  })
 })

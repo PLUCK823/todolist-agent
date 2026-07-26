@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { server } from '../../../mocks/server'
+import { createAuthApi } from '../../../features/auth/auth.api'
 import {
   API_AUTH_EXPIRED_EVENT,
   ApiError,
@@ -66,6 +67,86 @@ describe('authenticatedFetch', () => {
       authenticatedFetch('/api/private/two'),
     ])).resolves.toEqual([{ restored: true }, { restored: true }])
     expect(refreshCalls).toBe(1)
+  })
+
+  it('runs a refresh after an earlier login Cookie mutation finishes', async () => {
+    const calls: string[] = []
+    let cookieSession = ''
+    let releaseLogin!: () => void
+    let markLoginStarted!: () => void
+    const loginGate = new Promise<void>((resolve) => { releaseLogin = resolve })
+    const loginStarted = new Promise<void>((resolve) => { markLoginStarted = resolve })
+    let privateCalls = 0
+    server.use(
+      http.post('/api/auth/login', async () => {
+        calls.push('login:start')
+        markLoginStarted()
+        await loginGate
+        cookieSession = 'login-session'
+        calls.push('login:cookie')
+        return ok({
+          id: 'queue-user', name: 'Queue User', email: 'queue@example.com', timezone: 'Asia/Shanghai',
+          avatar: { kind: 'preset', value: 'amber' }, taskCount: 0, agentSessionCount: 0,
+        })
+      }),
+      http.get('/api/private', () => {
+        privateCalls += 1
+        return privateCalls === 1
+          ? HttpResponse.json({ code: 40101, message: 'expired', data: null }, { status: 401 })
+          : ok({ restored: true })
+      }),
+      http.post('/api/auth/refresh', () => {
+        calls.push('refresh:start')
+        cookieSession = 'refreshed-session'
+        calls.push('refresh:cookie')
+        return ok(null)
+      }),
+    )
+
+    const login = createAuthApi().login({ email: 'queue@example.com', password: 'password1' })
+    await loginStarted
+    const privateRequest = authenticatedFetch('/api/private')
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const callsBeforeRelease = [...calls]
+    releaseLogin()
+
+    await expect(login).resolves.toMatchObject({ id: 'queue-user' })
+    await expect(privateRequest).resolves.toEqual({ restored: true })
+    expect(callsBeforeRelease).toEqual(['login:start'])
+    expect(calls).toEqual(['login:start', 'login:cookie', 'refresh:start', 'refresh:cookie'])
+    expect(cookieSession).toBe('refreshed-session')
+  })
+
+  it('lets a queued logout run after aborting an in-flight refresh', async () => {
+    const calls: string[] = []
+    let cookieSession = 'old-session'
+    let markRefreshStarted!: () => void
+    const refreshStarted = new Promise<void>((resolve) => { markRefreshStarted = resolve })
+    server.use(
+      http.get('/api/private', () => HttpResponse.json({ code: 40101, message: 'expired', data: null }, { status: 401 })),
+      http.post('/api/auth/refresh', async ({ request }) => {
+        calls.push('refresh:start')
+        markRefreshStarted()
+        await new Promise<void>((resolve) => request.signal.addEventListener('abort', () => resolve(), { once: true }))
+        calls.push('refresh:aborted')
+        return ok(null)
+      }),
+      http.post('/api/auth/logout', () => {
+        calls.push('logout:start')
+        cookieSession = ''
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    const privateRequest = authenticatedFetch('/api/private')
+    await refreshStarted
+    const logout = createAuthApi().logout()
+
+    await expect(privateRequest).rejects.toBeInstanceOf(ApiError)
+    await expect(logout).resolves.toBeUndefined()
+    expect(calls).toEqual(['refresh:start', 'refresh:aborted', 'logout:start'])
+    expect(cookieSession).toBe('')
   })
 
   it('does not start a second refresh for an old 401 that arrives after the session epoch changed', async () => {
