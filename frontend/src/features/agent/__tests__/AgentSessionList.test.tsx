@@ -113,6 +113,23 @@ describe('AgentSessionList', () => {
     expect(create).toBeEnabled()
   })
 
+  it('releases create ownership after a synchronous failure so retry can succeed', async () => {
+    const user = userEvent.setup()
+    const onCreate = vi.fn()
+      .mockImplementationOnce(() => { throw new Error('同步失败') })
+      .mockResolvedValueOnce(undefined)
+    renderList({ onCreate })
+    const create = screen.getByRole('button', { name: '新建会话' })
+
+    await user.click(create)
+    expect(await screen.findByRole('alert')).toHaveTextContent('同步失败')
+    await user.click(create)
+
+    await waitFor(() => expect(screen.queryByText('同步失败')).not.toBeInTheDocument())
+    expect(onCreate).toHaveBeenCalledTimes(2)
+    expect(create).toBeEnabled()
+  })
+
   it('does not update state after an in-flight create unmounts', async () => {
     const user = userEvent.setup()
     const pending = deferred<void>()

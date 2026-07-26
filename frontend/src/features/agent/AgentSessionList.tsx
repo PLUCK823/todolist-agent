@@ -240,10 +240,9 @@ export default function AgentSessionList({
     setCreateError('')
     setCreatePending(true)
 
-    const operation = (async () => {
-      try {
-        await onCreate()
-      } catch (error) {
+    const operation: Promise<void> = Promise.resolve()
+      .then(() => onCreate())
+      .catch((error: unknown) => {
         if (mountedRef.current) {
           setCreateError(errorMessage(error, '新建会话失败，请重试。'))
           window.setTimeout(() => {
@@ -252,13 +251,14 @@ export default function AgentSessionList({
             }
           }, 0)
         }
-      } finally {
+      })
+      .finally(() => {
+        if (createPromiseRef.current !== operation) return
         createPromiseRef.current = null
         if (mountedRef.current) {
           setCreatePending(false)
         }
-      }
-    })()
+      })
 
     createPromiseRef.current = operation
     return operation
