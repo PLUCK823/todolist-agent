@@ -162,8 +162,29 @@ class _DeterministicE2ELLM:
             isinstance(message, ToolMessage)
             for message in messages[last_human_index + 1 :]
         ):
+            if "E2E_TABLE_HISTORY" in prompt:
+                return AIMessage(
+                    content=(
+                        "| 任务 | 优先级 | 状态 |\n"
+                        "| --- | --- | --- |\n"
+                        "| 完成品牌复评审 | 高 | 未完成 |"
+                    )
+                )
             title = self._create_title(prompt)
             return AIMessage(content=f"已创建高优先级任务「{title}」。")
+
+        if "E2E_TABLE_HISTORY" in prompt:
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "list_todos",
+                        "args": {"limit": 20},
+                        "id": "e2e-list-todos",
+                        "type": "tool_call",
+                    }
+                ],
+            )
 
         title = self._create_title(prompt)
         return AIMessage(

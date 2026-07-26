@@ -1,6 +1,15 @@
 import { expect, test } from '../fixtures/agent.fixture'
 
-test.beforeEach(async ({ login }) => { await login() })
+test.beforeEach(async ({ page, login }) => {
+  await login()
+  const status = await page.evaluate(async () => (await fetch('/api/agent/sessions', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  })).status)
+  expect(status).toBe(201)
+})
 
 async function sendFromPanel(page: import('@playwright/test').Page, message: string) {
   await page.getByLabel('消息输入框').fill(message)
@@ -36,7 +45,7 @@ test('retries a retryable tool timeout from the panel and succeeds', async ({ pa
   await useAgentScenario('readOnlyTimeout')
   await page.goto('/tasks')
   await sendFromPanel(page, '查询未完成任务')
-  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 查询超时' })).toBeVisible()
+  await expect(page.getByText('Todo API 查询超时', { exact: true })).toBeVisible()
   await useAgentScenario('readOnlySuccess')
   await page.getByRole('button', { name: '重试查询 Todo 列表' }).click()
   await expect(page.getByText('已查询到 4 项任务。')).toBeVisible()
@@ -46,12 +55,12 @@ test('never offers replay for create or delete timeouts', async ({ page, useAgen
   await useAgentScenario('timeout')
   await page.goto('/tasks')
   await sendFromPanel(page, '创建超时任务')
-  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 响应超时' })).toBeVisible()
+  await expect(page.getByText('Todo API 响应超时', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '重试调用 Todo API' })).toHaveCount(0)
 
   await useAgentScenario('deleteTimeout')
   await sendFromPanel(page, '删除超时任务')
-  await expect(page.getByRole('alert').filter({ hasText: '删除 Todo 超时' })).toBeVisible()
+  await expect(page.getByText('删除 Todo 超时', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '重试删除待办' })).toHaveCount(0)
 })
 
@@ -163,7 +172,8 @@ test('shares the same live session with the standalone Agent workspace', async (
   await page.getByRole('button', { name: '发送消息' }).click()
   await expect(page.getByRole('log')).toContainText('独立工作区任务')
   await expect(page.getByRole('log')).toContainText('好的，已创建高优先级任务。')
-  await expect(page.getByLabel('执行详情').filter({ has: page.getByRole('list', { name: 'Agent 执行步骤' }) })).toBeVisible()
+  await page.getByRole('button', { name: /执行详情/ }).click()
+  await expect(page.getByRole('list', { name: 'Agent 执行步骤' })).toBeVisible()
 })
 
 test('recovers a retryable failure from the standalone Agent workspace', async ({ page, useAgentScenario }) => {
@@ -171,7 +181,7 @@ test('recovers a retryable failure from the standalone Agent workspace', async (
   await page.goto('/assistant')
   await page.getByLabel('智能助手消息').fill('独立页查询任务')
   await page.getByRole('button', { name: '发送消息' }).click()
-  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 查询超时' })).toBeVisible()
+  await expect(page.getByText('Todo API 查询超时', { exact: true })).toBeVisible()
   await useAgentScenario('readOnlySuccess')
   await page.getByRole('button', { name: '重试查询 Todo 列表' }).click()
   await expect(page.getByRole('log')).toContainText('已查询到 4 项任务。')
@@ -219,13 +229,16 @@ test('keeps a token locked when the panel disconnects before done', async ({ pag
   await useAgentScenario('readOnlyDisconnect')
   await page.goto('/tasks')
   await sendFromPanel(page, '查询后断线')
-  await expect(page.getByRole('alert').filter({ hasText: 'Todo API 查询超时' })).toBeVisible()
-  await expect(page.getByRole('alert').filter({ hasText: '智能助手连接已断开' })).toBeVisible()
+  await expect(page.getByText('Todo API 查询超时', { exact: true })).toBeVisible()
+  await expect(page.getByText('智能助手连接已断开', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '重试查询 Todo 列表' })).toHaveCount(0)
   await expect(page.getByLabel('消息输入框')).toBeDisabled()
 
   await page.getByRole('button', { name: '清空对话' }).click()
   await expect(page.getByRole('heading', { name: '今天要做什么？' })).toBeVisible()
+  await page.goto('/assistant')
+  await page.getByRole('button', { name: '新建会话' }).click()
+  await page.goto('/tasks')
   await expect(page.getByLabel('消息输入框')).toBeEnabled()
 })
 
@@ -237,6 +250,7 @@ test('reports a disconnected stream and clears retained history', async ({ page,
   await expect(page.getByRole('alert').filter({ hasText: '连接异常 · 当前离线' })).toBeVisible()
   await expect(page.getByRole('log')).toContainText('触发断线')
   await page.getByRole('button', { name: '清空对话' }).click()
+  await page.getByRole('button', { name: '确认清空' }).click()
   await expect(page.getByRole('heading', { name: '从一句话开始' })).toBeVisible()
   await expect(page.getByRole('log')).not.toContainText('触发断线')
 })

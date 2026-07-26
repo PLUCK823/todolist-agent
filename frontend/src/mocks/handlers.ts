@@ -147,6 +147,68 @@ let mockActiveSessionEmail: string | null = null
 const MOCK_AUTH_CACHE = 'todolist-mock-auth'
 const MOCK_SESSION_CACHE_KEY = 'http://mock.local/session'
 
+interface MockAgentSessionRecord {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  last_message_at: string
+  turns: Array<Record<string, unknown>>
+}
+
+const mockAgentSessions = new Map<string, Map<string, MockAgentSessionRecord>>()
+const mockAgentSessionOwners = new Map<string, string>()
+
+function ownerAgentSessions(email: string) {
+  let sessions = mockAgentSessions.get(email)
+  if (!sessions) {
+    const storageKey = `todolist:e2e:agent-history:${email}`
+    try {
+      const stored = JSON.parse(readStorage(storageKey) ?? '[]') as MockAgentSessionRecord[]
+      sessions = new Map(Array.isArray(stored) ? stored.map((session) => [session.id, session]) : [])
+    } catch {
+      removeStorage(storageKey)
+      sessions = new Map()
+    }
+    mockAgentSessions.set(email, sessions)
+  }
+  return sessions
+}
+
+function persistOwnerAgentSessions(email: string) {
+  writeStorage(`todolist:e2e:agent-history:${email}`, [...ownerAgentSessions(email).values()])
+}
+
+function agentSummary(session: MockAgentSessionRecord) {
+  const { turns: _turns, ...summary } = session
+  void _turns
+  return summary
+}
+
+function agentNotFound() {
+  return HttpResponse.json({ code: 40401, message: '会话不存在', data: null }, { status: 404 })
+}
+
+async function agentSessionForRequest(request: Request, id: string) {
+  const account = await currentMockAccount(request)
+  if (!account) return null
+  return ownerAgentSessions(account.email).get(id) ?? null
+}
+
+function mockIsoNow() {
+  return new Date().toISOString()
+}
+
+function durableStepFromStarted(event: Extract<(typeof agentEventScenarios.success.events)[number]['event'], { type: 'step_started' }>, ordinal: number) {
+  return {
+    id: globalThis.crypto.randomUUID(), event_id: event.event_id, ordinal, label: event.label,
+    tool: event.tool ?? null, status: 'running', args: event.args ?? {}, result: null,
+    result_preview: null, result_truncated: false, duration_ms: null, error_code: null,
+    error_message: null, retryable: false, confirmation_id: null, confirmation_message: null,
+    confirmation_approved: null, started_at: event.started_at ?? mockIsoNow(), completed_at: null,
+  }
+}
+
 function normalizedEmail(value: string) {
   return value.trim().toLowerCase()
 }
@@ -263,7 +325,10 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
   let waitingForConfirmation = false
   let connectionSession = ''
   let connectionGeneration = 0
-  client.addEventListener('message', (message) => {
+  let durableTurn: Record<string, unknown> | undefined
+  let durableSession: MockAgentSessionRecord | undefined
+  let durableOwnerEmail: string | undefined
+  client.addEventListener('message', async (message) => {
     let frame: Record<string, unknown>
     try { frame = JSON.parse(String(message.data)) as Record<string, unknown> } catch { return }
     const config = (() => {
@@ -299,10 +364,41 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
       }
       pendingAgentRetries.delete(token)
       const retryScenario = agentEventScenarios.readOnlySuccess
+      const retryOwnerEmail = mockAgentSessionOwners.get(pending.sessionId)
+      const retrySession = retryOwnerEmail ? ownerAgentSessions(retryOwnerEmail).get(pending.sessionId) : undefined
+      const retryTurn = retrySession?.turns.at(-1)
       retryScenario.events
         .filter(({ event }) => ['step_started', 'action_completed', 'reply', 'done'].includes(event.type))
         .filter(({ event }) => event.type !== 'step_started' || event.step_id === pending.stepId)
         .forEach(({ event }, index) => setTimeout(() => {
+          if (retryTurn) {
+            const steps = retryTurn.steps as Array<Record<string, unknown>>
+            const step = 'event_id' in event
+              ? steps.find((candidate) => candidate.event_id === event.event_id)
+              : undefined
+            if (event.type === 'step_started' && step) Object.assign(step, {
+              status: 'running', error_code: null, error_message: null, retryable: false, completed_at: null,
+            })
+            if (event.type === 'action_completed' && step) Object.assign(step, {
+              status: 'completed', result: event.result, result_preview: JSON.stringify(event.result),
+              duration_ms: event.duration_ms, completed_at: mockIsoNow(), error_code: null, error_message: null,
+            })
+            if (event.type === 'reply') {
+              const messages = retryTurn.messages as Array<Record<string, unknown>>
+              messages.push({
+                id: globalThis.crypto.randomUUID(), role: 'assistant', content: event.content,
+                ordinal: (retryTurn.ordinal as number) * 2, created_at: mockIsoNow(),
+              })
+            }
+            if (event.type === 'done') Object.assign(retryTurn, {
+              status: 'completed', completed_at: mockIsoNow(), failure_code: null, failure_message: null,
+            })
+            if (retrySession) {
+              retrySession.updated_at = mockIsoNow()
+              retrySession.last_message_at = retrySession.updated_at
+            }
+            if (retryOwnerEmail) persistOwnerAgentSessions(retryOwnerEmail)
+          }
           client.send(JSON.stringify(event.type === 'step_started'
             ? { ...event, tool: pending.tool, args: pending.args }
             : event))
@@ -323,8 +419,76 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
       for (const [retryToken, pending] of pendingAgentRetries) {
         if (pending.sessionId === connectionSession) pendingAgentRetries.delete(retryToken)
       }
+      const email = mockAgentSessionOwners.get(connectionSession)
+      durableOwnerEmail = email
+      durableSession = email ? ownerAgentSessions(email).get(connectionSession) : undefined
+      if (durableSession && typeof frame.message === 'string') {
+        const timestamp = mockIsoNow()
+        const ordinal = durableSession.turns.length + 1
+        durableTurn = {
+          id: globalThis.crypto.randomUUID(), ordinal, status: 'running', started_at: timestamp,
+          completed_at: null, failure_code: null, failure_message: null, result_uncertain: false,
+          messages: [{
+            id: globalThis.crypto.randomUUID(), role: 'user', content: frame.message, ordinal: ordinal * 2 - 1,
+            created_at: timestamp,
+          }],
+          steps: [],
+        }
+        durableSession.turns.push(durableTurn)
+        if (durableSession.title === '新会话') durableSession.title = frame.message.trim().slice(0, 40) || '新会话'
+        durableSession.updated_at = timestamp
+        durableSession.last_message_at = timestamp
+        if (email) persistOwnerAgentSessions(email)
+      }
     }
     const applyAction = (event: (typeof scenario.events)[number]['event']) => {
+      if (durableTurn) {
+        const steps = durableTurn.steps as Array<Record<string, unknown>>
+        if (event.type === 'step_started') {
+          const existing = steps.find((step) => step.event_id === event.event_id)
+          if (!existing) steps.push(durableStepFromStarted(event, steps.length + 1))
+        } else if (event.type === 'step_completed') {
+          const step = steps.find((candidate) => candidate.event_id === event.event_id)
+          if (step) Object.assign(step, { status: 'completed', duration_ms: event.duration_ms, completed_at: mockIsoNow() })
+        } else if (event.type === 'action_completed') {
+          const step = steps.find((candidate) => candidate.event_id === event.event_id)
+          if (step) Object.assign(step, {
+            status: 'completed', result: event.result, result_preview: JSON.stringify(event.result),
+            duration_ms: event.duration_ms, completed_at: mockIsoNow(),
+          })
+        } else if (event.type === 'step_failed') {
+          const step = steps.find((candidate) => candidate.event_id === event.event_id)
+          if (step) Object.assign(step, {
+            status: 'failed', duration_ms: event.duration_ms, error_code: event.error_code,
+            error_message: event.message, retryable: event.retryable, completed_at: mockIsoNow(),
+          })
+          Object.assign(durableTurn, {
+            status: 'failed', completed_at: mockIsoNow(), failure_code: event.error_code,
+            failure_message: event.message,
+          })
+        } else if (event.type === 'confirmation_required') {
+          const step = steps.find((candidate) => candidate.event_id === event.event_id)
+          if (step) Object.assign(step, {
+            status: 'waiting_confirmation', confirmation_id: event.confirmation_id,
+            confirmation_message: event.message,
+          })
+          durableTurn.status = 'waiting_confirmation'
+        } else if (event.type === 'reply') {
+          const messages = durableTurn.messages as Array<Record<string, unknown>>
+          messages.push({
+            id: globalThis.crypto.randomUUID(), role: 'assistant', content: event.content,
+            ordinal: (durableTurn.ordinal as number) * 2, created_at: mockIsoNow(),
+          })
+        } else if (event.type === 'done') {
+          if (durableTurn.status === 'running' || durableTurn.status === 'waiting_confirmation') durableTurn.status = 'completed'
+          durableTurn.completed_at = mockIsoNow()
+          if (durableSession) {
+            durableSession.updated_at = mockIsoNow()
+            durableSession.last_message_at = durableSession.updated_at
+          }
+        }
+        if (durableOwnerEmail) persistOwnerAgentSessions(durableOwnerEmail)
+      }
       if (event.type !== 'action_completed') return
       if (event.action === 'create_todo') {
         const result = event.result as { title?: unknown; priority?: unknown }
@@ -410,8 +574,12 @@ const agentStreamHandler = agentStream.addEventListener('connection', ({ client 
           .filter(({ event }) => event.type === 'action_completed' || event.type === 'reply' || event.type === 'done')
           .forEach((event) => send(event, confirmationAt))
       } else {
-        client.send(JSON.stringify({ type: 'reply', content: '已取消删除操作。' }))
-        client.send(JSON.stringify({ type: 'done' }))
+        const reply = { type: 'reply', content: '已取消删除操作。' } as const
+        const done = { type: 'done' } as const
+        applyAction(reply)
+        client.send(JSON.stringify(reply))
+        applyAction(done)
+        client.send(JSON.stringify(done))
       }
     }
   })
@@ -525,6 +693,78 @@ export const handlers = [
     }
     writeStorage(E2E_AGENT_SCENARIO_KEY, { name: body.name, timeScale: body.timeScale ?? 0 })
     return HttpResponse.json({ armed: true })
+  }),
+  http.post('/api/__e2e__/agent/history', async ({ request }) => {
+    const account = await currentMockAccount(request)
+    if (!account) return unauthorizedAuth()
+    const email = account.email
+    const body = await request.json() as { sessions?: MockAgentSessionRecord[] }
+    if (!Array.isArray(body.sessions)) {
+      return HttpResponse.json({ message: 'sessions must be an array' }, { status: 400 })
+    }
+    const sessions = ownerAgentSessions(email)
+    sessions.clear()
+    for (const session of body.sessions) {
+      sessions.set(session.id, structuredClone(session))
+      mockAgentSessionOwners.set(session.id, email)
+    }
+    persistOwnerAgentSessions(email)
+    return HttpResponse.json({ seeded: sessions.size })
+  }),
+
+  http.get('/api/agent/sessions', async ({ request }) => {
+    const account = await currentMockAccount(request)
+    if (!account) return unauthorizedAuth()
+    const email = account.email
+    const items = [...ownerAgentSessions(email).values()]
+      .sort((left, right) => right.last_message_at.localeCompare(left.last_message_at))
+      .map(agentSummary)
+    for (const item of items) mockAgentSessionOwners.set(item.id, email)
+    return HttpResponse.json(ok({ items }))
+  }),
+  http.post('/api/agent/sessions', async ({ request }) => {
+    const account = await currentMockAccount(request)
+    if (!account) return unauthorizedAuth()
+    const email = account.email
+    const input = await request.json() as { title?: unknown; first_message?: unknown }
+    const timestamp = mockIsoNow()
+    const session: MockAgentSessionRecord = {
+      id: globalThis.crypto.randomUUID(),
+      title: typeof input.title === 'string' && input.title.trim() ? input.title.trim() : '新会话',
+      created_at: timestamp, updated_at: timestamp, last_message_at: timestamp, turns: [],
+    }
+    ownerAgentSessions(email).set(session.id, session)
+    mockAgentSessionOwners.set(session.id, email)
+    persistOwnerAgentSessions(email)
+    return HttpResponse.json(ok(agentSummary(session)), { status: 201 })
+  }),
+  http.get('/api/agent/sessions/:sessionId', async ({ request, params }) => {
+    const session = await agentSessionForRequest(request, String(params.sessionId))
+    return session ? HttpResponse.json(ok({ session: agentSummary(session), turns: session.turns })) : agentNotFound()
+  }),
+  http.patch('/api/agent/sessions/:sessionId', async ({ request, params }) => {
+    const account = await currentMockAccount(request)
+    const session = await agentSessionForRequest(request, String(params.sessionId))
+    if (!session) return agentNotFound()
+    const body = await request.json() as { title?: unknown }
+    if (typeof body.title !== 'string' || !body.title.trim()) {
+      return HttpResponse.json({ code: 40001, message: '会话名称不能为空', data: null }, { status: 400 })
+    }
+    session.title = body.title.trim()
+    session.updated_at = mockIsoNow()
+    if (account) persistOwnerAgentSessions(account.email)
+    return HttpResponse.json(ok(agentSummary(session)))
+  }),
+  http.delete('/api/agent/sessions/:sessionId', async ({ request, params }) => {
+    const account = await currentMockAccount(request)
+    if (!account) return unauthorizedAuth()
+    const email = account.email
+    const sessionId = String(params.sessionId)
+    if (!ownerAgentSessions(email).delete(sessionId)) return agentNotFound()
+    mockAgentSessionOwners.delete(sessionId)
+    agentSessionGenerations.set(sessionId, (agentSessionGenerations.get(sessionId) ?? 0) + 1)
+    persistOwnerAgentSessions(email)
+    return HttpResponse.json(ok({ deleted: true, session_id: sessionId }))
   }),
   http.all(/\/api\/todos(?:\/.*)?$/, ({ request }) => consumeTodoControl(request)),
 
@@ -686,7 +926,7 @@ export const handlers = [
 
   // Agent WebSocket events use the deterministic scenarios from agentFixtures.ts.
   agentStreamHandler,
-  http.delete('/api/agent/history', ({ request }) => {
+  http.delete('/api/agent/history', async ({ request }) => {
     const sessionId = new URL(request.url).searchParams.get('session_id')
     if (!sessionId) {
       return HttpResponse.json(
@@ -694,6 +934,14 @@ export const handlers = [
         { status: 400 },
       )
     }
+    const account = await currentMockAccount(request)
+    if (!account) return unauthorizedAuth()
+    const session = ownerAgentSessions(account.email).get(sessionId)
+    if (!session) return agentNotFound()
+    session.turns = []
+    session.updated_at = mockIsoNow()
+    session.last_message_at = session.updated_at
+    persistOwnerAgentSessions(account.email)
     return HttpResponse.json(ok({ deleted: true, session_id: sessionId }))
   }),
 ]

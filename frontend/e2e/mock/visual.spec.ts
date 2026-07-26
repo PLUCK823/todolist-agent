@@ -101,6 +101,11 @@ test.describe('V6 desktop visual contract', () => {
 
   test('Agent running and failure states', async ({ page, login, useAgentScenario }) => {
     await authenticatedPage(page, login, '/tasks')
+    const sessionStatus = await page.evaluate(async () => (await fetch('/api/agent/sessions', {
+      method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: '{}',
+    })).status)
+    expect(sessionStatus).toBe(201)
+    await page.reload()
     await useAgentScenario('success', { timeScale: 2 })
     await page.getByLabel('消息输入框').fill('创建高优先级任务')
     await page.getByRole('button', { name: '发送消息' }).click()
@@ -108,10 +113,15 @@ test.describe('V6 desktop visual contract', () => {
     await capture(page, 'agent-running.png')
 
     await page.getByRole('button', { name: '清空对话' }).click()
+    const nextSessionStatus = await page.evaluate(async () => (await fetch('/api/agent/sessions', {
+      method: 'POST', credentials: 'include', headers: { 'content-type': 'application/json' }, body: '{}',
+    })).status)
+    expect(nextSessionStatus).toBe(201)
+    await page.reload()
     await useAgentScenario('timeout')
     await page.getByLabel('消息输入框').fill('创建超时任务')
     await page.getByRole('button', { name: '发送消息' }).click()
-    await expect(page.getByRole('alert').filter({ hasText: 'Todo API 响应超时' })).toBeVisible()
+    await expect(page.getByText('Todo API 响应超时', { exact: true })).toBeVisible()
     await capture(page, 'agent-failure.png')
   })
 })

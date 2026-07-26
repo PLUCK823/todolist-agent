@@ -324,7 +324,7 @@ export default function AssistantPage() {
             onPointerDown={handleComposerPointerDown}
             onPointerUp={handleComposerPointerUp}
             placeholder="告诉智能助手你想完成什么…"
-            rows={2}
+            rows={1}
             disabled={!session.canSend}
           />
           <footer>

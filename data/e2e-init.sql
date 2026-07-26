@@ -1,3 +1,10 @@
+-- Normalize the fresh schema's inline UNIQUE constraints to the index names
+-- expected by GORM AutoMigrate. This is idempotent and E2E-only.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);
+ALTER TABLE auth_sessions DROP CONSTRAINT IF EXISTS auth_sessions_refresh_token_hash_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_sessions_refresh_token_hash ON auth_sessions(refresh_token_hash);
+
 INSERT INTO todos (id, title, description, priority, completed, due_date, created_at, updated_at)
 VALUES
     (1001, '完成品牌复评审', '确定性 E2E 示例任务', 'high', false, '2026-07-13T09:00:00+08:00', '2026-07-10T09:00:00+08:00', '2026-07-10T09:00:00+08:00'),

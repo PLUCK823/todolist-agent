@@ -50,6 +50,7 @@ services:
     environment:
       GIN_MODE: release
       LOG_LEVEL: warn
+      AUTH_ALLOWED_ORIGINS: http://127.0.0.1:3000
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/api/health"]
       interval: 2s
@@ -74,6 +75,7 @@ services:
       APP_ENV: e2e
       ENABLE_E2E_PROVIDER: "true"
       LOG_LEVEL: warning
+      AUTH_ALLOWED_ORIGINS: http://127.0.0.1:3000
     healthcheck:
       test: ["CMD", "uv", "run", "python", "-c", "import httpx; httpx.get('http://127.0.0.1:8000/api/agent/health').raise_for_status()"]
       interval: 2s

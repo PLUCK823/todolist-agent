@@ -16,6 +16,7 @@ test('@real streams a deterministic Agent tool call and persists its Todo', asyn
   })
 
   await page.goto('/assistant')
+  await page.getByRole('button', { name: '新建会话' }).click()
   await page.getByLabel('智能助手消息').fill('创建高优先级任务：真实联调任务')
   await page.getByRole('button', { name: '发送消息' }).click()
 

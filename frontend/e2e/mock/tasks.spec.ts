@@ -87,7 +87,8 @@ test('filters by status and priority and sorts by due date', async ({ page, seed
 
   await page.getByRole('button', { name: '高优先级' }).click()
   await page.getByRole('dialog', { name: '优先级筛选' }).getByRole('button', { name: '全部优先级' }).click()
-  await page.getByLabel('任务排序').selectOption('due_date:asc')
+  await page.getByRole('button', { name: '任务排序：最近创建' }).click()
+  await page.getByRole('dialog', { name: '任务排序' }).getByRole('button', { name: '截止时间' }).click()
   const taskButtons = page.getByRole('button', { name: /^查看任务：/ })
   await expect(taskButtons.first()).toHaveAccessibleName('查看任务：进行中低优先')
 })
