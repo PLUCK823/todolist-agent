@@ -31,7 +31,7 @@ function parsedFailedDetail(resultUncertain = false): AgentSessionDetail {
     },
     turns: [{
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ordinal: 1,
-      status: resultUncertain ? 'interrupted' : 'failed', started_at: first.createdAt, completed_at: first.updatedAt,
+      status: resultUncertain ? 'interrupted' : 'completed', started_at: first.createdAt, completed_at: first.updatedAt,
       failure_code: 'TOOL_TIMEOUT', failure_message: '超时', result_uncertain: resultUncertain,
       messages: [{
         id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', role: 'user', content: '查询', ordinal: 1, created_at: first.createdAt,
@@ -120,6 +120,7 @@ describe('durable Agent session state', () => {
     expect(dbStepId).not.toBe('wire-S')
     expect(hook.current().canRetry(dbStepId)).toBe(true)
     act(() => hook.current().retry(dbStepId))
+    expect(hook.current().canRetry(dbStepId)).toBe(false)
     expect(client.requests.at(-1)).toMatchObject({
       type: 'retry_step', step_id: 'wire-S', retry_token: 'opaque-server-token-that-is-long-enough',
     })
@@ -144,6 +145,16 @@ describe('durable Agent session state', () => {
     })
     await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
     expect(hook.current().canRetry(persisted.turns[0].steps[0].id)).toBe(false)
+  })
+
+  it('does not retry a successful step in a completed persisted turn', async () => {
+    const completed = detail(first, '查询完成', 'completed-step')
+    const hook = renderHistory(api({
+      list: vi.fn().mockResolvedValue([first]),
+      detail: vi.fn().mockResolvedValue(completed),
+    }))
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    expect(hook.current().canRetry('completed-step')).toBe(false)
   })
 
   it('clears an ephemeral retry capability when switching away and back', async () => {

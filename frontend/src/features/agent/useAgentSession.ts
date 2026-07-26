@@ -568,7 +568,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     return capability?.ready === true
       && capability.sessionId === selectedRef.current
       && stateRef.current.serverDone
-      && stateRef.current.status === 'failed'
+      && step?.status === 'failed'
       && stateRef.current.resultUncertain !== true
   }, [durableHistory])
 
