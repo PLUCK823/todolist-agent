@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -153,6 +153,23 @@ describe('AgentStepTimeline', () => {
 })
 
 describe('AgentPanel integration', () => {
+  it('renders only assistant messages as safe GFM and keeps user input literal', () => {
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session({
+      messages: [
+        { id: 'user-markup', role: 'user', content: '<b>用户原文</b>', createdAt: '2026-07-26T08:00:00Z' },
+        { id: 'assistant-markdown', role: 'assistant', content: '| 任务 | 状态 |\n| --- | --- |\n| 原型 | 完成 |\n<script>alert(1)</script>', createdAt: '2026-07-26T08:00:01Z' },
+      ],
+    })}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+
+    const userMessage = document.querySelector('.agent-message[data-role="user"]') as HTMLElement
+    const assistantMessage = document.querySelector('.agent-message[data-role="assistant"]') as HTMLElement
+    expect(within(userMessage).getByText('<b>用户原文</b>')).toBeVisible()
+    expect(within(userMessage).queryByRole('table')).not.toBeInTheDocument()
+    expect(within(assistantMessage).getByRole('table')).toHaveTextContent('原型')
+    expect(within(assistantMessage).getByText('<script>alert(1)</script>')).toBeVisible()
+    expect(document.querySelector('script')).toBeNull()
+  })
+
   it('removes the dark column when collapsed and exposes the header spark', async () => {
     const user = userEvent.setup()
     const value = session()

@@ -25,6 +25,11 @@ function Harness() {
 }
 
 describe('useExpandableTextarea', () => {
+  it('starts at the compact two-line height', () => {
+    render(<Harness />)
+    expect(screen.getByRole('textbox', { name: 'sized' })).toHaveStyle({ height: '56px' })
+  })
+
   it('clamps automatic growth and enables overflow at the automatic limit', () => {
     render(<Harness />)
     const textarea = screen.getByRole('textbox', { name: 'sized' })
@@ -55,5 +60,23 @@ describe('useExpandableTextarea', () => {
     fireEvent.click(screen.getByRole('button', { name: 'reset' }))
     expect(textarea.style.height).toBe('56px')
     expect(textarea.style.overflowY).toBe('hidden')
+  })
+
+  it('immediately caps a manual resize at 360px and preserves that cap while editing', () => {
+    render(<Harness />)
+    const textarea = screen.getByRole('textbox', { name: 'sized' })
+    let measuredHeight = 56
+    Object.defineProperty(textarea, 'offsetHeight', { configurable: true, get: () => measuredHeight })
+    Object.defineProperty(textarea, 'scrollHeight', { configurable: true, value: 500 })
+
+    fireEvent.pointerDown(textarea)
+    measuredHeight = 420
+    textarea.style.height = '420px'
+    fireEvent.pointerUp(textarea)
+
+    expect(textarea.style.height).toBe('360px')
+    fireEvent.change(textarea, { target: { value: 'still capped' } })
+    expect(textarea.style.height).toBe('360px')
+    expect(textarea.style.overflowY).toBe('auto')
   })
 })

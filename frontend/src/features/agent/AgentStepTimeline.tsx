@@ -3,10 +3,6 @@ import { Button } from '../../shared/ui/Button'
 import type { AgentCapabilities, AgentStep } from './agent.types'
 import { safeSerializeAgentResult } from './agent-display'
 
-function isResultRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
-}
-
 const statusLabels: Record<AgentStep['status'], string> = {
   waiting: '等待中',
   running: '运行中',
@@ -20,11 +16,12 @@ function formatDuration(durationMs: number) {
   return durationMs < 1000 ? `${durationMs} 毫秒` : `${(durationMs / 1000).toFixed(1)} 秒`
 }
 
-function ActionResult({ action, result }: { action: string; result: Record<string, unknown> }) {
+function ActionResult({ label, content, truncated }: { label: string; content: string; truncated?: boolean }) {
   return (
-    <section className="agent-step__result" aria-label={`${action} 执行结果`}>
-      <span>{action}</span>
-      <pre>{safeSerializeAgentResult(result)}</pre>
+    <section className="agent-step__result" aria-label={`${label} 执行结果`}>
+      <span>{label}</span>
+      <pre>{content}</pre>
+      {truncated ? <small>结果已截断</small> : null}
     </section>
   )
 }
@@ -58,7 +55,13 @@ function AgentStepItem({ step, retryAllowed, confirmationAllowed, actionPending,
         {elapsed !== undefined ? <time className="agent-step__timer tabular-nums" aria-hidden="true">{formatDuration(elapsed)}</time> : null}
         {step.tool ? <code className="agent-step__tool">{step.tool}</code> : null}
         {step.errorMessage ? <p className="agent-step__error">{step.errorMessage}</p> : null}
-        {step.action && isResultRecord(step.result) ? <ActionResult action={step.action} result={step.result} /> : null}
+        {step.result !== undefined || step.resultPreview !== undefined ? (
+          <ActionResult
+            label={step.action ?? step.tool ?? step.label}
+            content={step.result !== undefined ? safeSerializeAgentResult(step.result) : step.resultPreview ?? ''}
+            truncated={step.resultTruncated}
+          />
+        ) : null}
         {step.status === 'failed' && step.retryable && retryAllowed ? (
           <Button variant="secondary" size="sm" disabled={actionPending} onClick={() => onRetry(step.id)} aria-label={`重试${step.label}`}>重试</Button>
         ) : null}

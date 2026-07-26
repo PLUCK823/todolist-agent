@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 
 export const COMPOSER_DEFAULT_HEIGHT = 56
 export const COMPOSER_AUTO_MAX_HEIGHT = 220
+export const COMPOSER_MANUAL_MAX_HEIGHT = 360
 
 export function useExpandableTextarea(value: string) {
   const ref = useRef<HTMLTextAreaElement>(null)
@@ -41,10 +42,14 @@ export function useExpandableTextarea(value: string) {
       const element = ref.current
       if (!element || pointerStartHeight.current === null) return
       if (element.offsetHeight !== pointerStartHeight.current) {
-        manualHeight.current = Math.max(COMPOSER_DEFAULT_HEIGHT, element.offsetHeight)
+        manualHeight.current = Math.min(
+          Math.max(COMPOSER_DEFAULT_HEIGHT, element.offsetHeight),
+          COMPOSER_MANUAL_MAX_HEIGHT,
+        )
+        element.style.height = `${manualHeight.current}px`
       }
       pointerStartHeight.current = null
-      element.style.overflowY = element.scrollHeight > element.offsetHeight ? 'auto' : 'hidden'
+      element.style.overflowY = element.scrollHeight > (manualHeight.current ?? element.offsetHeight) ? 'auto' : 'hidden'
     },
   }
 }

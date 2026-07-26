@@ -1,71 +1,155 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { useRef } from 'react'
-import { describe, expect, it, vi } from 'vitest'
-import { getAgentScrollRevision, useAgentAutoScroll } from '../useAgentAutoScroll'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PreferencesProvider } from '../../preferences/PreferencesContext'
+import { getAgentScrollRevision, useAgentAutoScroll } from '../useAgentAutoScroll'
 
-function Harness({ revision }: { revision: string }) {
+function Harness({
+  revision,
+  forceFollowKey = 'session-a',
+  userMessageKey = 'user-1',
+  messageKey = 'assistant-1',
+}: {
+  revision: string
+  forceFollowKey?: string
+  userMessageKey?: string
+  messageKey?: string
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const endRef = useRef<HTMLSpanElement>(null)
-  const onScroll = useAgentAutoScroll(containerRef, endRef, revision)
-  return <div ref={containerRef} data-testid="scroll" onScroll={onScroll}><span ref={endRef}>end</span></div>
+  const autoScroll = useAgentAutoScroll(containerRef, endRef, revision, { forceFollowKey, userMessageKey, messageKey })
+  return (
+    <div>
+      <div ref={containerRef} data-testid="scroll" onScroll={autoScroll.onScroll}>
+        <div data-testid="content"><span ref={endRef}>end</span></div>
+      </div>
+      {autoScroll.showReturnToBottom ? (
+        <button type="button" onClick={autoScroll.returnToBottom}>
+          {autoScroll.hasNewMessage ? '有新消息，回到底部' : '回到底部'}
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+function setMetrics(container: HTMLElement, { top, height = 500, client = 100 }: { top: number; height?: number; client?: number }) {
+  Object.defineProperties(container, {
+    scrollHeight: { configurable: true, value: height },
+    clientHeight: { configurable: true, value: client },
+    scrollTop: { configurable: true, writable: true, value: top },
+  })
 }
 
 describe('useAgentAutoScroll', () => {
-  it('follows only near the bottom and respects reduced motion', () => {
-    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
-    const view = render(<PreferencesProvider><Harness revision="one" /></PreferencesProvider>)
-    const container = screen.getByTestId('scroll')
-    Object.defineProperties(container, {
-      scrollHeight: { configurable: true, value: 500 },
-      clientHeight: { configurable: true, value: 100 },
-      scrollTop: { configurable: true, writable: true, value: 100 },
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(0)
+      return 1
     })
-    scrollIntoView.mockClear()
-    fireEvent.scroll(container)
-    view.rerender(<PreferencesProvider><Harness revision="two" /></PreferencesProvider>)
-    expect(scrollIntoView).not.toHaveBeenCalled()
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined)
+  })
 
-    container.scrollTop = 360
-    fireEvent.scroll(container)
-    view.rerender(<PreferencesProvider><Harness revision="three" /></PreferencesProvider>)
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'end' })
-
-    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
-    view.rerender(<PreferencesProvider><Harness revision="four" /></PreferencesProvider>)
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'auto', block: 'end' })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
 
-  it('lets the explicit preference override the operating system', () => {
-    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
-    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })))
-    localStorage.setItem('todolist.preferences', JSON.stringify({ reducedMotion: false }))
-    const full = render(<PreferencesProvider><Harness revision="full" /></PreferencesProvider>)
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'end' })
-    full.unmount()
+  it('initially anchors the actual scroll container without calling marker.scrollIntoView', () => {
+    const markerScroll = vi.spyOn(Element.prototype, 'scrollIntoView')
+    render(<PreferencesProvider><Harness revision="initial" /></PreferencesProvider>)
+    const container = screen.getByTestId('scroll')
+    setMetrics(container, { top: 0 })
 
-    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })))
-    localStorage.setItem('todolist.preferences', JSON.stringify({ reducedMotion: true }))
-    render(<PreferencesProvider><Harness revision="reduced" /></PreferencesProvider>)
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ behavior: 'auto', block: 'end' })
-    vi.unstubAllGlobals()
+    act(() => { window.dispatchEvent(new Event('resize')) })
+
+    expect(container.scrollTop).toBe(500)
+    expect(markerScroll).not.toHaveBeenCalled()
   })
 
-  it('follows streamed reply chunks when the last message keeps the same id', () => {
-    const scrollIntoView = vi.spyOn(Element.prototype, 'scrollIntoView')
-    function Stream({ content }: { content: string }) {
-      const containerRef = useRef<HTMLDivElement>(null)
-      const endRef = useRef<HTMLSpanElement>(null)
-      const revision = getAgentScrollRevision({
-        status: 'running', steps: [], messages: [{ id: 'same', role: 'assistant', content, createdAt: '2026-07-14T00:00:00Z' }],
-      })
-      const onScroll = useAgentAutoScroll(containerRef, endRef, revision)
-      return <div ref={containerRef} onScroll={onScroll}><span ref={endRef} /></div>
+  it('follows reply updates near the bottom but does not steal position after the user scrolls away', () => {
+    const view = render(<PreferencesProvider><Harness revision="reply-1" /></PreferencesProvider>)
+    const container = screen.getByTestId('scroll')
+    setMetrics(container, { top: 370 })
+    fireEvent.scroll(container)
+    view.rerender(<PreferencesProvider><Harness revision="reply-2" /></PreferencesProvider>)
+    expect(container.scrollTop).toBe(500)
+
+    container.scrollTop = 120
+    fireEvent.scroll(container)
+    view.rerender(<PreferencesProvider><Harness revision="reply-3" /></PreferencesProvider>)
+    expect(container.scrollTop).toBe(120)
+    expect(screen.getByRole('button', { name: '回到底部' })).toBeVisible()
+  })
+
+  it('announces a new message while far away and restores following when the button is clicked', async () => {
+    vi.useRealTimers()
+    const user = userEvent.setup()
+    const view = render(<PreferencesProvider><Harness revision="assistant-short" userMessageKey="user-1" messageKey="assistant-1" /></PreferencesProvider>)
+    const container = screen.getByTestId('scroll')
+    setMetrics(container, { top: 80 })
+    fireEvent.scroll(container)
+    view.rerender(<PreferencesProvider><Harness revision="assistant-longer" userMessageKey="user-1" messageKey="assistant-2" /></PreferencesProvider>)
+    expect(container.scrollTop).toBe(80)
+    const button = screen.getByRole('button', { name: '有新消息，回到底部' })
+    await user.click(button)
+    expect(container.scrollTop).toBe(500)
+    expect(screen.queryByRole('button', { name: /回到底部/ })).not.toBeInTheDocument()
+  })
+
+  it('forces the current user send and a completed session switch to the bottom even when previously far', () => {
+    const view = render(<PreferencesProvider><Harness revision="old" forceFollowKey="session-a" userMessageKey="user-1" /></PreferencesProvider>)
+    const container = screen.getByTestId('scroll')
+    setMetrics(container, { top: 50 })
+    fireEvent.scroll(container)
+
+    view.rerender(<PreferencesProvider><Harness revision="sent" forceFollowKey="session-a" userMessageKey="user-2" /></PreferencesProvider>)
+    expect(container.scrollTop).toBe(500)
+    container.scrollTop = 50
+    fireEvent.scroll(container)
+    view.rerender(<PreferencesProvider><Harness revision="loaded" forceFollowKey="session-b" userMessageKey="user-2" /></PreferencesProvider>)
+    expect(container.scrollTop).toBe(500)
+  })
+
+  it('observes layout changes only while following and cleans observers and queued frames', () => {
+    let resize!: ResizeObserverCallback
+    const observe = vi.fn()
+    const disconnect = vi.fn()
+    class ResizeObserverStub {
+      constructor(callback: ResizeObserverCallback) { resize = callback }
+      observe = observe
+      disconnect = disconnect
     }
-    const view = render(<Stream content="部分" />)
-    scrollIntoView.mockClear()
-    view.rerender(<Stream content="部分流式追加" />)
-    expect(scrollIntoView).toHaveBeenCalledWith({ behavior: 'smooth', block: 'end' })
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+    const request = vi.spyOn(window, 'requestAnimationFrame').mockReturnValue(42)
+    const cancel = vi.spyOn(window, 'cancelAnimationFrame')
+    const view = render(<PreferencesProvider><Harness revision="layout" /></PreferencesProvider>)
+    const container = screen.getByTestId('scroll')
+    setMetrics(container, { top: 380 })
+
+    expect(observe).toHaveBeenCalledWith(container)
+    expect(observe).toHaveBeenCalledWith(screen.getByTestId('content'))
+    act(() => resize([], {} as ResizeObserver))
+    expect(request).toHaveBeenCalled()
+    view.unmount()
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(cancel).toHaveBeenCalledWith(42)
+  })
+
+  it('includes displayed session and streamed turn content in the revision', () => {
+    const base = {
+      status: 'running' as const,
+      displayedSessionId: 'session-a',
+      messages: [{ id: 'same', role: 'assistant' as const, content: '部分', createdAt: '2026-07-26T00:00:00Z' }],
+      steps: [],
+      turns: [{ id: 'turn-1', ordinal: 1, status: 'running' as const, startedAt: '2026-07-26T00:00:00Z', resultUncertain: false, messages: [], steps: [] }],
+    }
+    expect(getAgentScrollRevision(base)).not.toBe(getAgentScrollRevision({
+      ...base,
+      displayedSessionId: 'session-b',
+      messages: [{ ...base.messages[0], content: '部分流式追加' }],
+    }))
   })
 })

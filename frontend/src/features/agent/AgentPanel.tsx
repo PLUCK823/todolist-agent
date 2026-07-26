@@ -1,5 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from 'react'
 import { IconButton } from '../../shared/ui/IconButton'
+import { AgentMarkdown } from './AgentMarkdown'
 import AgentStepTimeline from './AgentStepTimeline'
 import { useAgentSessionContext } from './agent-session-context'
 import { getAgentStatusPresentation } from './agent-status'
@@ -23,7 +24,13 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
   const status = getAgentStatusPresentation(session.status, session.steps)
 
   const revision = getAgentScrollRevision(session)
-  const onScroll = useAgentAutoScroll(bodyRef, endRef, revision)
+  const latestMessage = session.messages.at(-1)
+  const latestUserMessage = [...session.messages].reverse().find((message) => message.role === 'user')
+  const autoScroll = useAgentAutoScroll(bodyRef, endRef, revision, {
+    forceFollowKey: session.displayedSessionId ?? session.sessionId ?? 'local',
+    userMessageKey: latestUserMessage?.id,
+    messageKey: latestMessage?.id,
+  })
 
   function send() {
     const message = draft.trim()
@@ -51,7 +58,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
         <button type="button" className="agent-panel__clear" disabled={session.isClearing} onClick={() => void clearConversation()}>{session.isClearing ? '清空中…' : '清空对话'}</button>
       </header>
 
-      <div ref={bodyRef} className="agent-panel__body" role="log" aria-live="polite" aria-label="对话消息" onScroll={onScroll}>
+      <div ref={bodyRef} className="agent-panel__body" role="log" aria-live="polite" aria-label="对话消息" onScroll={autoScroll.onScroll}>
         {clearError ? <p className="agent-panel__clear-error" role="alert">{clearError}</p> : null}
         {!session.messages.length ? (
           <section className="agent-panel__welcome">
@@ -65,7 +72,7 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
           const time = formatAgentMessageTime(message.createdAt)
           return (
           <article key={message.id} className="agent-message" data-role={message.role}>
-            <p>{message.content}</p>
+            {message.role === 'assistant' ? <AgentMarkdown content={message.content} /> : <p>{message.content}</p>}
             {time ? <time dateTime={message.createdAt}>{time}</time> : null}
           </article>
           )

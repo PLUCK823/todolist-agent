@@ -94,6 +94,24 @@ describe('AgentTurn', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('操作可能已生效，请检查任务状态')
   })
 
+  it('shows persisted tool results after reload without requiring a live action field', async () => {
+    const user = userEvent.setup()
+    render(<AgentTurn turn={makeTurn({
+      steps: [{
+        id: 'history-result', label: '查询任务', tool: 'list_todos', status: 'completed',
+        result: { count: 2, titles: ['原型', '测试'] },
+      }, {
+        id: 'history-preview', label: '大结果', tool: 'list_todos', status: 'completed',
+        resultPreview: '{"count": 50}', resultTruncated: true,
+      }],
+    })} />)
+
+    await user.click(screen.getByRole('button', { name: /执行详情/ }))
+    expect(screen.getAllByLabelText('list_todos 执行结果')[0]).toHaveTextContent('原型')
+    expect(screen.getByText('{"count": 50}')).toBeVisible()
+    expect(screen.getByText('结果已截断')).toBeVisible()
+  })
+
   it('keeps historical confirmations read-only without explicit callbacks', () => {
     render(<AgentTurn
       turn={makeTurn({
