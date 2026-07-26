@@ -53,11 +53,11 @@ function mediaController(initial: boolean) {
   }
 }
 
-function renderRealAssistant(width: number, controller = mediaController(width <= 860)) {
+function renderRealAssistant(width: number, controller = mediaController(width <= 860), overrides: Partial<AgentSessionValue> = {}) {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width })
   vi.stubGlobal('matchMedia', vi.fn(() => controller.media))
   localStorage.setItem('todolist:shell', JSON.stringify({ navExpanded: true, agentExpanded: false }))
-  const session = makeSession()
+  const session = { ...makeSession(), ...overrides }
   const view = render(
     <MemoryRouter initialEntries={['/assistant']}>
       <QueryClientProvider client={new QueryClient()}>
@@ -85,7 +85,7 @@ describe('AssistantPage real AppShell responsive width chain', () => {
 
     expect(shell).toHaveStyle({ '--nav-width': 'var(--nav-width-collapsed)' })
     expect(nav).toHaveAttribute('data-expanded', 'false')
-    expect(screen.getByRole('button', { name: '展开导航' })).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('button', { name: '展开导航' })).not.toBeInTheDocument()
     expect(nav.querySelector('.nav-rail__label')).toHaveAttribute('data-state', 'collapsed')
     expect(nav.querySelector('.nav-rail__label')).toHaveAttribute('aria-hidden', 'true')
     expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
@@ -188,6 +188,44 @@ describe('AssistantPage real AppShell responsive width chain', () => {
     expect(shell).toHaveStyle({ '--nav-width': 'var(--nav-width-expanded)' })
     expect(screen.getByRole('button', { name: '收起导航' })).toHaveAttribute('aria-expanded', 'true')
     expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
+  })
+
+  it('does not expose a preference-mutating navigation toggle while compact', async () => {
+    const controller = mediaController(true)
+    renderRealAssistant(760, controller)
+
+    expect(screen.queryByRole('button', { name: '展开导航' })).not.toBeInTheDocument()
+    expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
+
+    act(() => controller.set(false))
+
+    const toggle = await screen.findByRole('button', { name: '收起导航' })
+    expect(toggle).toBeEnabled()
+    expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: true })
+    await userEvent.click(toggle)
+    expect(JSON.parse(localStorage.getItem('todolist:shell')!)).toMatchObject({ navExpanded: false })
+  })
+
+  it('moves focus to the desktop new-session action when an empty drawer crosses the breakpoint', async () => {
+    const user = userEvent.setup()
+    const controller = mediaController(true)
+    const { session } = renderRealAssistant(760, controller, {
+      sessionId: undefined,
+      selectedSessionId: undefined,
+      displayedSessionId: undefined,
+      sessions: [], turns: [], messages: [], steps: [],
+    })
+    await user.click(screen.getByRole('button', { name: '打开会话列表' }))
+    expect(screen.getByRole('button', { name: '关闭会话列表' })).toHaveFocus()
+
+    act(() => controller.set(false))
+
+    const create = screen.getByRole('button', { name: '新建会话' })
+    await waitFor(() => expect(create).toHaveFocus())
+    expect(create).toBeVisible()
+    expect(create).toBeEnabled()
+    await user.click(create)
+    expect(session.createSession).toHaveBeenCalledTimes(1)
   })
 
   it('removes media-query listeners when the assistant shell unmounts', () => {

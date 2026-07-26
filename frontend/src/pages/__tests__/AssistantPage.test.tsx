@@ -64,11 +64,16 @@ function makeSession(value: Partial<AgentSessionValue> = {}): AgentSessionValue 
 
 function renderPage(value: Partial<AgentSessionValue> = {}) {
   const session = makeSession(value)
+  const renderSession = (next: AgentSessionValue) => (
+    <ShellProvider><AgentSessionProvider value={next}><AssistantPage /></AgentSessionProvider></ShellProvider>
+  )
+  const result = renderWithProviders(renderSession(session))
   return {
     session,
-    result: renderWithProviders(
-      <ShellProvider><AgentSessionProvider value={session}><AssistantPage /></AgentSessionProvider></ShellProvider>,
-    ),
+    result,
+    rerenderSession(next: Partial<AgentSessionValue>) {
+      result.rerender(renderSession({ ...session, ...next }))
+    },
   }
 }
 
@@ -105,6 +110,30 @@ describe('AssistantPage', () => {
     expect(screen.getByRole('button', { name: '打开会话：仍在显示' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('button', { name: '打开会话：正在请求' })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('log', { name: '会话内容' })).toHaveAttribute('aria-live', 'off')
+  })
+
+  it('never clears a stale displayed session while another selection is loading', async () => {
+    const user = userEvent.setup()
+    const { session, rerenderSession } = renderPage()
+    await user.click(screen.getByRole('button', { name: '清空对话' }))
+    const staleConfirm = within(screen.getByRole('dialog', { name: '清空当前会话' })).getByRole('button', { name: '确认清空' })
+
+    rerenderSession({ selectedSessionId: 'older', displayedSessionId: 'older', isHistoryLoading: false })
+
+    fireEvent.click(staleConfirm)
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '清空当前会话' })).not.toBeInTheDocument())
+    expect(session.clear).not.toHaveBeenCalled()
+
+    rerenderSession({ selectedSessionId: 'older', displayedSessionId: 'today', isHistoryLoading: true })
+    const clearButton = screen.getByRole('button', { name: '清空对话' })
+    expect(clearButton).toBeDisabled()
+    await user.click(clearButton)
+    expect(session.clear).not.toHaveBeenCalled()
+
+    rerenderSession({ selectedSessionId: 'older', displayedSessionId: 'older', isHistoryLoading: false })
+    await user.click(screen.getByRole('button', { name: '清空对话' }))
+    await user.click(within(screen.getByRole('dialog', { name: '清空当前会话' })).getByRole('button', { name: '确认清空' }))
+    expect(session.clear).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the new-session recovery action available when there is no usable session', async () => {

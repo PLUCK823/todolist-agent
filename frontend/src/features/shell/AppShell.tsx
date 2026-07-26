@@ -23,7 +23,8 @@ function AppShellContent() {
   const sparkRef = useRef<HTMLButtonElement>(null)
   const restoreSparkFocusRef = useRef(false)
   const showPanel = agentExpanded && location.pathname !== '/assistant'
-  const effectiveNavExpanded = navExpanded && !(location.pathname === '/assistant' && compactAssistant)
+  const forcedCompactNavigation = location.pathname === '/assistant' && compactAssistant
+  const effectiveNavExpanded = navExpanded && !forcedCompactNavigation
 
   const collapseAgent = useCallback(() => {
     restoreSparkFocusRef.current = true
@@ -60,7 +61,7 @@ function AppShellContent() {
 
   return (
     <div className="app-shell" data-testid="app-shell" style={style}>
-      <NavigationRail expanded={effectiveNavExpanded} />
+      <NavigationRail expanded={effectiveNavExpanded} showToggle={!forcedCompactNavigation} />
       <main className="app-shell__main">
         <Outlet />
       </main>

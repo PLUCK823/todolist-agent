@@ -56,7 +56,7 @@ function navClassName(isActive: boolean) {
   return `nav-rail__control${isActive ? ' nav-rail__control--active' : ''}`
 }
 
-export default function NavigationRail({ expanded: expandedOverride }: { expanded?: boolean }) {
+export default function NavigationRail({ expanded: expandedOverride, showToggle = true }: { expanded?: boolean; showToggle?: boolean }) {
   const { navExpanded, toggleNav } = useShell()
   const expanded = expandedOverride ?? navExpanded
   const account = useOptionalAuth()?.account ?? { name: 'Plucky HZ', email: 'plucky@example.com', avatar: { kind: 'preset' as const, value: 'amber' as const } }
@@ -134,7 +134,7 @@ export default function NavigationRail({ expanded: expandedOverride }: { expande
         </span>
       </NavLink>
 
-      <button
+      {showToggle ? <button
         type="button"
         className="nav-rail__control"
         onClick={toggleNav}
@@ -149,7 +149,7 @@ export default function NavigationRail({ expanded: expandedOverride }: { expande
         >
           收起导航
         </span>
-      </button>
+      </button> : null}
     </nav>
   )
 }
