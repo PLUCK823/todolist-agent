@@ -8,6 +8,7 @@ const first: AgentSessionSummary = {
   createdAt: '2026-07-26T00:00:00Z', updatedAt: '2026-07-26T00:00:01Z', lastMessageAt: '2026-07-26T00:00:01Z',
 }
 const second: AgentSessionSummary = { ...first, id: '22222222-2222-4222-8222-222222222222', title: '第二会话' }
+const third: AgentSessionSummary = { ...first, id: '33333333-3333-4333-8333-333333333333', title: '第三会话' }
 
 function detail(session: AgentSessionSummary, content: string, stepId = 'step'): AgentSessionDetail {
   return { ...session, turns: [{
@@ -42,7 +43,10 @@ class ControlledClient implements AgentStreamClient {
 function api(overrides: Partial<AgentSessionsApi> = {}): AgentSessionsApi {
   return {
     list: vi.fn().mockResolvedValue([first, second]),
-    detail: vi.fn(async (id) => detail(id === first.id ? first : second, id === first.id ? '第一轮' : '第二轮')),
+    detail: vi.fn(async (id) => detail(
+      id === first.id ? first : id === second.id ? second : third,
+      id === first.id ? '第一轮' : id === second.id ? '第二轮' : '第三轮',
+    )),
     create: vi.fn().mockResolvedValue(first), rename: vi.fn().mockResolvedValue(first), delete: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
@@ -60,6 +64,18 @@ function renderHistory(sessionsApi: AgentSessionsApi, client = new ControlledCli
 }
 
 describe('durable Agent session state', () => {
+  it('retries an initial list failure and then selects and loads the first session', async () => {
+    const list = vi.fn().mockRejectedValueOnce(new Error('list offline')).mockResolvedValueOnce([first])
+    const hook = renderHistory(api({ list }))
+    await waitFor(() => expect(hook.current().historyError).toContain('list offline'))
+    expect(hook.current().selectedSessionId).toBeUndefined()
+
+    await act(() => hook.current().reloadHistory())
+    expect(list).toHaveBeenCalledTimes(2)
+    expect(hook.current().selectedSessionId).toBe(first.id)
+    expect(hook.current().turns[0].messages[0].content).toBe('第一轮')
+  })
+
   it('loads sessions, selects the first valid target and restores persisted turn identities', async () => {
     const sessionsApi = api()
     const hook = renderHistory(sessionsApi)
@@ -108,6 +124,7 @@ describe('durable Agent session state', () => {
   it('creates, atomically renames, and safely deletes current and non-current sessions', async () => {
     const created = { ...second, id: '33333333-3333-4333-8333-333333333333', title: '新会话' }
     const sessionsApi = api({
+      list: vi.fn().mockResolvedValueOnce([first, second]).mockResolvedValue([created, second]),
       create: vi.fn().mockResolvedValue(created),
       detail: vi.fn(async (id) => id === created.id ? { ...created, turns: [] } : detail(id === first.id ? first : second, id)),
       rename: vi.fn(async (id, title) => ({ ...(id === created.id ? created : first), title })),
@@ -130,24 +147,35 @@ describe('durable Agent session state', () => {
     await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
     act(() => hook.current().send('查询'))
     const handlers = client.handlers[0]
-    const started = { type: 'step_started', event_id: 'stable-event', step_id: 'query', label: '查询' } as const
-    act(() => { handlers.onEvent(started); handlers.onEvent(started) })
+    const eventId = '99999999-9999-4999-8999-999999999999'
+    const started = { type: 'step_started', event_id: eventId, step_id: 'query', label: '查询' } as const
+    act(() => { handlers.onEvent(started); handlers.onEvent({ ...started, label: '重复帧不应覆盖' }) })
     expect(hook.current().turns.at(-1)?.steps).toHaveLength(1)
-    act(() => handlers.onEvent({ type: 'step_completed', event_id: 'stable-event', step_id: 'query', duration_ms: 5 }))
+    expect(hook.current().steps[0].label).toBe('查询')
+    expect(hook.current().turns.at(-1)?.steps[0].label).toBe('查询')
+    act(() => handlers.onEvent({ type: 'step_completed', event_id: eventId, step_id: 'query', duration_ms: 5 }))
     expect(hook.current().turns.at(-1)?.steps[0]).toMatchObject({ status: 'completed', durationMs: 5 })
   })
 
   it('closes the old stream on selection and ignores its later events', async () => {
     const client = new ControlledClient()
-    const hook = renderHistory(api(), client)
+    const sessionsApi = api()
+    const hook = renderHistory(sessionsApi, client)
     await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
     act(() => hook.current().send('第一会话请求'))
     const stale = client.handlers[0]
     act(() => hook.current().selectSession(second.id))
     await waitFor(() => expect(hook.current().selectedSessionId).toBe(second.id))
     expect(client.cancels).toBeGreaterThan(0)
-    act(() => stale.onEvent({ type: 'reply', content: '旧 socket 污染' }))
+    const detailCalls = vi.mocked(sessionsApi.detail).mock.calls.length
+    const listCalls = vi.mocked(sessionsApi.list).mock.calls.length
+    act(() => {
+      stale.onEvent({ type: 'reply', content: '旧 socket 污染' })
+      stale.onEvent({ type: 'done' })
+    })
     expect(hook.current().messages.some((message) => message.content === '旧 socket 污染')).toBe(false)
+    expect(sessionsApi.detail).toHaveBeenCalledTimes(detailCalls)
+    expect(sessionsApi.list).toHaveBeenCalledTimes(listCalls)
   })
 
   it('coalesces duplicate create clicks and a late create never steals a newer selection', async () => {
@@ -181,6 +209,72 @@ describe('durable Agent session state', () => {
     expect(hook.current().sessions.some((item) => item.id === first.id)).toBe(false)
   })
 
+  it('never resurrects tombstoned sessions when two deletes start from the same render', async () => {
+    const deleteFirst = deferred<void>()
+    const deleteSecond = deferred<void>()
+    const list = vi.fn().mockResolvedValueOnce([first, second, third]).mockResolvedValue([third])
+    const sessionsApi = api({
+      list,
+      delete: vi.fn((id) => id === first.id ? deleteFirst.promise : deleteSecond.promise),
+    })
+    const hook = renderHistory(sessionsApi)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let firstDelete!: Promise<void>
+    let secondDelete!: Promise<void>
+    act(() => {
+      firstDelete = hook.current().deleteSession(first.id)
+      secondDelete = hook.current().deleteSession(second.id)
+    })
+    expect(hook.current().sessions.map((item) => item.id)).toEqual([third.id])
+    deleteSecond.resolve()
+    deleteFirst.resolve()
+    await act(() => Promise.all([firstDelete, secondDelete]))
+    expect(hook.current().sessions.map((item) => item.id)).toEqual([third.id])
+    expect(hook.current().selectedSessionId).toBe(third.id)
+  })
+
+  it('does not override a newer user selection when the deleted current session finishes later', async () => {
+    const pendingDelete = deferred<void>()
+    const sessionsApi = api({
+      list: vi.fn().mockResolvedValueOnce([first, second, third]).mockResolvedValue([second, third]),
+      delete: vi.fn(() => pendingDelete.promise),
+    })
+    const hook = renderHistory(sessionsApi)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let deletion!: Promise<void>
+    act(() => { deletion = hook.current().deleteSession(first.id) })
+    act(() => hook.current().selectSession(third.id))
+    await waitFor(() => expect(hook.current().selectedSessionId).toBe(third.id))
+    pendingDelete.resolve()
+    await act(() => deletion)
+    expect(hook.current().selectedSessionId).toBe(third.id)
+  })
+
+  it('rolls back only the failed delete without reviving another tombstoned session', async () => {
+    const deleteFirst = deferred<void>()
+    const deleteSecond = deferred<void>()
+    const sessionsApi = api({
+      list: vi.fn().mockResolvedValueOnce([first, second, third]).mockResolvedValue([first, third]),
+      delete: vi.fn((id) => id === first.id ? deleteFirst.promise : deleteSecond.promise),
+    })
+    const hook = renderHistory(sessionsApi)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    let failed!: Promise<void>
+    let succeeded!: Promise<void>
+    act(() => {
+      failed = hook.current().deleteSession(first.id)
+      succeeded = hook.current().deleteSession(second.id)
+    })
+    deleteFirst.reject(new Error('delete failed'))
+    deleteSecond.resolve()
+    await act(async () => {
+      await expect(failed).rejects.toThrow('delete failed')
+      await succeeded
+    })
+    expect(hook.current().sessions.some((item) => item.id === first.id)).toBe(true)
+    expect(hook.current().sessions.some((item) => item.id === second.id)).toBe(false)
+  })
+
   it('restores uncertain interrupted turns without enabling replay', async () => {
     const uncertain = detail(first, '可能已执行')
     uncertain.turns[0] = {
@@ -194,5 +288,45 @@ describe('durable Agent session state', () => {
     await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
     expect(hook.current().turns[0]).toMatchObject({ status: 'interrupted', resultUncertain: true })
     expect(hook.current().canRetry('write')).toBe(false)
+  })
+
+  it('refreshes both detail identities and list ordering after ordinary done', async () => {
+    const refreshedFirst = { ...first, title: '服务端新标题', updatedAt: '2026-07-26T02:00:00Z', lastMessageAt: '2026-07-26T02:00:00Z' }
+    const list = vi.fn().mockResolvedValueOnce([first, second]).mockResolvedValueOnce([second, refreshedFirst])
+    const detailMock = vi.fn()
+      .mockResolvedValueOnce({ ...first, turns: [] })
+      .mockResolvedValueOnce(detail(refreshedFirst, '服务端持久化轮次', 'server-step'))
+    const client = new ControlledClient()
+    const hook = renderHistory(api({ list, detail: detailMock }), client)
+    await waitFor(() => expect(hook.current().isHistoryLoading).toBe(false))
+    act(() => hook.current().send('新请求'))
+    act(() => client.handlers[0].onEvent({ type: 'done' }))
+
+    await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    expect(hook.current().sessions.map((item) => item.id)).toEqual([second.id, first.id])
+    expect(hook.current().turns[0].id).toBe(`${first.id}-turn`)
+    expect(hook.current().messages[0].id).toBe(`${first.id}-user`)
+  })
+
+  it('refreshes both detail and list after retry done', async () => {
+    const failed = detail(first, '查询失败')
+    failed.turns[0] = {
+      ...failed.turns[0], status: 'failed',
+      steps: [{ id: 'read', eventId: '99999999-9999-4999-8999-999999999999', label: '查询', status: 'failed',
+        tool: 'list_todos', retryable: true, retryToken: 'opaque-server-token-that-is-long-enough' }],
+    }
+    const restored = detail(first, '重试后服务端轮次', 'server-retry-step')
+    const list = vi.fn().mockResolvedValue([first])
+    const detailMock = vi.fn().mockResolvedValueOnce(failed).mockResolvedValueOnce(restored)
+    const client = new ControlledClient()
+    const hook = renderHistory(api({ list, detail: detailMock }), client)
+    await waitFor(() => expect(hook.current().canRetry('read')).toBe(true))
+    act(() => hook.current().retry('read'))
+    act(() => client.handlers[0].onEvent({ type: 'done' }))
+
+    await waitFor(() => expect(detailMock).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2))
+    expect(hook.current().turns[0].steps[0].id).toBe('server-retry-step')
   })
 })

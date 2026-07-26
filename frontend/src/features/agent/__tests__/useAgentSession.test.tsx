@@ -15,6 +15,8 @@ import type {
 import { useAgentSession } from '../useAgentSession'
 import { createUuid } from '../agent.id'
 
+const TEST_EVENT_ID = '99999999-9999-4999-8999-999999999999'
+
 class FakeSocket {
   static readonly CONNECTING = 0
   static readonly OPEN = 1
@@ -64,13 +66,24 @@ function createSocketFactory() {
 }
 
 describe('agent event contract', () => {
+  it.each([
+    { type: 'step_started', step_id: 's', label: '理解' },
+    { type: 'step_completed', step_id: 's', duration_ms: 1 },
+    { type: 'step_failed', step_id: 's', error_code: 'X', message: '失败', retryable: false, duration_ms: 1 },
+    { type: 'confirmation_required', step_id: 's', message: '确认', confirmation_id: 'c' },
+    { type: 'action_completed', step_id: 's', action: 'create_todo', result: {}, duration_ms: 1 },
+  ])('requires a UUID event_id for $type durable frames', (event) => {
+    expect(() => parseAgentEvent(event)).toThrow(AgentContractError)
+    expect(() => parseAgentEvent({ ...event, event_id: 'not-a-uuid' })).toThrow(AgentContractError)
+  })
+
   it('parses every target event and rejects unknown or malformed payloads', () => {
     const events: AgentEvent[] = [
-      { type: 'step_started', event_id: 'event-1', step_id: 's', label: '理解请求' },
-      { type: 'step_completed', event_id: 'event-1', step_id: 's', label: '理解请求', started_at: '2026-07-26T00:00:00Z', duration_ms: 12 },
-      { type: 'step_failed', step_id: 's', error_code: 'X', message: '失败', retryable: true, retry_token: 'r'.repeat(32), duration_ms: 12 },
-      { type: 'confirmation_required', step_id: 's', message: '确认？', confirmation_id: 'c' },
-      { type: 'action_completed', step_id: 's', action: 'create_todo', result: { id: 1 }, duration_ms: 12 },
+      { type: 'step_started', event_id: TEST_EVENT_ID, step_id: 's', label: '理解请求' },
+      { type: 'step_completed', event_id: TEST_EVENT_ID, step_id: 's', label: '理解请求', started_at: '2026-07-26T00:00:00Z', duration_ms: 12 },
+      { type: 'step_failed', event_id: TEST_EVENT_ID, step_id: 's', error_code: 'X', message: '失败', retryable: true, retry_token: 'r'.repeat(32), duration_ms: 12 },
+      { type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 's', message: '确认？', confirmation_id: 'c' },
+      { type: 'action_completed', event_id: TEST_EVENT_ID, step_id: 's', action: 'create_todo', result: { id: 1 }, duration_ms: 12 },
       { type: 'reply', content: '完成' },
       { type: 'done' },
     ]
@@ -88,13 +101,13 @@ describe('agent event contract', () => {
       '{"type":"action_completed","step_id":"s","action":"x","result":{"nested":{"__proto__":1}},"duration_ms":1}',
     ))).toThrow(AgentContractError)
     expect(() => parseAgentEvent({
-      type: 'action_completed', step_id: 's', action: 'x', result: { when: new Date() }, duration_ms: 1,
+      type: 'action_completed', event_id: TEST_EVENT_ID, step_id: 's', action: 'x', result: { when: new Date() }, duration_ms: 1,
     })).toThrow(AgentContractError)
   })
 
   it('deep-clones validated args and results instead of retaining service objects', () => {
     const raw = {
-      type: 'action_completed',
+      type: 'action_completed', event_id: TEST_EVENT_ID,
       step_id: 's',
       action: 'create_todo',
       result: { todo: { id: 1 } },
@@ -111,7 +124,7 @@ describe('agent event contract', () => {
     for (let index = 0; index < 80; index++) nested = { nested }
 
     expect(() => parseAgentEvent({
-      type: 'action_completed', step_id: 's', action: 'x', result: nested, duration_ms: 1,
+      type: 'action_completed', event_id: TEST_EVENT_ID, step_id: 's', action: 'x', result: nested, duration_ms: 1,
     })).toThrow(AgentContractError)
     expect(() => parseAgentEvent({
       type: 'reply', content: 'x'.repeat(200_000),
@@ -122,7 +135,7 @@ describe('agent event contract', () => {
     const key = `secret-${'x'.repeat(500)}`
     let thrown: unknown
     try {
-      parseAgentEvent({ type: 'action_completed', step_id: 's', action: 'x', result: { [key]: true }, duration_ms: 1 })
+      parseAgentEvent({ type: 'action_completed', event_id: TEST_EVENT_ID, step_id: 's', action: 'x', result: { [key]: true }, duration_ms: 1 })
     } catch (error) { thrown = error }
     expect(thrown).toBeInstanceOf(AgentContractError)
     expect(String(thrown)).not.toContain(key)
@@ -131,7 +144,7 @@ describe('agent event contract', () => {
 
   it('rejects payloads that exceed the total JSON node budget', () => {
     expect(() => parseAgentEvent({
-      type: 'action_completed', step_id: 's', action: 'x', result: { items: Array.from({ length: 5_100 }, (_, id) => id) }, duration_ms: 1,
+      type: 'action_completed', event_id: TEST_EVENT_ID, step_id: 's', action: 'x', result: { items: Array.from({ length: 5_100 }, (_, id) => id) }, duration_ms: 1,
     })).toThrow(AgentContractError)
   })
 })
@@ -247,7 +260,7 @@ describe('createAgentStreamClient', () => {
     })
     sockets[0].open()
     sockets[0].message({
-      type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时',
+      type: 'step_failed', event_id: TEST_EVENT_ID, step_id: 'read', error_code: 'TIMEOUT', message: '超时',
       retryable: true, retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 1,
     })
     sockets[0].abnormalClose()
@@ -468,9 +481,9 @@ describe('useAgentSession', () => {
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('删除任务'))
     act(() => client.handlers[0].onOpen?.())
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'delete-1', label: '删除' }))
     act(() => client.handlers[0].onEvent({
-      type: 'confirmation_required', step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+      type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
     expect(result.current.status).toBe('waiting_confirmation')
     act(() => result.current.confirm('confirm-1'))
@@ -486,9 +499,9 @@ describe('useAgentSession', () => {
     const client = new ControlledClient()
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('删除任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'delete-1', label: '删除' }))
     act(() => client.handlers[0].onEvent({
-      type: 'confirmation_required', step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+      type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
     act(() => result.current.reject('confirm-1'))
 
@@ -503,9 +516,9 @@ describe('useAgentSession', () => {
     client.exposeControl = false
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('删除任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'delete-1', label: '删除' }))
     act(() => client.handlers[0].onEvent({
-      type: 'confirmation_required', step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+      type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
     act(() => result.current.confirm('confirm-1'))
 
@@ -516,9 +529,9 @@ describe('useAgentSession', () => {
     const client = new ControlledClient()
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('删除任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'delete-1', label: '删除' }))
     act(() => client.handlers[0].onEvent({
-      type: 'confirmation_required', step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+      type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
     act(() => client.handlers[0].onFailure?.({
       code: 'CONNECTION_CLOSED', message: '断线', retryable: false,
@@ -538,9 +551,9 @@ describe('useAgentSession', () => {
       messageIdFactory: () => `message-${++messageId}`,
     }))
     act(() => result.current.send('列出未完成任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'step-1', label: '查询任务', tool: 'list_todos' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'step-1', label: '查询任务', tool: 'list_todos' }))
     act(() => client.handlers[0].onEvent({
-      type: 'step_failed', step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true,
+      type: 'step_failed', event_id: TEST_EVENT_ID, step_id: 'step-1', error_code: 'TIMEOUT', message: '超时', retryable: true,
       retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 5000,
     }))
     expect(result.current.canRetry('step-1')).toBe(false)
@@ -575,10 +588,10 @@ describe('useAgentSession', () => {
     }))
     act(() => result.current.send('查询任务'))
     act(() => client.handlers[0].onEvent({
-      type: 'step_started', step_id: 'read', label: '查询', tool: 'list_todos',
+      type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'read', label: '查询', tool: 'list_todos',
     }))
     act(() => client.handlers[0].onEvent({
-      type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true,
+      type: 'step_failed', event_id: TEST_EVENT_ID, step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true,
       retry_token: 'opaque-server-token-that-is-long-enough', duration_ms: 5000,
     }))
     act(() => client.handlers[0].onFailure?.({
@@ -601,9 +614,9 @@ describe('useAgentSession', () => {
     const client = new ControlledClient()
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('执行可能有副作用的操作'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'failed', label: '执行工具', tool }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'failed', label: '执行工具', tool }))
     act(() => client.handlers[0].onEvent({
-      type: 'step_failed', step_id: 'failed', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
+      type: 'step_failed', event_id: TEST_EVENT_ID, step_id: 'failed', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
     }))
 
     expect(result.current.canRetry('failed')).toBe(false)
@@ -615,9 +628,9 @@ describe('useAgentSession', () => {
     const client = new ControlledClient()
     const { result } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
     act(() => result.current.send('查询后创建任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'read', label: '查询', tool: 'list_todos' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'read', label: '查询', tool: 'list_todos' }))
     act(() => client.handlers[0].onEvent({
-      type: 'step_failed', step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
+      type: 'step_failed', event_id: TEST_EVENT_ID, step_id: 'read', error_code: 'TIMEOUT', message: '超时', retryable: true, duration_ms: 5000,
     }))
 
     expect(result.current.canRetry('read')).toBe(false)
@@ -636,17 +649,17 @@ describe('useAgentSession', () => {
       const client = new ControlledClient()
       const { result, unmount } = renderHook(() => useAgentSession({ client, sessionIdFactory: () => 's' }))
       act(() => result.current.send('查询任务'))
-      act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: scenario.failedId, label: '查询', tool: 'list_todos' }))
+      act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: scenario.failedId, label: '查询', tool: 'list_todos' }))
       if (scenario.completedAction) {
         act(() => client.handlers[0].onEvent({
-          type: 'step_started', step_id: 'mutated', label: '创建', tool: 'create_todo',
+          type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'mutated', label: '创建', tool: 'create_todo',
         }))
         act(() => client.handlers[0].onEvent({
-          type: 'action_completed', step_id: 'mutated', action: 'create_todo', result: { id: 1 }, duration_ms: 1,
+          type: 'action_completed', event_id: TEST_EVENT_ID, step_id: 'mutated', action: 'create_todo', result: { id: 1 }, duration_ms: 1,
         }))
       }
       act(() => client.handlers[0].onEvent({
-        type: 'step_failed', step_id: scenario.failedId, error_code: 'TIMEOUT', message: '超时', retryable: scenario.retryable, duration_ms: 5000,
+        type: 'step_failed', event_id: TEST_EVENT_ID, step_id: scenario.failedId, error_code: 'TIMEOUT', message: '超时', retryable: scenario.retryable, duration_ms: 5000,
       }))
       expect(result.current.canRetry(scenario.requestedId)).toBe(false)
       act(() => result.current.retry(scenario.requestedId))
@@ -721,9 +734,9 @@ describe('useAgentSession', () => {
     expect(result.current.status).toBe('connecting')
     expect(result.current.messages.map((message) => message.content)).toEqual(['新请求'])
     act(() => {
-      client.handlers[1].onEvent({ type: 'step_started', step_id: 'new-step', label: '删除' })
+      client.handlers[1].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'new-step', label: '删除' })
       client.handlers[1].onEvent({
-        type: 'confirmation_required',
+        type: 'confirmation_required', event_id: TEST_EVENT_ID,
         step_id: 'new-step',
         message: '确认？',
         confirmation_id: 'new-confirm',
@@ -751,7 +764,7 @@ describe('useAgentSession', () => {
       sessionIdFactory: () => 's',
     }))
     act(() => result.current.send('创建任务'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'old-step', label: '旧步骤' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'old-step', label: '旧步骤' }))
     const messagesBefore = result.current.messages
     const sessionBefore = result.current.sessionId
     let thrown: unknown
@@ -819,9 +832,9 @@ describe('useAgentSession', () => {
       client, historyApi: { clear: vi.fn(() => pending) }, sessionIdFactory: () => 's',
     }))
     act(() => result.current.send('待清理会话'))
-    act(() => client.handlers[0].onEvent({ type: 'step_started', step_id: 'delete-1', label: '删除' }))
+    act(() => client.handlers[0].onEvent({ type: 'step_started', event_id: TEST_EVENT_ID, step_id: 'delete-1', label: '删除' }))
     act(() => client.handlers[0].onEvent({
-      type: 'confirmation_required', step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
+      type: 'confirmation_required', event_id: TEST_EVENT_ID, step_id: 'delete-1', message: '确认？', confirmation_id: 'confirm-1',
     }))
     let clearPromise!: Promise<void>
     act(() => { clearPromise = result.current.clear() })

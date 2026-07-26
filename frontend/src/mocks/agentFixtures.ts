@@ -1,5 +1,12 @@
 import type { AgentEvent } from '../features/agent/agent.types'
 
+const EVENT_IDS = {
+  understand: '11111111-1111-4111-8111-111111111111',
+  create: '22222222-2222-4222-8222-222222222222',
+  list: '33333333-3333-4333-8333-333333333333',
+  delete: '44444444-4444-4444-8444-444444444444',
+} as const
+
 export const agentMockDelays = {
   understand: 800,
   callTodoApi: 800,
@@ -19,7 +26,7 @@ export interface AgentEventScenario {
 const understandStarted: TimedAgentEvent = {
   atMs: 0,
   event: {
-    type: 'step_started',
+    type: 'step_started', event_id: EVENT_IDS.understand,
     step_id: 'understand-1',
     label: '理解请求',
     started_at: '2026-07-14T00:00:00Z',
@@ -29,7 +36,7 @@ const understandStarted: TimedAgentEvent = {
 const understandCompleted: TimedAgentEvent = {
   atMs: agentMockDelays.understand,
   event: {
-    type: 'step_completed',
+    type: 'step_completed', event_id: EVENT_IDS.understand,
     step_id: 'understand-1',
     duration_ms: agentMockDelays.understand,
   },
@@ -38,7 +45,7 @@ const understandCompleted: TimedAgentEvent = {
 const createStarted: TimedAgentEvent = {
   atMs: agentMockDelays.understand + agentMockDelays.callTodoApi,
   event: {
-    type: 'step_started',
+    type: 'step_started', event_id: EVENT_IDS.create,
     step_id: 'create-1',
     label: '调用 Todo API',
     tool: 'create_todo',
@@ -58,7 +65,7 @@ export const agentEventScenarios = {
       {
         atMs: createFinishedAt,
         event: {
-          type: 'action_completed',
+          type: 'action_completed', event_id: EVENT_IDS.create,
           step_id: 'create-1',
           action: 'create_todo',
           result: { id: 5, title: '完成前端原型', priority: 'high' },
@@ -77,7 +84,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs + 5000,
         event: {
-          type: 'step_failed',
+          type: 'step_failed', event_id: EVENT_IDS.create,
           step_id: 'create-1',
           error_code: 'TOOL_TIMEOUT',
           message: 'Todo API 响应超时',
@@ -95,7 +102,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs,
         event: {
-          type: 'step_started',
+          type: 'step_started', event_id: EVENT_IDS.list,
           step_id: 'list-1',
           label: '查询 Todo 列表',
           tool: 'list_todos',
@@ -105,7 +112,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs + 5000,
         event: {
-          type: 'step_failed',
+          type: 'step_failed', event_id: EVENT_IDS.list,
           step_id: 'list-1',
           error_code: 'TOOL_TIMEOUT',
           message: 'Todo API 查询超时',
@@ -123,7 +130,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs,
         event: {
-          type: 'step_started',
+          type: 'step_started', event_id: EVENT_IDS.list,
           step_id: 'list-1',
           label: '查询 Todo 列表',
           tool: 'list_todos',
@@ -133,7 +140,7 @@ export const agentEventScenarios = {
       {
         atMs: createFinishedAt,
         event: {
-          type: 'action_completed', step_id: 'list-1', action: 'list_todos',
+          type: 'action_completed', event_id: EVENT_IDS.list, step_id: 'list-1', action: 'list_todos',
           result: { items: [], total: 4 }, duration_ms: agentMockDelays.waitForTodoApi,
         },
       },
@@ -147,12 +154,12 @@ export const agentEventScenarios = {
       understandCompleted,
       {
         atMs: createStarted.atMs,
-        event: { type: 'step_started', step_id: 'delete-1', label: '删除待办', tool: 'delete_todo', args: { id: 1 } },
+        event: { type: 'step_started', event_id: EVENT_IDS.delete, step_id: 'delete-1', label: '删除待办', tool: 'delete_todo', args: { id: 1 } },
       },
       {
         atMs: createStarted.atMs + 5000,
         event: {
-          type: 'step_failed', step_id: 'delete-1', error_code: 'TOOL_TIMEOUT', message: '删除 Todo 超时', retryable: true, duration_ms: 5000,
+          type: 'step_failed', event_id: EVENT_IDS.delete, step_id: 'delete-1', error_code: 'TOOL_TIMEOUT', message: '删除 Todo 超时', retryable: true, duration_ms: 5000,
         },
       },
       { atMs: createStarted.atMs + 5000, event: { type: 'done' } },
@@ -166,7 +173,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs + agentMockDelays.callTodoApi,
         event: {
-          type: 'step_failed',
+          type: 'step_failed', event_id: EVENT_IDS.create,
           step_id: 'create-1',
           error_code: 'VALIDATION_ERROR',
           message: '待办标题不能为空',
@@ -184,7 +191,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs,
         event: {
-          type: 'step_started',
+          type: 'step_started', event_id: EVENT_IDS.delete,
           step_id: 'delete-1',
           label: '删除待办',
           tool: 'delete_todo',
@@ -194,7 +201,7 @@ export const agentEventScenarios = {
       {
         atMs: createStarted.atMs,
         event: {
-          type: 'confirmation_required',
+          type: 'confirmation_required', event_id: EVENT_IDS.delete,
           step_id: 'delete-1',
           message: '确认删除待办「完成项目文档」？',
           confirmation_id: 'confirm-delete-1',
@@ -203,7 +210,7 @@ export const agentEventScenarios = {
       {
         atMs: createFinishedAt,
         event: {
-          type: 'action_completed',
+          type: 'action_completed', event_id: EVENT_IDS.delete,
           step_id: 'delete-1',
           action: 'delete_todo',
           result: { id: 1, deleted: true },

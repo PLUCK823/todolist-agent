@@ -78,6 +78,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const [turns, setTurns] = useState<AgentTurn[]>([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(durableHistory)
   const [historyError, setHistoryError] = useState<string>()
+  const sessionsRef = useRef<AgentSessionSummary[]>([])
   const stateRef = useRef(state)
   const cancelRef = useRef<(() => void) | undefined>(undefined)
   const controlRef = useRef<AgentControlSender | undefined>(undefined)
@@ -89,10 +90,24 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   const selectedRef = useRef<string | undefined>(undefined)
   const historyGenerationRef = useRef(0)
   const historyAbortRef = useRef<AbortController | undefined>(undefined)
+  const listGenerationRef = useRef(0)
+  const listAbortRef = useRef<AbortController | undefined>(undefined)
+  const selectionGenerationRef = useRef(0)
+  const syncGenerationRef = useRef(0)
+  const syncAbortRef = useRef<AbortController | undefined>(undefined)
   const createPromiseRef = useRef<Promise<void> | undefined>(undefined)
   const deletedIdsRef = useRef(new Set<string>())
   const seenEventsRef = useRef(new Set<string>())
   const renameGenerationsRef = useRef(new Map<string, number>())
+  const deleteGenerationsRef = useRef(new Map<string, number>())
+
+  const updateSessions = useCallback((update: (current: AgentSessionSummary[]) => AgentSessionSummary[]) => {
+    setSessions((current) => {
+      const next = update(current).filter((item) => !deletedIdsRef.current.has(item.id))
+      sessionsRef.current = next
+      return next
+    })
+  }, [])
 
   const commitTurns = useCallback((next: AgentTurn[]) => {
     turnsRef.current = next
@@ -122,6 +137,11 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
   }, [])
 
   const dispatch = useCallback((action: AgentReducerAction) => {
+    if (durableHistory && 'event_id' in action) {
+      const eventKey = `${action.event_id}:${action.type}`
+      if (seenEventsRef.current.has(eventKey)) return
+      seenEventsRef.current.add(eventKey)
+    }
     const next = reduceAgent(stateRef.current, action)
     stateRef.current = next
     setState(next)
@@ -138,11 +158,6 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     }
     const current = turnsRef.current.at(-1)
     if (!current) return
-    if ('event_id' in action && action.event_id) {
-      const eventKey = `${action.event_id}:${action.type}:${JSON.stringify(action)}`
-      if (seenEventsRef.current.has(eventKey)) return
-      seenEventsRef.current.add(eventKey)
-    }
     const assistant = next.activeAssistantMessageId
       ? next.messages.find((message) => message.id === next.activeAssistantMessageId)
       : undefined
@@ -190,7 +205,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       const detail = await sessionsApi.detail(sessionId, controller.signal)
       if (!mountedRef.current || generation !== historyGenerationRef.current || selectedRef.current !== sessionId) return
       commitDetail(sessionId, detail.turns)
-      setSessions((current) => current.map((item) => item.id === sessionId ? {
+      updateSessions((current) => current.map((item) => item.id === sessionId ? {
         id: detail.id, title: detail.title, createdAt: detail.createdAt,
         updatedAt: detail.updatedAt, lastMessageAt: detail.lastMessageAt,
       } : item))
@@ -200,12 +215,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     } finally {
       if (mountedRef.current && generation === historyGenerationRef.current) setIsHistoryLoading(false)
     }
-  }, [commitDetail, sessionsApi])
+  }, [commitDetail, sessionsApi, updateSessions])
 
   const selectSession = useCallback((sessionId: string) => {
     if (!sessions.some((item) => item.id === sessionId) || deletedIdsRef.current.has(sessionId)) return
     generationRef.current++
     closeStream()
+    selectionGenerationRef.current++
     selectedRef.current = sessionId
     setSelectedSessionId(sessionId)
     if (displayedSessionId === sessionId && !historyError) {
@@ -217,9 +233,72 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     void loadDetail(sessionId)
   }, [closeStream, displayedSessionId, historyError, loadDetail, sessions])
 
+  const loadSessions = useCallback(async (): Promise<void> => {
+    const generation = ++listGenerationRef.current
+    listAbortRef.current?.abort()
+    const controller = new AbortController()
+    listAbortRef.current = controller
+    setIsHistoryLoading(true)
+    setHistoryError(undefined)
+    try {
+      const listed = await sessionsApi.list(controller.signal)
+      if (!mountedRef.current || generation !== listGenerationRef.current) return
+      const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
+      sessionsRef.current = visible
+      setSessions(visible)
+      const target = visible.some((item) => item.id === selectedRef.current)
+        ? selectedRef.current
+        : visible[0]?.id
+      if (selectedRef.current !== target) selectionGenerationRef.current++
+      selectedRef.current = target
+      setSelectedSessionId(target)
+      if (target) await loadDetail(target)
+      else setIsHistoryLoading(false)
+    } catch (error) {
+      if (!mountedRef.current || generation !== listGenerationRef.current || controller.signal.aborted) return
+      setHistoryError(error instanceof Error ? error.message : '加载会话失败')
+      setIsHistoryLoading(false)
+    }
+  }, [loadDetail, sessionsApi])
+
+  const cancelSessionList = useCallback(() => {
+    listGenerationRef.current++
+    listAbortRef.current?.abort()
+  }, [])
+
+  const syncDurableSession = useCallback(async (sessionId: string, expectedSelectionGeneration: number): Promise<void> => {
+    const generation = ++syncGenerationRef.current
+    syncAbortRef.current?.abort()
+    const controller = new AbortController()
+    syncAbortRef.current = controller
+    setIsHistoryLoading(true)
+    setHistoryError(undefined)
+    try {
+      const [detail, listed] = await Promise.all([
+        sessionsApi.detail(sessionId, controller.signal),
+        sessionsApi.list(controller.signal),
+      ])
+      if (!mountedRef.current
+        || controller.signal.aborted
+        || generation !== syncGenerationRef.current
+        || selectionGenerationRef.current !== expectedSelectionGeneration
+        || selectedRef.current !== sessionId) return
+      const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
+      sessionsRef.current = visible
+      setSessions(visible)
+      commitDetail(sessionId, detail.turns)
+    } catch (error) {
+      if (!mountedRef.current || controller.signal.aborted || generation !== syncGenerationRef.current) return
+      setHistoryError(error instanceof Error ? error.message : '同步会话失败')
+    } finally {
+      if (mountedRef.current && generation === syncGenerationRef.current) setIsHistoryLoading(false)
+    }
+  }, [commitDetail, sessionsApi])
+
   const reloadHistory = useCallback(async () => {
     if (selectedRef.current) await loadDetail(selectedRef.current)
-  }, [loadDetail])
+    else await loadSessions()
+  }, [loadDetail, loadSessions])
 
   const createSession = useCallback((title?: string): Promise<void> => {
     if (createPromiseRef.current) return createPromiseRef.current
@@ -228,8 +307,9 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     const operation = (async () => {
       const created = await sessionsApi.create(title ? { title } : {})
       if (!mountedRef.current || deletedIdsRef.current.has(created.id)) return
-      setSessions((current) => [created, ...current.filter((item) => item.id !== created.id)])
+      updateSessions((current) => [created, ...current.filter((item) => item.id !== created.id)])
       if (selectedRef.current !== selectionAtStart || historyGenerationRef.current !== historyGeneration) return
+      selectionGenerationRef.current++
       selectedRef.current = created.id
       setSelectedSessionId(created.id)
       await loadDetail(created.id)
@@ -238,61 +318,64 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     })
     createPromiseRef.current = operation
     return operation
-  }, [loadDetail, sessionsApi])
+  }, [loadDetail, sessionsApi, updateSessions])
 
   const renameSession = useCallback(async (sessionId: string, title: string): Promise<void> => {
     if (deletedIdsRef.current.has(sessionId)) return
     const generation = (renameGenerationsRef.current.get(sessionId) ?? 0) + 1
     renameGenerationsRef.current.set(sessionId, generation)
     const previous = sessions.find((item) => item.id === sessionId)
-    setSessions((current) => current.map((item) => item.id === sessionId ? { ...item, title } : item))
+    updateSessions((current) => current.map((item) => item.id === sessionId ? { ...item, title } : item))
     try {
       const renamed = await sessionsApi.rename(sessionId, title)
       if (deletedIdsRef.current.has(sessionId) || renameGenerationsRef.current.get(sessionId) !== generation) return
-      setSessions((current) => current.map((item) => item.id === sessionId ? renamed : item))
+      updateSessions((current) => current.map((item) => item.id === sessionId ? renamed : item))
     } catch (error) {
       if (previous && !deletedIdsRef.current.has(sessionId) && renameGenerationsRef.current.get(sessionId) === generation) {
-        setSessions((current) => current.map((item) => item.id === sessionId ? previous : item))
+        updateSessions((current) => current.map((item) => item.id === sessionId ? previous : item))
       }
       throw error
     }
-  }, [sessions, sessionsApi])
+  }, [sessions, sessionsApi, updateSessions])
 
   const deleteSession = useCallback(async (sessionId: string): Promise<void> => {
     if (deletedIdsRef.current.has(sessionId)) return
+    const deleteGeneration = (deleteGenerationsRef.current.get(sessionId) ?? 0) + 1
+    deleteGenerationsRef.current.set(sessionId, deleteGeneration)
+    const previous = sessionsRef.current.find((item) => item.id === sessionId)
     deletedIdsRef.current.add(sessionId)
     renameGenerationsRef.current.set(sessionId, (renameGenerationsRef.current.get(sessionId) ?? 0) + 1)
     const wasCurrent = selectedRef.current === sessionId
-    const remaining = sessions.filter((item) => item.id !== sessionId)
-    setSessions(remaining)
+    updateSessions((current) => current)
     if (wasCurrent) {
       generationRef.current++
       closeStream()
       historyGenerationRef.current++
       historyAbortRef.current?.abort()
+      setIsHistoryLoading(true)
     }
     try {
       await sessionsApi.delete(sessionId)
     } catch (error) {
       if (!(error instanceof ApiError && error.status === 404)) {
-        deletedIdsRef.current.delete(sessionId)
-        setSessions(sessions)
+        if (deleteGenerationsRef.current.get(sessionId) === deleteGeneration) {
+          deletedIdsRef.current.delete(sessionId)
+          if (previous) updateSessions((current) => current.some((item) => item.id === sessionId) ? current : [...current, previous])
+          if (wasCurrent) setIsHistoryLoading(false)
+        }
         throw error
       }
     }
-    if (!wasCurrent || !mountedRef.current) return
-    const next = remaining[0]
-    selectedRef.current = next?.id
-    setSelectedSessionId(next?.id)
-    if (next) await loadDetail(next.id)
-    else {
+    if (!mountedRef.current || deleteGenerationsRef.current.get(sessionId) !== deleteGeneration) return
+    await loadSessions()
+    if (!selectedRef.current) {
       setDisplayedSessionId(undefined)
       commitTurns([])
       stateRef.current = initialAgentState
       setState(initialAgentState)
       setIsHistoryLoading(false)
     }
-  }, [closeStream, commitTurns, loadDetail, sessions, sessionsApi])
+  }, [closeStream, commitTurns, loadSessions, sessionsApi, updateSessions])
 
   const dispatchSynchronousFailure = useCallback((error: unknown) => {
     dispatch({
@@ -344,8 +427,9 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
             if (!isCurrent()) return
             dispatch(event)
             if (event.type === 'done') {
+              const selectionGeneration = selectionGenerationRef.current
               invalidateRequest(generation)
-              if (durableHistory && selectedRef.current === sessionId) void loadDetail(sessionId)
+              if (durableHistory && selectedRef.current === sessionId) void syncDurableSession(sessionId, selectionGeneration)
             }
           },
           onFailure: (failure) => {
@@ -367,7 +451,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       }
     }
     return true
-  }, [client, closeStream, dispatch, dispatchSynchronousFailure, displayedSessionId, durableHistory, idFactory, invalidateRequest, isHistoryLoading, loadDetail, messageIdFactory, now, sessionIdFactory])
+  }, [client, closeStream, dispatch, dispatchSynchronousFailure, displayedSessionId, durableHistory, idFactory, invalidateRequest, isHistoryLoading, messageIdFactory, now, sessionIdFactory, syncDurableSession])
 
   const send = useCallback((message: string) => startRequest(message), [startRequest])
 
@@ -379,6 +463,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     const current = stateRef.current
     const step = current.steps.find((candidate) => candidate.id === stepId)
     if (!canRetryServerStep(current, stepId) || !current.sessionId || !step?.retryToken) return
+    const sessionId = current.sessionId
     const generation = ++generationRef.current
     closeStream()
     dispatch({ type: 'retry_started', stepId })
@@ -387,7 +472,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
       const cancelRequest = client.send(
         {
           type: 'retry_step',
-          session_id: current.sessionId,
+          session_id: sessionId,
           step_id: stepId,
           retry_token: step.retryToken,
         },
@@ -396,7 +481,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
           onEvent: (event) => {
             if (!isCurrent()) return
             dispatch(event)
-            if (event.type === 'done') invalidateRequest(generation)
+            if (event.type === 'done') {
+              const selectionGeneration = selectionGenerationRef.current
+              invalidateRequest(generation)
+              if (durableHistory && selectedRef.current === sessionId) {
+                void syncDurableSession(sessionId, selectionGeneration)
+              }
+            }
           },
           onFailure: (failure) => {
             if (!isCurrent()) return
@@ -413,7 +504,7 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
         invalidateRequest(generation)
       }
     }
-  }, [client, closeStream, dispatch, dispatchSynchronousFailure, invalidateRequest])
+  }, [client, closeStream, dispatch, dispatchSynchronousFailure, durableHistory, invalidateRequest, syncDurableSession])
 
   const resolveConfirmation = useCallback((confirmationId: string, approved: boolean) => {
     if (clearingRef.current) return
@@ -491,32 +582,24 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     generationRef.current++
     historyGenerationRef.current++
     historyAbortRef.current?.abort()
+    cancelSessionList()
+    syncGenerationRef.current++
+    syncAbortRef.current?.abort()
     closeStream()
-  }, [closeStream])
+  }, [cancelSessionList, closeStream])
 
   useEffect(() => {
     if (!durableHistory) return
-    const controller = new AbortController()
     let active = true
-    void sessionsApi.list(controller.signal).then((listed) => {
-      if (!active || !mountedRef.current) return
-      const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
-      setSessions(visible)
-      const target = visible.some((item) => item.id === selectedRef.current)
-        ? selectedRef.current
-        : visible[0]?.id
-      selectedRef.current = target
-      setSelectedSessionId(target)
-      if (target) return loadDetail(target)
-      setIsHistoryLoading(false)
+    void Promise.resolve().then(() => {
+      if (active) return loadSessions()
       return undefined
-    }).catch((error: unknown) => {
-      if (!active || controller.signal.aborted) return
-      setHistoryError(error instanceof Error ? error.message : '加载会话失败')
-      setIsHistoryLoading(false)
     })
-    return () => { active = false; controller.abort() }
-  }, [durableHistory, loadDetail, sessionsApi])
+    return () => {
+      active = false
+      cancelSessionList()
+    }
+  }, [cancelSessionList, durableHistory, loadSessions])
 
   useEffect(() => {
     mountedRef.current = true

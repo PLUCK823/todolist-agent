@@ -75,6 +75,14 @@ function stringField(value: Record<string, unknown>, field: string): string {
   return value[field]
 }
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function eventIdField(value: Record<string, unknown>): string {
+  const eventId = stringField(value, 'event_id')
+  if (!uuidPattern.test(eventId)) throw new AgentContractError('Invalid event_id')
+  return eventId
+}
+
 function durationField(value: Record<string, unknown>): number {
   const duration = value.duration_ms
   if (typeof duration !== 'number' || duration < 0) {
@@ -93,7 +101,7 @@ function jsonObjectField(value: Record<string, unknown>, field: string): Record<
 
 function addStepContext<T extends object>(parsed: T, event: Record<string, unknown>): T {
   const target = parsed as unknown as Record<string, unknown>
-  if (event.event_id !== undefined) target['event_id'] = stringField(event, 'event_id')
+  target['event_id'] = eventIdField(event)
   if (event.label !== undefined) target['label'] = stringField(event, 'label')
   if (event.tool !== undefined) target['tool'] = stringField(event, 'tool')
   if (event.args !== undefined) target['args'] = jsonObjectField(event, 'args')
@@ -108,6 +116,7 @@ export function parseAgentEvent(value: unknown): AgentEvent {
       exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at'])
       const parsed: Extract<AgentEvent, { type: 'step_started' }> = {
         type: 'step_started',
+        event_id: eventIdField(event),
         step_id: stringField(event, 'step_id'),
         label: stringField(event, 'label'),
       }
@@ -118,7 +127,7 @@ export function parseAgentEvent(value: unknown): AgentEvent {
     }
     case 'step_completed': {
       exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'duration_ms'])
-      return addStepContext({ type: 'step_completed', step_id: stringField(event, 'step_id'), duration_ms: durationField(event) }, event)
+      return addStepContext({ type: 'step_completed', event_id: eventIdField(event), step_id: stringField(event, 'step_id'), duration_ms: durationField(event) }, event)
     }
     case 'step_failed':
       exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'error_code', 'message', 'retryable', 'retry_token', 'duration_ms'])
@@ -128,6 +137,7 @@ export function parseAgentEvent(value: unknown): AgentEvent {
       }
       return addStepContext({
         type: 'step_failed',
+        event_id: eventIdField(event),
         step_id: stringField(event, 'step_id'),
         error_code: stringField(event, 'error_code'),
         message: stringField(event, 'message'),
@@ -139,6 +149,7 @@ export function parseAgentEvent(value: unknown): AgentEvent {
       exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'message', 'confirmation_id'])
       return addStepContext({
         type: 'confirmation_required',
+        event_id: eventIdField(event),
         step_id: stringField(event, 'step_id'),
         message: stringField(event, 'message'),
         confirmation_id: stringField(event, 'confirmation_id'),
@@ -150,6 +161,7 @@ export function parseAgentEvent(value: unknown): AgentEvent {
       }
       return addStepContext({
         type: 'action_completed',
+        event_id: eventIdField(event),
         step_id: stringField(event, 'step_id'),
         action: stringField(event, 'action'),
         result: jsonObjectField(event, 'result'),
