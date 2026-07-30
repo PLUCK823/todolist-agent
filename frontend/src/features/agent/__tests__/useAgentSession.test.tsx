@@ -92,6 +92,26 @@ describe('agent event contract', () => {
     expect(() => parseAgentEvent({ type: 'mystery' })).toThrow(AgentContractError)
   })
 
+  it('accepts confirmation metadata on a completed destructive action', () => {
+    const event = {
+      type: 'action_completed',
+      event_id: TEST_EVENT_ID,
+      step_id: 'delete-1',
+      label: '调用 Todo API',
+      tool: 'delete_todo',
+      args: { todo_id: 36 },
+      started_at: '2026-07-30T10:54:26Z',
+      action: 'delete_todo',
+      result: { id: 36, deleted: true },
+      duration_ms: 10,
+      confirmation_id: 'confirm-c4d0ca24-8907-4e16-af53-4f0c0ca6f60b',
+      confirmation_message: '确认删除这个待办吗？此操作不可撤销。',
+      confirmation_approved: true,
+    }
+
+    expect(parseAgentEvent(event)).toEqual(event)
+  })
+
   it('rejects inherited, extra, dangerous and non-JSON event data', () => {
     const inherited = Object.create({ content: '继承内容' }) as Record<string, unknown>
     inherited.type = 'reply'

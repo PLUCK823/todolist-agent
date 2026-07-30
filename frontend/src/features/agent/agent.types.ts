@@ -3,7 +3,7 @@ export type AgentEvent =
   | { type: 'step_completed'; event_id: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; duration_ms: number }
   | { type: 'step_failed'; event_id: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; error_code: string; message: string; retryable: boolean; retry_token?: string; duration_ms: number }
   | { type: 'confirmation_required'; event_id: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; message: string; confirmation_id: string }
-  | { type: 'action_completed'; event_id: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; confirmation_approved?: boolean; action: string; result: Record<string, unknown>; duration_ms: number }
+  | { type: 'action_completed'; event_id: string; step_id: string; label?: string; tool?: string; args?: Record<string, unknown>; started_at?: string; confirmation_id?: string; confirmation_message?: string; confirmation_approved?: boolean; action: string; result: Record<string, unknown>; duration_ms: number }
   | { type: 'reply'; content: string }
   | { type: 'done' }
 

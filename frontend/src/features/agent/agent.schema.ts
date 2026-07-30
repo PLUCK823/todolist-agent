@@ -155,7 +155,7 @@ export function parseAgentEvent(value: unknown): AgentEvent {
         confirmation_id: stringField(event, 'confirmation_id'),
       }, event)
     case 'action_completed':
-      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'confirmation_approved', 'action', 'result', 'duration_ms'])
+      exactKeys(event, ['type', 'event_id', 'step_id', 'label', 'tool', 'args', 'started_at', 'confirmation_id', 'confirmation_message', 'confirmation_approved', 'action', 'result', 'duration_ms'])
       if (event.confirmation_approved !== undefined && typeof event.confirmation_approved !== 'boolean') {
         throw new AgentContractError('Invalid confirmation_approved')
       }
@@ -166,6 +166,8 @@ export function parseAgentEvent(value: unknown): AgentEvent {
         action: stringField(event, 'action'),
         result: jsonObjectField(event, 'result'),
         duration_ms: durationField(event),
+        ...(event.confirmation_id !== undefined && { confirmation_id: stringField(event, 'confirmation_id') }),
+        ...(event.confirmation_message !== undefined && { confirmation_message: stringField(event, 'confirmation_message') }),
         ...(event.confirmation_approved !== undefined && { confirmation_approved: event.confirmation_approved }),
       }, event)
     case 'reply':
