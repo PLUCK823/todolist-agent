@@ -1,5 +1,6 @@
 import { postE2EControl } from '../fixtures/api.fixture'
 import { expect, test } from '../fixtures/agent.fixture'
+import type { Page } from '@playwright/test'
 
 test.beforeEach(async ({ login }) => { await login() })
 
@@ -56,6 +57,11 @@ const seededHistory = {
 
 async function seedHistory(page: import('@playwright/test').Page) {
   await postE2EControl(page, '/api/__e2e__/agent/history', seededHistory)
+}
+
+async function sequentialTabKey(page: Page, reverse = false) {
+  const optionTab = await page.evaluate(() => /AppleWebKit/.test(navigator.userAgent) && !/(Chrome|Chromium)/.test(navigator.userAgent))
+  return [optionTab ? 'Alt' : '', reverse ? 'Shift' : '', 'Tab'].filter(Boolean).join('+')
 }
 
 function capturePageFailures(page: import('@playwright/test').Page) {
@@ -167,17 +173,17 @@ test('mobile session drawer traps keyboard focus and closes with Escape', async 
   const drawer = page.getByRole('complementary', { name: '会话列表' })
   const close = page.getByRole('button', { name: '关闭会话列表', exact: true })
   await expect(drawer).toBeVisible()
-  await page.keyboard.press('Tab')
+  if (!await close.evaluate((element) => element === document.activeElement)) await page.keyboard.press(await sequentialTabKey(page))
   await expect(close).toBeFocused()
   const focusable = drawer.locator('button:not([disabled])')
   expect(await focusable.count()).toBeGreaterThan(2)
   const last = focusable.last()
-  await page.keyboard.press('Shift+Tab')
+  await page.keyboard.press(await sequentialTabKey(page, true))
   await expect(last).toBeFocused()
-  await page.keyboard.press('Tab')
+  await page.keyboard.press(await sequentialTabKey(page))
   await expect(close).toBeFocused()
   for (let index = 0; index < await focusable.count() + 2; index++) {
-    await page.keyboard.press('Tab')
+    await page.keyboard.press(await sequentialTabKey(page))
     expect(await drawer.evaluate((element) => element.contains(document.activeElement))).toBe(true)
     await expect(opener).not.toBeFocused()
   }
