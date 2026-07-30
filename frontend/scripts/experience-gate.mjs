@@ -3,7 +3,15 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, expect } from '@playwright/test'
-import { assertExperienceReport, findAvailablePort, measureGzip, verifyEvidenceFiles } from './experience-gate-lib.mjs'
+import {
+  assertExperienceReport,
+  bootstrapMockAuthenticatedPage,
+  experienceAgentHistorySeed,
+  findAvailablePort,
+  measureGzip,
+  seedColdMockSession,
+  verifyEvidenceFiles,
+} from './experience-gate-lib.mjs'
 
 const frontend = join(dirname(fileURLToPath(import.meta.url)), '..')
 const root = join(frontend, '..')
@@ -105,15 +113,7 @@ async function session(viewport = { width: 1223, height: 1227 }) {
     if ('serviceWorker' in navigator) await navigator.serviceWorker.ready
   })
   if (!await page.evaluate(() => navigator.serviceWorker?.controller != null)) await page.reload()
-  await page.evaluate(async ({ accountValue, passwordValue }) => {
-    const salt = '00112233445566778899aabbccddeeff'
-    const encoded = new TextEncoder().encode(`${salt}:${passwordValue}`)
-    const digest = await crypto.subtle.digest('SHA-256', encoded)
-    const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
-    localStorage.setItem('todolist.auth.account', JSON.stringify(accountValue))
-    localStorage.setItem('todolist.auth.credential', JSON.stringify({ version: 1, accountId: accountValue.id, salt, hash }))
-    localStorage.setItem('todolist.auth.session', accountValue.id)
-  }, { accountValue: account, passwordValue: password })
+  await bootstrapMockAuthenticatedPage(context, page, baseURL, account, password)
   return { context, page }
 }
 async function capture(id, action) {
@@ -132,10 +132,7 @@ async function capture(id, action) {
 const ftiSamples = []
 for (let index = 0; index < 5; index += 1) {
   const context = await trackedContext({ viewport: { width: 1223, height: 1227 }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', reducedMotion: 'reduce' })
-  await context.addInitScript((accountValue) => {
-    localStorage.setItem('todolist.auth.account', JSON.stringify(accountValue))
-    localStorage.setItem('todolist.auth.session', accountValue.id)
-  }, account)
+  await seedColdMockSession(context, baseURL, account, html)
   const page = await context.newPage()
   try {
     if (page.url() !== 'about:blank') throw new Error(`cold FTI page must start at about:blank, got ${page.url()}`)
@@ -223,10 +220,13 @@ async function armScrollableAgentRun(page) {
     created_at: '2026-07-13T02:00:00.000Z',
     updated_at: '2026-07-13T02:00:00.000Z',
   }))
-  await page.evaluate(async ({ todos }) => {
+  const history = experienceAgentHistorySeed('2026-07-13T02:00:00.000Z')
+  await page.evaluate(async ({ todos, historySeed }) => {
     const response = await fetch('/api/__e2e__/todos/seed', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ todos }) })
     if (!response.ok) throw new Error(`todo seed failed: ${response.status}`)
-  }, { todos: seededTodos })
+    const historyResponse = await fetch('/api/__e2e__/agent/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(historySeed) })
+    if (!historyResponse.ok) throw new Error(`Agent history seed failed: ${historyResponse.status}`)
+  }, { todos: seededTodos, historySeed: history })
   await page.evaluate(async () => {
     const response = await fetch('/api/__e2e__/agent/scenario', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'success', timeScale: 1 }) })
     if (!response.ok) throw new Error(`agent scenario failed: ${response.status}`)
@@ -255,13 +255,7 @@ await capture(6, async (evidencePage) => {
     await context.close()
   }
 
-  await evidencePage.evaluate(async () => {
-    const response = await fetch('/api/__e2e__/agent/scenario', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'success', timeScale: 1 }) })
-    if (!response.ok) throw new Error(`agent scenario failed: ${response.status}`)
-  })
-  await evidencePage.goto(`${baseURL}/tasks`)
-  await evidencePage.getByLabel('消息输入框').fill('创建运行中验收任务')
-  await evidencePage.getByRole('button', { name: '发送消息' }).click()
+  await armScrollableAgentRun(evidencePage)
   const timeline = evidencePage.getByRole('list', { name: 'Agent 执行步骤' })
   await expect(timeline).toContainText('运行中')
   await expect(timeline.locator('time')).toBeVisible()
@@ -292,10 +286,19 @@ await capture(8, async (page) => {
   await page.getByRole('heading', { name: 'Agent TodoList' }).waitFor()
   await page.getByRole('link', { name: '注册' }).click()
   await page.getByText('创建新账号', { exact: true }).waitFor()
-  await page.getByRole('link', { name: '去登录' }).click()
-  await page.getByLabel('邮箱地址').fill(account.email)
+  const returningEmail = 'experience-return@example.com'
+  await page.getByLabel('显示名称').fill('回归验收用户')
+  await page.getByLabel('邮箱地址').fill(returningEmail)
+  await page.getByLabel('密码').fill(password)
+  await page.getByRole('button', { name: '创建账号' }).click()
+  await expect(page.getByRole('status')).toContainText('账号已创建，请登录')
+  await expect(page.getByLabel('邮箱地址')).toHaveValue(returningEmail)
   await page.getByLabel('密码').fill(password)
   await page.getByRole('button', { name: '登录' }).click()
+  await expect(page).toHaveURL(/\/profile$/)
+  await expect(page.getByRole('heading', { name: '个人资料' })).toBeVisible()
+  await expect(page.getByText(`${returningEmail} · 已登录`, { exact: true })).toBeVisible()
+  await page.goto(`${baseURL}/tasks`)
   await expect(page).toHaveURL(/\/tasks$/)
   await expect(page.getByRole('heading', { name: '今天，保持专注' })).toBeVisible()
   await expect(page.getByRole('button', { name: /^查看任务：/ }).first()).toBeVisible()

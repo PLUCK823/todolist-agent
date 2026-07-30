@@ -31,6 +31,81 @@ export async function findAvailablePort(host = '127.0.0.1') {
   })
 }
 
+function mockSessionCookie(baseURL, account) {
+  const origin = new URL(baseURL)
+  const identity = {
+    email: account.email.trim().toLowerCase(),
+    name: account.name.trim(),
+  }
+  return {
+    name: 'todolist_mock_session',
+    value: encodeURIComponent(JSON.stringify(identity)),
+    domain: origin.hostname,
+    path: '/',
+    httpOnly: true,
+    secure: origin.protocol === 'https:',
+    sameSite: 'Lax',
+  }
+}
+
+function coldAuthenticatedHTML(entryHTML, account) {
+  const entryPattern = /<script type="module" crossorigin src="(\/assets\/index-[A-Za-z0-9_-]+\.js)"><\/script>/g
+  const matches = [...entryHTML.matchAll(entryPattern)]
+  if (matches.length !== 1) throw new Error('cold experience bootstrap requires exactly one Vite entry script')
+  const entry = matches[0][1]
+  const accountJSON = JSON.stringify(JSON.stringify(account)).replaceAll('<', '\\u003c')
+  const bootstrap = `<script type="module">
+const cache = await caches.open('todolist-mock-auth')
+await cache.put('http://mock.local/session', new Response(${accountJSON}, { headers: { 'Content-Type': 'application/json' } }))
+await import('${entry}')
+</script>`
+  return entryHTML.replace(entryPattern, bootstrap)
+}
+
+export async function seedColdMockSession(context, baseURL, account, entryHTML) {
+  const body = coldAuthenticatedHTML(entryHTML, account)
+  await context.route(`${baseURL}/tasks`, async (route) => {
+    await route.fulfill({ status: 200, contentType: 'text/html', body })
+  })
+  await context.addCookies([mockSessionCookie(baseURL, account)])
+}
+
+export async function bootstrapMockAuthenticatedPage(context, page, baseURL, account, password) {
+  const result = await page.evaluate(async ({ accountValue, passwordValue }) => {
+    const register = await fetch('/api/auth/register', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: accountValue.name, email: accountValue.email, password: passwordValue }),
+    })
+    if (!register.ok && register.status !== 409) throw new Error(`mock register failed: ${register.status}`)
+    const login = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: accountValue.email, password: passwordValue }),
+    })
+    if (!login.ok) throw new Error(`mock login failed: ${login.status}`)
+    return { registerStatus: register.status, loginStatus: login.status }
+  }, { accountValue: account, passwordValue: password })
+  if (result.registerStatus !== 201 && result.registerStatus !== 409) throw new Error(`mock register failed: ${result.registerStatus}`)
+  if (result.loginStatus < 200 || result.loginStatus >= 300) throw new Error(`mock login failed: ${result.loginStatus}`)
+  await context.addCookies([mockSessionCookie(baseURL, account)])
+}
+
+export function experienceAgentHistorySeed(timestamp) {
+  return {
+    sessions: [{
+      id: 'e1e7c0de-7a5c-4b8d-9f10-123456789abc',
+      title: '运行中验收会话',
+      created_at: timestamp,
+      updated_at: timestamp,
+      last_message_at: timestamp,
+      turns: [],
+    }],
+  }
+}
+
 export async function verifyEvidenceFiles(report, root) {
   for (const item of report.evidence) {
     const filePath = join(root, item.screenshot)

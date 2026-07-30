@@ -6,7 +6,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createServer } from 'node:net'
-import { assertExperienceReport, findAvailablePort, verifyEvidenceFiles } from './experience-gate-lib.mjs'
+import * as experienceGate from './experience-gate-lib.mjs'
+
+const { assertExperienceReport, findAvailablePort, verifyEvidenceFiles } = experienceGate
 
 function passingReport() {
   return {
@@ -136,6 +138,81 @@ test('allocates an isolated preview port instead of assuming a shared fixed port
     server.once('error', reject)
     server.listen(port, '127.0.0.1', () => server.close((error) => error ? reject(error) : resolve()))
   })
+})
+
+test('seeds a cold authenticated context without prewarming the application', async () => {
+  assert.equal(typeof experienceGate.seedColdMockSession, 'function')
+  const calls = []
+  const context = {
+    route: async (matcher, handler) => { calls.push({ type: 'route', matcher, handler }) },
+    addCookies: async (next) => { calls.push({ type: 'cookie', cookies: next }) },
+  }
+  const account = {
+    id: 'cold-user',
+    name: 'Cold User',
+    email: 'Cold.User@example.com',
+    timezone: 'Asia/Shanghai (UTC+8)',
+    avatar: { kind: 'preset', value: 'amber' },
+    taskCount: 4,
+    agentSessionCount: 1,
+  }
+
+  const entryHTML = '<!doctype html><script type="module" crossorigin src="/assets/index-test.js"></script>'
+  await experienceGate.seedColdMockSession(context, 'http://127.0.0.1:43210', account, entryHTML)
+
+  assert.deepEqual(calls.map(({ type }) => type), ['route', 'cookie'])
+  assert.equal(calls[0].matcher, 'http://127.0.0.1:43210/tasks')
+  assert.deepEqual(calls[1].cookies, [{
+    name: 'todolist_mock_session',
+    value: encodeURIComponent(JSON.stringify({ email: 'cold.user@example.com', name: 'Cold User' })),
+    domain: '127.0.0.1',
+    path: '/',
+    httpOnly: true,
+    secure: false,
+    sameSite: 'Lax',
+  }])
+
+  const responses = []
+  await calls[0].handler({
+    fulfill: async (response) => { responses.push(response) },
+  })
+  assert.equal(responses[0].status, 200)
+  assert.equal(responses[0].contentType, 'text/html')
+  assert.match(responses[0].body, /await caches\.open\('todolist-mock-auth'\)/)
+  assert.match(responses[0].body, /http:\/\/mock\.local\/session/)
+  assert.match(responses[0].body, /await import\('\/assets\/index-test\.js'\)/)
+  assert.doesNotMatch(responses[0].body, /src="\/assets\/index-test\.js"/)
+})
+
+test('bootstraps an ordinary mock session through register and login before installing its Cookie', async () => {
+  assert.equal(typeof experienceGate.bootstrapMockAuthenticatedPage, 'function')
+  const calls = []
+  const context = {
+    addCookies: async (next) => { calls.push({ type: 'cookie', cookies: next }) },
+  }
+  const page = {
+    evaluate: async (_callback, input) => {
+      calls.push({ type: 'requests', input })
+      return { registerStatus: 201, loginStatus: 200 }
+    },
+  }
+  const account = { name: 'Gate User', email: 'Gate.User@example.com' }
+
+  await experienceGate.bootstrapMockAuthenticatedPage(context, page, 'http://127.0.0.1:43210', account, 'password1')
+
+  assert.deepEqual(calls.map(({ type }) => type), ['requests', 'cookie'])
+  assert.deepEqual(calls[0].input, { accountValue: account, passwordValue: 'password1' })
+  assert.equal(calls[1].cookies[0].httpOnly, true)
+  assert.equal(decodeURIComponent(calls[1].cookies[0].value), JSON.stringify({ email: 'gate.user@example.com', name: 'Gate User' }))
+})
+
+test('seeds one durable Agent session before exercising the task-side composer', () => {
+  assert.equal(typeof experienceGate.experienceAgentHistorySeed, 'function')
+  const seed = experienceGate.experienceAgentHistorySeed('2026-07-13T02:00:00.000Z')
+  assert.equal(seed.sessions.length, 1)
+  assert.match(seed.sessions[0].id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+  assert.equal(seed.sessions[0].last_message_at, '2026-07-13T02:00:00.000Z')
+  assert.deepEqual(seed.sessions[0].turns, [])
 })
 
 test('rejects an entry bundle at or above 100 KB gzip', () => {
