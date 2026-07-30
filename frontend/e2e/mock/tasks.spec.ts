@@ -123,11 +123,14 @@ test('distinguishes an empty list from a filtered no-results state', async ({ pa
   await expect(page.getByRole('heading', { name: '没有符合条件的任务' })).toBeVisible()
 })
 
-test('recovers from a one-shot 500 response with an explicit retry', async ({ page, failNextTodoRequest }) => {
-  await failNextTodoRequest({ method: 'GET', query: 'page_size=10', times: 4, status: 500, message: '服务暂时不可用' })
+test('recovers after a server failure with an explicit retry', async ({ page, seedTodos, failNextTodoRequest }) => {
+  // Keep the failure armed across StrictMode remounts and QueryClient retries.
+  // Reseeding below models the server recovery and deterministically disarms it.
+  await failNextTodoRequest({ method: 'GET', query: 'page_size=10', times: 10, status: 500, message: '服务暂时不可用' })
   await page.goto('/tasks')
   const alert = page.getByRole('alert').filter({ hasText: '暂时无法加载任务' })
   await expect(alert).toContainText('服务暂时不可用')
+  await seedTodos()
   await alert.getByRole('button', { name: '重新加载' }).click()
   await expect(page.getByRole('heading', { name: '今天，保持专注' })).toBeVisible()
   await expect(page.getByRole('button', { name: '查看任务：完成项目文档' })).toBeVisible()
