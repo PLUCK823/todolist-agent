@@ -74,13 +74,18 @@ export async function reloadMockPage(page: Page) {
   await page.goto(target)
 }
 
+export function shouldInstallMockTransport(projectName: string, realMode = process.env.E2E_REAL === 'true') {
+  return !realMode && projectName !== 'real-chromium'
+}
+
 export const test = base.extend<AppFixtures>({
-  _mockTransport: [async ({ context }, provide) => {
-    await installMockTransport(context)
+  _mockTransport: [async ({ context }, provide, testInfo) => {
+    if (shouldInstallMockTransport(testInfo.project.name)) await installMockTransport(context)
     await provide()
   }, { auto: true }],
 
-  _appState: [async ({ page }, provide) => {
+  _appState: [async ({ page, _mockTransport }, provide) => {
+    void _mockTransport
     await installTestState(page)
     await provide()
   }, { auto: true }],

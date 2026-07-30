@@ -1,4 +1,11 @@
 import { expect, test } from '../fixtures/agent.fixture'
+import { shouldInstallMockTransport } from '../fixtures/app.fixture'
+
+test('mock routing is disabled for the real project and explicit real mode', () => {
+  expect(shouldInstallMockTransport('chromium', false)).toBe(true)
+  expect(shouldInstallMockTransport('real-chromium', false)).toBe(false)
+  expect(shouldInstallMockTransport('chromium', true)).toBe(false)
+})
 
 test('API fixture seeds todos independently', async ({ page, login, seedTodos }) => {
   await seedTodos([{
@@ -81,6 +88,12 @@ test('API fixture preserves updates, completion and deletion for following GETs'
 
 test('app fixture shares the Cookie session without injecting localStorage identity', async ({ context, login }) => {
   await login()
+  const session = (await context.cookies('http://127.0.0.1:3000')).find((cookie) => cookie.name === 'todolist_mock_session')
+  expect(session).toMatchObject({
+    httpOnly: true,
+    sameSite: 'Lax',
+    path: '/',
+  })
   const secondPage = await context.newPage()
   await secondPage.goto('/tasks')
   await expect(secondPage.getByRole('heading', { name: '今天，保持专注' })).toBeVisible()
