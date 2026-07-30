@@ -7,6 +7,9 @@ type Account = { id: string; name: string; email: string; timezone: string; avat
 type Session = { id: string; title: string; created_at: string; updated_at: string; last_message_at: string; turns: Record<string, unknown>[] }
 type Failure = { method?: string; path?: string; query?: string; remaining: number; status: number; message: string }
 type Scenario = keyof typeof agentEventScenarios | 'disconnect' | 'readOnlyDisconnect'
+type StoredTurn = { owner: string; session: Session; turn: Record<string, unknown> }
+type SocketFlow = { id: string; owner: string; sessionId: string; retryTokens: Set<string> }
+type PendingRetry = { owner: string; sessionId: string; stepId: string; turnId: string; flowId: string; terminal: boolean; stored: StoredTurn }
 
 const sessionCookie = 'todolist_mock_session'
 const jsonHeaders = { 'content-type': 'application/json' }
@@ -30,7 +33,7 @@ class MockTransport {
   failure: Failure | undefined
   delay: (Failure & { delayMs: number }) | undefined
   scenario: { name: Scenario; timeScale: number } = { name: 'success', timeScale: 0 }
-  retries = new Map<string, { sessionId: string; stepId: string; terminal: boolean; stored?: { session: Session; turn: Record<string, unknown> } }>()
+  retries = new Map<string, PendingRetry>()
   authenticatedEmail: string | undefined
 
   async email(_route: Route) { return this.authenticatedEmail }
@@ -136,42 +139,66 @@ class MockTransport {
     return this.send(route, 501, { code: 50101, message: `Unhandled mock agent route: ${method} ${pathname}`, data: null })
   }
 
-  storeTurn(sessionId: string, message: string) {
-    for (const sessions of this.sessions.values()) { const session = sessions.get(sessionId); if (session) { const now = iso(); const ordinal = session.turns.length + 1; const turn: Record<string, unknown> = { id: uuid(), ordinal, status: 'running', started_at: now, completed_at: null, failure_code: null, failure_message: null, result_uncertain: false, messages: [{ id: uuid(), role: 'user', content: message, ordinal: ordinal * 2 - 1, created_at: now }], steps: [] }; session.turns.push(turn); session.title = session.title === '新会话' ? message.trim().slice(0, 40) || '新会话' : session.title; session.updated_at = now; session.last_message_at = now; return { session, turn } } }; return undefined
+  storeTurn(owner: string, sessionId: string, message: string): StoredTurn | undefined {
+    const session = this.sessions.get(owner)?.get(sessionId)
+    if (!session) return undefined
+    const now = iso(); const ordinal = session.turns.length + 1
+    const turn: Record<string, unknown> = { id: uuid(), ordinal, status: 'running', started_at: now, completed_at: null, failure_code: null, failure_message: null, result_uncertain: false, messages: [{ id: uuid(), role: 'user', content: message, ordinal: ordinal * 2 - 1, created_at: now }], steps: [] }
+    session.turns.push(turn); session.title = session.title === '新会话' ? message.trim().slice(0, 40) || '新会话' : session.title; session.updated_at = now; session.last_message_at = now
+    return { owner, session, turn }
   }
   websocket(ws: WebSocketRoute) {
+    const url = new URL(ws.url())
+    const owner = this.authenticatedEmail
+    const sessionId = url.searchParams.get('session_id') ?? ''
+    const validUrl = url.protocol === 'ws:' && url.host === '127.0.0.1:3000' && url.pathname === '/api/agent/stream'
+      && [...url.searchParams.keys()].every((key) => key === 'session_id')
+      && url.searchParams.getAll('session_id').length === 1
+    if (!validUrl || !owner || !sessionId || !this.sessions.get(owner)?.has(sessionId)) {
+      void ws.close({ code: 1008, reason: 'unauthorized mock agent session' })
+      return
+    }
+    const flow: SocketFlow = { id: uuid(), owner, sessionId, retryTokens: new Set() }
     let started = false
-    let waitingConfirmation: { stored?: { session: Session; turn: Record<string, unknown> }; events: typeof agentEventScenarios.success.events; confirmationAt: number } | undefined
+    let waitingConfirmation: { id: string; owner: string; sessionId: string; socketId: string; turnId: string; stored: StoredTurn; events: typeof agentEventScenarios.success.events; confirmationAt: number } | undefined
     ws.onMessage((raw) => {
       let frame: Record<string, unknown>; try { frame = JSON.parse(asText(raw)) as Record<string, unknown> } catch { ws.close({ code: 1003, reason: 'invalid mock frame' }); return }
-      if (frame.type === 'retry_step') { const token = typeof frame.retry_token === 'string' ? frame.retry_token : ''; const pending = this.retries.get(token); const validKeys = Object.keys(frame).every((key) => ['type', 'session_id', 'step_id', 'retry_token'].includes(key)); if (!validKeys || !pending || !pending.terminal || pending.sessionId !== frame.session_id || pending.stepId !== frame.step_id) { ws.send(JSON.stringify({ type: 'step_failed', step_id: frame.step_id ?? 'retry', error_code: 'INVALID_RETRY_STEP', message: '重试步骤不存在、已使用或不属于当前会话', retryable: false, duration_ms: 0 })); ws.send(JSON.stringify({ type: 'done' })); return }; this.retries.delete(token); this.emit(ws, agentEventScenarios.readOnlySuccess.events.filter(({ event }) => event.type !== 'step_completed'), pending.stored); return }
+      if (this.authenticatedEmail !== owner) { void ws.close({ code: 1008, reason: 'mock agent identity changed' }); return }
+      if (frame.type === 'retry_step') { const token = typeof frame.retry_token === 'string' ? frame.retry_token : ''; const pending = this.retries.get(token); const validKeys = Object.keys(frame).every((key) => ['type', 'session_id', 'step_id', 'retry_token'].includes(key)); if (!validKeys || !pending || !pending.terminal || pending.owner !== owner || pending.sessionId !== sessionId || pending.sessionId !== frame.session_id || pending.stepId !== frame.step_id || pending.turnId !== pending.stored.turn.id) { ws.send(JSON.stringify({ type: 'step_failed', step_id: frame.step_id ?? 'retry', error_code: 'INVALID_RETRY_STEP', message: '重试步骤不存在、已使用或不属于当前会话', retryable: false, duration_ms: 0 })); ws.send(JSON.stringify({ type: 'done' })); return }; this.retries.delete(token); this.emit(ws, agentEventScenarios.readOnlySuccess.events.filter(({ event }) => event.type !== 'step_completed'), pending.stored, flow); return }
       if (waitingConfirmation && frame.type === 'confirmation_response') {
         const pending = waitingConfirmation; waitingConfirmation = undefined
-        if (frame.approved === true) this.emit(ws, pending.events.filter(({ event }) => ['action_completed', 'reply', 'done'].includes(event.type)), pending.stored, false, pending.confirmationAt)
+        const valid = Object.keys(frame).every((key) => ['type', 'confirmation_id', 'approved'].includes(key))
+          && frame.confirmation_id === pending.id && typeof frame.approved === 'boolean'
+          && pending.owner === owner && pending.sessionId === sessionId && pending.socketId === flow.id
+          && pending.turnId === pending.stored.turn.id
+        if (!valid) { void ws.close({ code: 1008, reason: 'invalid mock confirmation' }); return }
+        if (frame.approved === true) this.emit(ws, pending.events.filter(({ event }) => ['action_completed', 'reply', 'done'].includes(event.type)), pending.stored, flow, false, pending.confirmationAt)
         else {
           const cancelled = [{ atMs: 0, event: { type: 'reply' as const, content: '已取消删除操作。' } }, { atMs: 1, event: { type: 'done' as const } }]
-          this.emit(ws, cancelled, pending.stored)
+          this.emit(ws, cancelled, pending.stored, flow)
         }
         return
       }
-      if (started || typeof frame.message !== 'string' || typeof frame.session_id !== 'string') { ws.close({ code: 1003, reason: 'invalid mock frame' }); return }
+      if (started || typeof frame.message !== 'string' || frame.session_id !== sessionId || Object.keys(frame).some((key) => !['message', 'session_id'].includes(key))) { ws.close({ code: 1003, reason: 'invalid mock frame' }); return }
       started = true
       if (this.scenario.name === 'disconnect') { setTimeout(() => ws.close({ code: 1011, reason: 'mock_disconnect' }), 10); return }
-      const stored = this.storeTurn(frame.session_id, frame.message); const scenario = this.scenario.name === 'readOnlyDisconnect' ? agentEventScenarios.readOnlyTimeout : agentEventScenarios[this.scenario.name]
+      const stored = this.storeTurn(owner, sessionId, frame.message); if (!stored) { void ws.close({ code: 1008, reason: 'mock agent session disappeared' }); return }
+      const scenario = this.scenario.name === 'readOnlyDisconnect' ? agentEventScenarios.readOnlyTimeout : agentEventScenarios[this.scenario.name]
       if (this.scenario.name === 'confirmationRequired') {
         const confirmationAt = scenario.events.find(({ event }) => event.type === 'confirmation_required')?.atMs ?? 0
-        waitingConfirmation = { stored, events: scenario.events, confirmationAt }
-        this.emit(ws, scenario.events.filter(({ event }) => ['step_started', 'step_completed', 'confirmation_required'].includes(event.type)), stored)
-      } else this.emit(ws, scenario.events, stored, this.scenario.name === 'readOnlyDisconnect', 0, frame.session_id)
+        const confirmationId = `mock-confirm-${uuid()}`
+        waitingConfirmation = { id: confirmationId, owner, sessionId, socketId: flow.id, turnId: String(stored.turn.id), stored, events: scenario.events, confirmationAt }
+        this.emit(ws, scenario.events.filter(({ event }) => ['step_started', 'step_completed', 'confirmation_required'].includes(event.type)), stored, flow, false, 0, confirmationId)
+      } else this.emit(ws, scenario.events, stored, flow, this.scenario.name === 'readOnlyDisconnect')
     })
   }
-  emit(ws: WebSocketRoute, events: typeof agentEventScenarios.success.events, stored?: { session: Session; turn: Record<string, unknown> }, disconnect = false, relativeTo = 0, sessionId = stored?.session.id ?? '') {
+  emit(ws: WebSocketRoute, events: typeof agentEventScenarios.success.events, stored: StoredTurn, flow: SocketFlow, disconnect = false, relativeTo = 0, confirmationId?: string) {
     let seq = 0; const scale = this.scenario.timeScale
-    for (const item of events) { if (disconnect && item.event.type === 'done') continue; setTimeout(() => { let event: Record<string, unknown> = { ...item.event }; if (event.type === 'step_failed' && event.retryable && event.step_id === 'list-1') { const retry = `mock-retry-${uuid()}`; this.retries.set(retry, { sessionId, stepId: 'list-1', terminal: false, stored }); event = { ...event, retry_token: retry } }
-      if (stored) this.apply(stored, event); ws.send(JSON.stringify(event)); if (event.type === 'done') for (const retry of this.retries.values()) retry.terminal = true; if (disconnect && event.type === 'step_failed') setTimeout(() => ws.close({ code: 1011, reason: 'mock_disconnect_before_done' }), 0)
+    for (const item of events) { if (disconnect && item.event.type === 'done') continue; setTimeout(() => { let event: Record<string, unknown> = { ...item.event }; if (event.type === 'confirmation_required' && confirmationId) event = { ...event, confirmation_id: confirmationId }; if (event.type === 'step_failed' && event.retryable && event.step_id === 'list-1') { const retry = `mock-retry-${uuid()}`; flow.retryTokens.add(retry); this.retries.set(retry, { owner: flow.owner, sessionId: flow.sessionId, stepId: 'list-1', turnId: String(stored.turn.id), flowId: flow.id, terminal: false, stored }); event = { ...event, retry_token: retry } }
+      this.apply(stored, event); ws.send(JSON.stringify(event)); if (event.type === 'done') for (const token of flow.retryTokens) { const retry = this.retries.get(token); if (retry?.flowId === flow.id) retry.terminal = true }; if (disconnect && event.type === 'step_failed') setTimeout(() => ws.close({ code: 1011, reason: 'mock_disconnect_before_done' }), 0)
     }, Math.max(0, Math.round((item.atMs - relativeTo) * scale)) + seq++) }
   }
-  apply(stored: { session: Session; turn: Record<string, unknown> }, event: Record<string, unknown>) {
+  apply(stored: StoredTurn, event: Record<string, unknown>) {
     const steps = stored.turn.steps as Record<string, unknown>[]; const messages = stored.turn.messages as Record<string, unknown>[]; const find = () => steps.find((step) => step.event_id === event.event_id)
     if (event.type === 'step_started') { const existing = find(); if (existing) { Object.assign(existing, { status: 'running', error_code: null, error_message: null, retryable: false, completed_at: null }); stored.turn.status = 'running' } else steps.push({ id: uuid(), event_id: event.event_id, ordinal: steps.length + 1, label: event.label, tool: event.tool ?? null, status: 'running', args: event.args ?? {}, result: null, result_preview: null, result_truncated: false, duration_ms: null, error_code: null, error_message: null, retryable: false, confirmation_id: null, confirmation_message: null, confirmation_approved: null, started_at: iso(), completed_at: null }) }
     if (event.type === 'step_completed' || event.type === 'action_completed') Object.assign(find() ?? {}, { status: 'completed', duration_ms: event.duration_ms, result: event.result ?? null, result_preview: event.result ? JSON.stringify(event.result) : null, completed_at: iso() })

@@ -16,6 +16,15 @@ async function sendFromPanel(page: import('@playwright/test').Page, message: str
   await page.getByRole('button', { name: '发送消息' }).click()
 }
 
+async function ownedSessionId(page: import('@playwright/test').Page) {
+  return page.evaluate(async () => {
+    const payload = await fetch('/api/agent/sessions').then((response) => response.json()) as { data: { items: Array<{ id: string }> } }
+    const id = payload.data.items[0]?.id
+    if (!id) throw new Error('expected an owned Agent session')
+    return id
+  })
+}
+
 test('renders a successful multi-step run in the collapsible panel', async ({ page, useAgentScenario }) => {
   await useAgentScenario('success')
   await page.goto('/tasks')
@@ -82,18 +91,19 @@ test('forged retry tool and args are rejected without creating a Todo', async ({
   await useAgentScenario('readOnlyTimeout')
   await page.goto('/login')
   await page.getByRole('button', { name: '登录' }).waitFor()
-  const result = await page.evaluate(() => new Promise<{ errorCode: string; total: number }>((resolve, reject) => {
-    const first = new WebSocket('/api/agent/stream')
+  const sessionId = await ownedSessionId(page)
+  const result = await page.evaluate((ownedSession) => new Promise<{ errorCode: string; total: number }>((resolve, reject) => {
+    const first = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
     first.onerror = () => reject(new Error('initial mock socket failed'))
-    first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: 'adversarial' }))
+    first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: ownedSession }))
     first.onmessage = (message) => {
       const event = JSON.parse(String(message.data)) as { type: string; step_id?: string; retry_token?: string }
       if (event.type !== 'step_failed' || !event.retry_token || !event.step_id) return
       first.close()
-      const retry = new WebSocket('/api/agent/stream')
+      const retry = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
       retry.onerror = () => reject(new Error('retry mock socket failed'))
       retry.onopen = () => retry.send(JSON.stringify({
-        type: 'retry_step', session_id: 'adversarial', step_id: event.step_id,
+        type: 'retry_step', session_id: ownedSession, step_id: event.step_id,
         retry_token: event.retry_token, tool: 'create_todo', args: { title: '攻击写入' },
       }))
       retry.onmessage = async (retryMessage) => {
@@ -103,7 +113,7 @@ test('forged retry tool and args are rejected without creating a Todo', async ({
         resolve({ errorCode: retryEvent.error_code ?? '', total: todos.data.total })
       }
     }
-  }))
+  }), sessionId)
 
   expect(result).toEqual({ errorCode: 'INVALID_RETRY_STEP', total: 0 })
 })
@@ -111,7 +121,8 @@ test('forged retry tool and args are rejected without creating a Todo', async ({
 test('retry before done is rejected without consuming the token', async ({ page, useAgentScenario }) => {
   await useAgentScenario('readOnlyTimeout', { timeScale: 0.05 })
   await page.goto('/login')
-  const result = await page.evaluate(() => new Promise<string[]>((resolve, reject) => {
+  const sessionId = await ownedSessionId(page)
+  const result = await page.evaluate((ownedSession) => new Promise<string[]>((resolve, reject) => {
     const results: string[] = []
     let retryFrame: { type: string; session_id: string; step_id: string; retry_token: string } | undefined
     let earlyRejected = false
@@ -120,7 +131,7 @@ test('retry before done is rejected without consuming the token', async ({ page,
     const startTerminalRetry = () => {
       if (!retryFrame || !earlyRejected || !originalDone || terminalStarted) return
       terminalStarted = true
-      const terminal = new WebSocket('/api/agent/stream')
+      const terminal = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
       terminal.onerror = () => reject(new Error('terminal retry socket failed'))
       terminal.onopen = () => terminal.send(JSON.stringify(retryFrame))
       terminal.onmessage = (terminalMessage) => {
@@ -131,9 +142,9 @@ test('retry before done is rejected without consuming the token', async ({ page,
         }
       }
     }
-    const first = new WebSocket('/api/agent/stream')
+    const first = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
     first.onerror = () => reject(new Error('initial socket failed'))
-    first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: 'terminal-gate' }))
+    first.onopen = () => first.send(JSON.stringify({ message: 'query', session_id: ownedSession }))
     first.onmessage = (message) => {
       const event = JSON.parse(String(message.data)) as { type: string; step_id?: string; retry_token?: string }
       if (event.type === 'done') {
@@ -143,10 +154,10 @@ test('retry before done is rejected without consuming the token', async ({ page,
       }
       if (event.type !== 'step_failed' || !event.step_id || !event.retry_token || retryFrame) return
       retryFrame = {
-        type: 'retry_step', session_id: 'terminal-gate', step_id: event.step_id,
+        type: 'retry_step', session_id: ownedSession, step_id: event.step_id,
         retry_token: event.retry_token,
       }
-      const early = new WebSocket('/api/agent/stream')
+      const early = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
       early.onerror = () => reject(new Error('early retry socket failed'))
       early.onopen = () => early.send(JSON.stringify(retryFrame))
       early.onmessage = (earlyMessage) => {
@@ -157,7 +168,7 @@ test('retry before done is rejected without consuming the token', async ({ page,
         startTerminalRetry()
       }
     }
-  }))
+  }), sessionId)
 
   expect(result).toEqual(['INVALID_RETRY_STEP', 'action_completed'])
 })
