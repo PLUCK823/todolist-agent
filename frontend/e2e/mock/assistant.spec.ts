@@ -128,6 +128,7 @@ test('retry before done is rejected without consuming the token', async ({ page,
     let earlyRejected = false
     let originalDone = false
     let terminalStarted = false
+    let earlyReady = false
     const startTerminalRetry = () => {
       if (!retryFrame || !earlyRejected || !originalDone || terminalStarted) return
       terminalStarted = true
@@ -141,6 +142,22 @@ test('retry before done is rejected without consuming the token', async ({ page,
           resolve(results)
         }
       }
+    }
+    const sendEarlyRetry = () => {
+      if (!retryFrame || !earlyReady) return
+      early.send(JSON.stringify(retryFrame))
+    }
+    // Establish the second socket before the failure event so that browser
+    // connection scheduling cannot move the premature retry past `done`.
+    const early = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
+    early.onerror = () => reject(new Error('early retry socket failed'))
+    early.onopen = () => { earlyReady = true; sendEarlyRetry() }
+    early.onmessage = (earlyMessage) => {
+      const earlyEvent = JSON.parse(String(earlyMessage.data)) as { type: string; error_code?: string }
+      if (earlyEvent.type !== 'step_failed') return
+      results.push(earlyEvent.error_code ?? '')
+      earlyRejected = true
+      startTerminalRetry()
     }
     const first = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
     first.onerror = () => reject(new Error('initial socket failed'))
@@ -157,16 +174,7 @@ test('retry before done is rejected without consuming the token', async ({ page,
         type: 'retry_step', session_id: ownedSession, step_id: event.step_id,
         retry_token: event.retry_token,
       }
-      const early = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
-      early.onerror = () => reject(new Error('early retry socket failed'))
-      early.onopen = () => early.send(JSON.stringify(retryFrame))
-      early.onmessage = (earlyMessage) => {
-        const earlyEvent = JSON.parse(String(earlyMessage.data)) as { type: string; error_code?: string }
-        if (earlyEvent.type !== 'step_failed') return
-        results.push(earlyEvent.error_code ?? '')
-        earlyRejected = true
-        startTerminalRetry()
-      }
+      sendEarlyRetry()
     }
   }), sessionId)
 
