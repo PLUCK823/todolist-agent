@@ -26,12 +26,14 @@ type TodoServiceInterface interface {
 
 // TodoHandler handles HTTP requests for todos
 type TodoHandler struct {
-	svc TodoServiceInterface
+	svc      TodoServiceInterface
+	batchSvc TodoBatchServiceInterface
 }
 
 // NewTodoHandler creates a new TodoHandler
 func NewTodoHandler(svc TodoServiceInterface) *TodoHandler {
-	return &TodoHandler{svc: svc}
+	batchSvc, _ := svc.(TodoBatchServiceInterface)
+	return &TodoHandler{svc: svc, batchSvc: batchSvc}
 }
 
 // response helpers
@@ -270,8 +272,13 @@ func RegisterRoutes(r *gin.Engine, svc TodoServiceInterface) {
 	todoGroup := r.Group("/api/todos")
 	{
 		todoGroup.GET("", h.ListTodos)
-		todoGroup.GET("/:id", h.GetTodo)
 		todoGroup.POST("", h.CreateTodo)
+		todoGroup.POST("/batch", h.BatchCreateTodos)
+		todoGroup.POST("/batch/get", h.BatchGetTodos)
+		todoGroup.PUT("/batch", h.BatchUpdateTodos)
+		todoGroup.PATCH("/batch/status", h.BatchSetTodoStatus)
+		todoGroup.DELETE("/batch", h.BatchDeleteTodos)
+		todoGroup.GET("/:id", h.GetTodo)
 		todoGroup.PUT("/:id", h.UpdateTodo)
 		todoGroup.DELETE("/:id", h.DeleteTodo)
 		todoGroup.PATCH("/:id/complete", h.CompleteTodo)
