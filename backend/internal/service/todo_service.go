@@ -64,12 +64,14 @@ type TodoRepository interface {
 
 // TodoService handles business logic for todos
 type TodoService struct {
-	repo TodoRepository
+	repo      TodoRepository
+	batchRepo TodoBatchRepository
 }
 
 // NewTodoService creates a new TodoService
 func NewTodoService(repo TodoRepository) *TodoService {
-	return &TodoService{repo: repo}
+	batchRepo, _ := repo.(TodoBatchRepository)
+	return &TodoService{repo: repo, batchRepo: batchRepo}
 }
 
 // Create validates and creates a new todo
