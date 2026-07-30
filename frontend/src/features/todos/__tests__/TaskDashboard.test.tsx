@@ -326,6 +326,63 @@ describe('TaskDashboard', () => {
     expect(await screen.findByText('健身 30 分钟')).toBeVisible()
     expect(screen.getByRole('alert')).toHaveTextContent('删除失败，请稍后重试')
   })
+
+  it('selects tasks and completes them with one batch request', async () => {
+    let requests = 0
+    server.use(http.patch('/api/todos/batch/status', async ({ request }) => {
+      requests += 1
+      const body = await request.json() as { ids: number[]; completed: boolean }
+      expect(body).toEqual({ ids: [1], completed: true })
+      return HttpResponse.json({ code: 0, message: 'ok', data: { items: [{ ...fixture, id: 1, title: '完成项目文档', completed: true }], count: 1 } })
+    }))
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByText('完成项目文档')
+    await user.click(screen.getByRole('button', { name: '选择任务' }))
+    await user.click(screen.getByRole('checkbox', { name: '选择任务：完成项目文档' }))
+    expect(screen.getByRole('toolbar', { name: '批量操作' })).toHaveTextContent('已选择 1 项')
+    await user.click(screen.getByRole('button', { name: '批量完成' }))
+    await waitFor(() => expect(requests).toBe(1))
+    expect(screen.queryByRole('toolbar', { name: '批量操作' })).not.toBeInTheDocument()
+  })
+
+  it('selects the current page, clears selection when filters change, and enforces one delete confirmation', async () => {
+    let deletes = 0
+    server.use(http.delete('/api/todos/batch', async ({ request }) => {
+      deletes += 1
+      const { ids } = await request.json() as { ids: number[] }
+      return HttpResponse.json({ code: 0, message: 'ok', data: { items: ids.map((id) => ({ ...fixture, id })), count: ids.length } })
+    }))
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByText('完成项目文档')
+    await user.click(screen.getByRole('button', { name: '选择任务' }))
+    await user.click(screen.getByRole('checkbox', { name: '选择当前页' }))
+    expect(screen.getByRole('toolbar', { name: '批量操作' })).toHaveTextContent('已选择 4 项')
+    await user.click(screen.getByRole('button', { name: '批量删除' }))
+    expect(screen.getByRole('dialog', { name: '批量删除任务' })).toHaveTextContent('4')
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(deletes).toBe(1))
+
+    await screen.findByText('完成项目文档')
+    await user.click(screen.getByRole('button', { name: '选择任务' }))
+    await user.click(screen.getByRole('checkbox', { name: '选择任务：完成项目文档' }))
+    await user.click(screen.getByRole('button', { name: '优先级' }))
+    await user.click(within(screen.getByRole('dialog', { name: '优先级筛选' })).getByRole('button', { name: '高优先级' }))
+    await waitFor(() => expect(screen.queryByRole('toolbar', { name: '批量操作' })).not.toBeInTheDocument())
+  })
+
+  it('preserves batch selection when the write fails', async () => {
+    server.use(http.patch('/api/todos/batch/status', () => HttpResponse.json({ code: 50001, message: '批量失败', data: null }, { status: 500 })))
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByText('完成项目文档')
+    await user.click(screen.getByRole('button', { name: '选择任务' }))
+    await user.click(screen.getByRole('checkbox', { name: '选择任务：完成项目文档' }))
+    await user.click(screen.getByRole('button', { name: '批量完成' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('批量失败')
+    expect(screen.getByRole('toolbar', { name: '批量操作' })).toHaveTextContent('已选择 1 项')
+  })
 })
 
 describe('TaskCard', () => {

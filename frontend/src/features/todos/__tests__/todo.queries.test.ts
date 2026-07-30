@@ -32,7 +32,7 @@ describe('batch todo API', () => {
 
   it('retains validated structured item error data', async () => {
     server.use(http.put('/api/todos/batch', () => HttpResponse.json({ code: 40002, message: 'bad title', data: { index: 1, id: 7, field: 'title' } }, { status: 400 })))
-    await expect(batchUpdateTodos([{ id: 7, title: '' }])).rejects.toMatchObject<ApiError>({ code: 40002, data: { index: 1, id: 7, field: 'title' } })
+    await expect(batchUpdateTodos([{ id: 7, title: '' }])).rejects.toMatchObject({ code: 40002, data: { index: 1, id: 7, field: 'title' } } satisfies Partial<ApiError>)
   })
 
   it('invalidates lists and affected details only after successful batch delete', async () => {

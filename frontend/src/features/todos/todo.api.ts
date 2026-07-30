@@ -40,7 +40,7 @@ function isErrorPayload(value: unknown): value is ApiErrorPayload {
 function isBatchErrorData(value: unknown): value is BatchErrorData {
   if (!value || typeof value !== 'object') return false
   const data = value as Record<string, unknown>
-  return Number.isInteger(data.index) && data.index! >= 0 &&
+  return typeof data.index === 'number' && Number.isInteger(data.index) && data.index >= 0 &&
     (data.id === undefined || (Number.isInteger(data.id) && (data.id as number) >= 0)) &&
     typeof data.field === 'string'
 }

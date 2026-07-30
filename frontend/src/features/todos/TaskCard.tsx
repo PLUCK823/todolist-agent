@@ -7,6 +7,9 @@ interface TaskCardProps {
   onToggle(todo: Todo): void
   onDelete(todo: Todo): void
   togglePending?: boolean
+  selectionMode?: boolean
+  selected?: boolean
+  onSelect?(todo: Todo): void
 }
 
 const priority = {
@@ -22,14 +25,14 @@ function formatDueDate(value: string | null) {
   }).format(new Date(value))
 }
 
-export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = false }: TaskCardProps) {
+export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = false, selectionMode = false, selected = false, onSelect }: TaskCardProps) {
   const badge = priority[todo.priority]
 
   return (
     <article
       className="group flex min-h-[58px] items-center gap-3 rounded-[var(--radius-panel)] border border-[var(--border)] bg-[var(--surface)] px-3.5 py-3 text-left shadow-[0_1px_0_rgb(32_37_56_/_2%)] transition-[border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--border-strong)] hover:shadow-[0_10px_26px_rgb(32_37_56_/_8%)]"
     >
-      <button
+      {selectionMode ? <input type="checkbox" aria-label={`选择任务：${todo.title}`} checked={selected} onChange={() => onSelect?.(todo)} className="h-5 w-5 accent-[var(--primary)]" /> : <button
         type="button"
         aria-label={`${todo.completed ? '取消完成' : '完成任务'}：${todo.title}`}
         aria-pressed={todo.completed}
@@ -39,7 +42,7 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = fal
         className={`grid h-8 w-8 flex-none place-items-center rounded-full border-[3px] text-xs font-bold transition-colors ${todo.completed ? 'border-[var(--success-action)] bg-[var(--success-action)] text-white' : 'border-[var(--control-border-strong)] bg-[var(--control-bg)] text-transparent hover:border-[var(--primary)]'}`}
       >
         ✓
-      </button>
+      </button>}
       <button
         type="button"
         aria-label={`查看任务：${todo.title}`}
@@ -54,13 +57,13 @@ export function TaskCard({ todo, onOpen, onToggle, onDelete, togglePending = fal
           {formatDueDate(todo.due_date)}{todo.description ? ` · ${todo.description}` : ''}
         </p>
       </button>
-      <IconButton
+      {!selectionMode ? <IconButton
         label={`删除任务：${todo.title}`}
         size="sm"
         onClick={() => onDelete(todo)}
         className="text-[var(--text-secondary)]"
         icon={<svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M4 6h12M8 3h4l1 3H7l1-3Zm-2 3 1 11h6l1-11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>}
-      />
+      /> : null}
     </article>
   )
 }

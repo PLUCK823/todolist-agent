@@ -13,12 +13,17 @@ import {
   useTodoSummary,
   useUncompleteTodo,
   useUpdateTodo,
+  useBatchDeleteTodos,
+  useBatchSetTodoStatus,
+  useBatchUpdateTodos,
 } from './todo.queries'
 import { TaskCard } from './TaskCard'
 import { TaskDetailDialog } from './TaskDetailDialog'
 import { TaskDialog } from './TaskDialog'
 import { TaskFilters } from './TaskFilters'
-import type { CreateTodoDTO, Todo, TodoFilters, TodoFormDTO } from './todo.types'
+import { BatchActionBar } from './BatchActionBar'
+import { BatchEditDialog } from './BatchEditDialog'
+import type { CreateTodoDTO, Todo, TodoFilters, TodoFormDTO, UpdateTodoDTO } from './todo.types'
 
 const PAGE_SIZE = 10
 
@@ -46,13 +51,16 @@ function SummaryCard({ value, label }: { value: number; label: string }) {
   )
 }
 
-function TaskGroup({ title, todos, onOpen, onToggle, onDelete, pendingToggleIds }: {
+function TaskGroup({ title, todos, onOpen, onToggle, onDelete, pendingToggleIds, selectionMode, selectedIds, onSelect }: {
   title: string
   todos: Todo[]
   onOpen(todo: Todo): void
   onToggle(todo: Todo): void
   onDelete(todo: Todo): void
   pendingToggleIds?: ReadonlySet<number>
+  selectionMode: boolean
+  selectedIds: ReadonlySet<number>
+  onSelect(todo: Todo): void
 }) {
   if (!todos.length) return null
   return (
@@ -62,7 +70,7 @@ function TaskGroup({ title, todos, onOpen, onToggle, onDelete, pendingToggleIds 
         <span className="text-[11px] text-[var(--text-secondary)]">{todos.length} 项</span>
       </header>
       <div className="grid gap-2">
-        {todos.map((todo) => <TaskCard key={todo.id} todo={todo} togglePending={pendingToggleIds?.has(todo.id)} onOpen={onOpen} onToggle={onToggle} onDelete={onDelete} />)}
+        {todos.map((todo) => <TaskCard key={todo.id} todo={todo} togglePending={pendingToggleIds?.has(todo.id)} selectionMode={selectionMode} selected={selectedIds.has(todo.id)} onSelect={onSelect} onOpen={onOpen} onToggle={onToggle} onDelete={onDelete} />)}
       </div>
     </section>
   )
@@ -76,6 +84,10 @@ export function TaskDashboard() {
   const [editingTodo, setEditingTodo] = useState<Todo | null>(null)
   const [deletingTodo, setDeletingTodo] = useState<Todo | null>(null)
   const [pendingToggleIds, setPendingToggleIds] = useState<ReadonlySet<number>>(new Set())
+  const [selectionMode, setSelectionMode] = useState(false)
+  const [selected, setSelected] = useState<Map<number, Todo>>(new Map())
+  const [batchEditOpen, setBatchEditOpen] = useState(false)
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false)
   const toggleGuardsRef = useRef(new Set<number>())
   const deleteGuardRef = useRef(false)
   const debouncedKeyword = useDebounce(keyword, 300)
@@ -92,6 +104,9 @@ export function TaskDashboard() {
   const deleteMutation = useDeleteTodo()
   const completeMutation = useCompleteTodo()
   const uncompleteMutation = useUncompleteTodo()
+  const batchStatusMutation = useBatchSetTodoStatus()
+  const batchUpdateMutation = useBatchUpdateTodos()
+  const batchDeleteMutation = useBatchDeleteTodos()
   const todos = query.data?.items ?? []
   const total = query.data?.total ?? 0
   const completed = todos.filter((todo) => todo.completed)
@@ -100,6 +115,62 @@ export function TaskDashboard() {
   const later = active.filter((todo) => !isSoon(todo))
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const hasFilters = Boolean(keyword || filters.completed !== undefined || filters.priority)
+  const selectedIds = useMemo(() => new Set(selected.keys()), [selected])
+  const allCurrentSelected = todos.length > 0 && todos.every((todo) => selected.has(todo.id))
+  const batchPending = batchStatusMutation.isPending || batchUpdateMutation.isPending || batchDeleteMutation.isPending
+  function clearSelection() {
+    setSelected(new Map())
+    setSelectionMode(false)
+  }
+
+  function toggleSelection(todo: Todo) {
+    setSelected((current) => {
+      const next = new Map(current)
+      if (next.has(todo.id)) next.delete(todo.id)
+      else if (next.size < 100) next.set(todo.id, todo)
+      else toast.addToast('error', '一次最多选择 100 项任务')
+      return next
+    })
+  }
+
+  function toggleCurrentPage() {
+    setSelected((current) => {
+      const next = new Map(current)
+      if (allCurrentSelected) todos.forEach((todo) => next.delete(todo.id))
+      else {
+        const missing = todos.filter((todo) => !next.has(todo.id))
+        if (next.size + missing.length > 100) { toast.addToast('error', '一次最多选择 100 项任务'); return current }
+        missing.forEach((todo) => next.set(todo.id, todo))
+      }
+      return next
+    })
+  }
+
+  async function batchStatus(completed: boolean) {
+    try {
+      await batchStatusMutation.mutateAsync({ ids: [...selected.keys()], completed })
+      toast.addToast('success', completed ? '所选任务已完成' : '所选任务已恢复')
+      clearSelection()
+    } catch (error) { toast.addToast('error', getApiErrorMessage(error)) }
+  }
+
+  async function batchUpdate(patch: UpdateTodoDTO) {
+    try {
+      await batchUpdateMutation.mutateAsync([...selected.keys()].map((id) => ({ id, ...patch })))
+      setBatchEditOpen(false)
+      toast.addToast('success', '所选任务已更新')
+      clearSelection()
+    } catch (error) { toast.addToast('error', getApiErrorMessage(error)); throw error }
+  }
+
+  async function batchDelete() {
+    try {
+      await batchDeleteMutation.mutateAsync([...selected.keys()])
+      setBatchDeleteOpen(false)
+      toast.addToast('success', '所选任务已删除')
+      clearSelection()
+    } catch (error) { toast.addToast('error', getApiErrorMessage(error)) }
+  }
 
   async function create(data: TodoFormDTO) {
     const dto: CreateTodoDTO = {
@@ -163,6 +234,7 @@ export function TaskDashboard() {
           <p className="mb-0 mt-1 text-sm text-[var(--text-secondary)]">还有 {summary.active} 项任务等待完成</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => { if (selectionMode) clearSelection(); else setSelectionMode(true) }}>{selectionMode ? '退出选择' : '选择任务'}</Button>
           <Button variant="secondary" onClick={() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true }))} leadingIcon={<span>✦</span>}>快速询问 <kbd>⌘K</kbd></Button>
           <Button onClick={() => setCreateOpen(true)} leadingIcon={<span className="text-lg leading-none">＋</span>}>新建任务</Button>
           <ShellHeaderActionsSlot />
@@ -176,10 +248,11 @@ export function TaskDashboard() {
       </section>
 
       <div className="mt-4">
-        <TaskFilters filters={filters} onChange={setFilters} keyword={keyword} onKeywordChange={(value) => { setKeyword(value); setFilters((current) => ({ ...current, page: 1 })) }} />
+        <TaskFilters filters={filters} onChange={(next) => { clearSelection(); setFilters(next) }} keyword={keyword} onKeywordChange={(value) => { clearSelection(); setKeyword(value); setFilters((current) => ({ ...current, page: 1 })) }} />
       </div>
 
       <div className="mt-5 min-h-64">
+        {selectionMode && todos.length ? <label className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--text-secondary)]"><input type="checkbox" aria-label="选择当前页" checked={allCurrentSelected} onChange={toggleCurrentPage} className="h-4 w-4 accent-[var(--primary)]" />选择当前页（已选 {selected.size}/100）</label> : null}
         {query.isLoading ? (
           <div role="status" className="grid gap-2" aria-label="正在加载任务">
             {[1, 2, 3].map((item) => <div key={item} className="h-[58px] animate-pulse rounded-[var(--radius-panel)] border border-[var(--border)] bg-[color:var(--surface)]/70" />)}
@@ -198,9 +271,9 @@ export function TaskDashboard() {
           </section>
         ) : (
           <div className="grid gap-5">
-            <TaskGroup title="即将到期" todos={soon} pendingToggleIds={pendingToggleIds} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
-            <TaskGroup title="稍后处理" todos={later} pendingToggleIds={pendingToggleIds} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
-            <TaskGroup title="已完成" todos={completed} pendingToggleIds={pendingToggleIds} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
+            <TaskGroup title="即将到期" todos={soon} pendingToggleIds={pendingToggleIds} selectionMode={selectionMode} selectedIds={selectedIds} onSelect={toggleSelection} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
+            <TaskGroup title="稍后处理" todos={later} pendingToggleIds={pendingToggleIds} selectionMode={selectionMode} selectedIds={selectedIds} onSelect={toggleSelection} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
+            <TaskGroup title="已完成" todos={completed} pendingToggleIds={pendingToggleIds} selectionMode={selectionMode} selectedIds={selectedIds} onSelect={toggleSelection} onOpen={setDetailTodo} onToggle={toggle} onDelete={setDeletingTodo} />
           </div>
         )}
       </div>
@@ -216,6 +289,9 @@ export function TaskDashboard() {
       {createOpen ? <TaskDialog key="create" open mode="create" onOpenChange={setCreateOpen} onSubmit={create} /> : null}
       {detailTodo ? <TaskDetailDialog open todo={detailTodo} onOpenChange={(next) => { if (!next) setDetailTodo(null) }} onEdit={() => { setEditingTodo(detailTodo); setDetailTodo(null) }} /> : null}
       {editingTodo ? <TaskDialog key={`edit-${editingTodo.id}`} open mode="edit" todo={editingTodo} onOpenChange={(next) => { if (!next) setEditingTodo(null) }} onSubmit={update} /> : null}
+      <BatchActionBar count={selected.size} pending={batchPending} onComplete={() => void batchStatus(true)} onRestore={() => void batchStatus(false)} onEdit={() => setBatchEditOpen(true)} onDelete={() => setBatchDeleteOpen(true)} onClear={clearSelection} />
+      {batchEditOpen ? <BatchEditDialog open count={selected.size} pending={batchUpdateMutation.isPending} onOpenChange={setBatchEditOpen} onSubmit={batchUpdate} /> : null}
+      <ConfirmDialog isOpen={batchDeleteOpen} title="批量删除任务" message={<>确定删除已选择的 {selected.size} 项任务吗？此操作无法撤销。</>} confirmLabel={batchDeleteMutation.isPending ? '删除中…' : '确认删除'} confirmDisabled={batchDeleteMutation.isPending} pending={batchDeleteMutation.isPending} onCancel={() => { if (!batchDeleteMutation.isPending) setBatchDeleteOpen(false) }} onConfirm={() => { if (!batchDeleteMutation.isPending) void batchDelete() }} variant="danger" />
       <ConfirmDialog
         isOpen={deletingTodo !== null}
         title="删除任务"
