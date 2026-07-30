@@ -53,6 +53,6 @@ pnpm e2e:real
 pnpm verify:experience
 ```
 
-当前基线：569 项单元/组件测试；Mock E2E 三浏览器共发现 251 项；真实栈 Chromium 4 项。Mock E2E 在 Playwright browser context 内拦截 HTTP 和 WebSocket，不依赖 MSW Service Worker，context 销毁后没有站点残留。真实栈测试不会启用 Mock transport。
+当前基线：579 项单元/组件测试；Mock E2E 三浏览器共发现 254 项；真实栈 Chromium 5 项。Mock E2E 在 Playwright browser context 内拦截 HTTP 和 WebSocket，不依赖 MSW Service Worker，context 销毁后没有站点残留。真实栈测试不会启用 Mock transport。
 
 视觉基线只在 Chromium 比较；Firefox/WebKit 仍运行全部功能、键盘和无障碍断言。更新截图前阅读 [视觉回归基准](../docs/qa/visual-review.md)，不得为消除失败而批量刷新。

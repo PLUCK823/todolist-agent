@@ -150,13 +150,13 @@ test('creates, selects, renames, restores and deletes an owned session', async (
   await page.reload()
   await expect(page.getByRole('log')).toContainText('持久化会话消息')
 
-  await page.getByRole('button', { name: /会话操作/ }).click()
+  await page.getByRole('button', { name: '打开“持久化会话消息”会话操作' }).click()
   await page.getByRole('button', { name: '重命名会话' }).click()
   await page.getByLabel('会话名称').fill('已重命名会话')
   await page.getByRole('button', { name: '保存名称' }).click()
   await expect(page.getByRole('button', { name: '打开会话：已重命名会话' })).toBeVisible()
 
-  await page.getByRole('button', { name: /会话操作/ }).click()
+  await page.getByRole('button', { name: '打开“已重命名会话”会话操作' }).click()
   await page.getByRole('button', { name: '删除会话' }).click()
   await page.getByRole('button', { name: '确认删除会话' }).click()
   await expect(page.getByRole('button', { name: '打开会话：已重命名会话' })).toHaveCount(0)

@@ -9,8 +9,9 @@
 | 1–4 数据库与 Go 认证 | 完成 | 用户/auth session schema，Argon2id，Cookie login/refresh/logout/me，轮换/撤销与 Origin 防护 |
 | 5–7 Agent 持久化 | 完成 | owner 隔离 session CRUD，PostgreSQL turn/message/step，WS 鉴权，重启恢复和异常语义 |
 | 8–12 前端工作区 | 完成 | Cookie auth，多会话，安全 GFM/表格，逐轮折叠详情，紧凑底部 composer |
-| 13 全量 E2E | 完成 | Playwright context Mock transport 三浏览器 251 项；真实 Compose Chromium 4 项；独立规格与质量复审通过 |
+| 13 全量 E2E | 完成 | Playwright context Mock transport 三浏览器 254 项；真实 Compose Chromium 5 项；独立规格与质量复审通过 |
 | 14 文档、审计和发布 | 完成 | 全量门禁、保留卷迁移、镜像重建、五服务验收、默认分支合并与推送均完成 |
+| 15 原子批量操作 | 完成 | Go 五个批量端点与事务回滚、Agent 五个批量工具和一次删除确认、任务页跨页选择与批量操作 |
 
 ## 当前系统边界
 
@@ -18,15 +19,15 @@
 - Agent 会话按登录用户隔离，其他用户无法读取、重命名、删除或连接该会话。
 - PostgreSQL 保存 session、turn、message 和 step；内存只协调活跃执行、确认/重试和有限恢复。
 - 成功终态为 `reply → DB complete → done`；中断、结果不确定和超大结果截断都有持久化状态。
-- Todo API 保持当前 MVP 合约；生产 LLM 质量、SLA、成本和高并发评估不在本发布候选的自动化证明范围内。
+- Todo API 同时提供单项与 1–100 项原子批量合约；生产 LLM 质量、SLA、成本和高并发评估不在本发布候选的自动化证明范围内。
 
 ## 测试证据
 
 | 层 | 2026-07-30 候选证据 | 最终要求 |
 |---|---|---|
-| 前端单元/组件 | 45 文件、569 项；coverage 阈值、lint、build 全绿 | 完成 |
-| Mock E2E | 251/251，Chromium 89、Firefox 81、WebKit 81 | 完成 |
-| 真实 E2E | 4/4 real-chromium | Nginx/Go/Agent/PostgreSQL、重启恢复、owner 隔离全绿 |
+| 前端单元/组件 | 46 文件、579 项；coverage 阈值、lint、build 全绿 | 完成 |
+| Mock E2E | 254/254，Chromium 90、Firefox 82、WebKit 82 | 完成 |
+| 真实 E2E | 5/5 real-chromium | Nginx/Go/Agent/PostgreSQL、批量事务、重启恢复、owner 隔离全绿 |
 | Go | `go test ./... -race` 全绿；合并后 `go test ./...` 再验证 | 完成 |
 | Agent | 真实 PostgreSQL 下 270/270，零跳过，coverage 91% | 完成 |
 | 部署 | postgres、redis、backend、agent、frontend 恰好五个服务 running/healthy | 完成 |

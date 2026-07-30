@@ -8,6 +8,7 @@
 |---|---|---|---|---|
 | Cookie 注册/登录/刷新/退出、受保护路由 | auth context/API/page tests | `auth.spec.ts` | `assistant-history.spec.ts` 注册两用户 | C/F/W + RC |
 | Todo CRUD、完成/恢复、搜索/筛选/排序 | Todo query/dashboard/dialog tests | `tasks.spec.ts`、`accessibility.spec.ts` | `todo-lifecycle.spec.ts` | C/F/W + RC |
+| 原子批量 CRUD、跨页多选与一次请求批量操作 | batch service/repository/handler/hooks/dashboard tests | `todo-batch.spec.ts` | `todo-batch.spec.ts` | C/F/W + RC |
 | 近期安排、导航、设置、资料与头像 | page/shell/preferences/profile tests | upcoming/navigation/profile/accessibility specs | — | C/F/W |
 | 快捷询问、侧栏和助手独立页 | agent panel/session/page tests | navigation/assistant specs | — | C/F/W |
 | 多会话创建、切换、重命名、删除和刷新恢复 | history API/reducer/session-list tests | `assistant-history.spec.ts` | `assistant-history.spec.ts` | C/F/W + RC |
@@ -24,12 +25,12 @@
 
 | Playwright 项目 | 数据层 | 范围 | 当前候选证据 |
 |---|---|---|---:|
-| `chromium` | context transport | 全部 Mock 功能、键盘、axe、Chromium 视觉 | Mock 三项目当前合计 251 |
+| `chromium` | context transport | 全部 Mock 功能、键盘、axe、Chromium 视觉 | Mock 三项目当前合计 254 |
 | `firefox` | context transport | 全部 Mock 功能、键盘、axe | 同上 |
 | `webkit` | context transport | 全部 Mock 功能、键盘、axe | 同上 |
-| `real-chromium` | Nginx + Go + Agent + PostgreSQL | 健康、Todo、认证持久化助手历史 | 4 |
+| `real-chromium` | Nginx + Go + Agent + PostgreSQL | 健康、单项/批量 Todo、认证持久化助手历史 | 5 |
 
-前端单元/组件基线为 569 项。视觉 PNG 只在 Chromium 比较，但不得因此跳过 Firefox/WebKit 的功能或无障碍断言。
+前端单元/组件基线为 579 项。视觉 PNG 只在 Chromium 比较，但不得因此跳过 Firefox/WebKit 的功能或无障碍断言。
 
 ## 真实历史故事必须证明
 

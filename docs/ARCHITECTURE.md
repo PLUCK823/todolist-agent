@@ -89,8 +89,8 @@ PostgreSQL 是账号、会话和 Agent 历史的事实来源。每轮保存：
 
 ## 测试边界
 
-- 569 项前端单元/组件测试覆盖认证、session reducer、GFM、布局和交互。
-- 当前发现 251 项 Mock E2E 在 Chromium、Firefox、WebKit 上运行；Playwright context transport 接管 HTTP/WebSocket，避免 Service Worker 首文档竞态和跨 context 状态泄漏。
+- 579 项前端单元/组件测试覆盖认证、session reducer、GFM、批量任务、布局和交互。
+- 当前发现 254 项 Mock E2E 在 Chromium、Firefox、WebKit 上运行；Playwright context transport 接管 HTTP/WebSocket，避免 Service Worker 首文档竞态和跨 context 状态泄漏。
 - 4 项真实 Chromium E2E 经过 Nginx、Go、Python Agent 和 PostgreSQL，验证注册、owner 隔离、数据库行、重启恢复、重命名/删除、Markdown 表格与执行详情。
 - 真实 E2E 使用仅在 `APP_ENV=e2e` 且显式启用时可用的确定性 fake LLM；它验证系统链路，不代表模型质量。
 

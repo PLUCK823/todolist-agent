@@ -4,13 +4,14 @@
 
 ## 当前能力
 
-- 待办 CRUD、搜索、筛选、排序、分页、完成/恢复和近期安排。
+- 待办 CRUD、搜索、筛选、排序、分页、完成/恢复和近期安排；传统任务页支持最多 100 项跨页选择与原子批量完成、恢复、编辑和删除。
 - Go 服务端注册、登录、刷新、退出和个人资料接口；访问与刷新凭据均使用 `HttpOnly` Cookie。
 - 刷新凭据单次轮换、退出撤销、精确 Origin allowlist 和跨用户资源隐藏。
 - Agent 会话创建、列表、读取、重命名、删除；会话归属由服务端从 Cookie 身份推导。
 - Agent turn、用户/助手消息、执行步骤和稳定 `event_id` 持久化到 PostgreSQL，重启 Agent 后仍可恢复。
 - 安全 GFM Markdown/表格、每轮可折叠执行详情、底部紧凑输入区及桌面/移动布局。
 - OpenAI、Anthropic、Gemini、DeepSeek 和 OpenAI-compatible 模型适配器。
+- Agent 对两个以上目标使用一次批量 API；批量删除只请求一次确认，后端任一项目失败则整批回滚。
 
 ## 快速开始
 
@@ -59,7 +60,7 @@ cd .. && corepack pnpm --dir frontend e2e:mock
 ./scripts/e2e-real.sh
 ```
 
-Mock E2E 使用 Playwright context transport 隔离 HTTP/WebSocket，不注册 Service Worker；当前 Chromium、Firefox、WebKit 共发现 251 项。真实 E2E 通过 Nginx → Go/Python → PostgreSQL 的 Compose 栈运行 4 项 Chromium 故事。前端当前单元/组件测试为 569 项。最终发布证据以 [发布检查清单](docs/qa/release-checklist.md) 的当次结果为准。
+Mock E2E 使用 Playwright context transport 隔离 HTTP/WebSocket，不注册 Service Worker；当前 Chromium、Firefox、WebKit 共发现 254 项。真实 E2E 通过 Nginx → Go/Python → PostgreSQL 的 Compose 栈运行 5 项 Chromium 故事。前端当前单元/组件测试为 579 项。最终发布证据以 [发布检查清单](docs/qa/release-checklist.md) 的当次结果为准。
 
 ## 原型和实现依据
 

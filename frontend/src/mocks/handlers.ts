@@ -1,4 +1,4 @@
-import type { Todo, CreateTodoDTO, UpdateTodoDTO, ApiResponse, PaginatedData } from '../features/todos/todo.types'
+import type { Todo, CreateTodoDTO, UpdateTodoDTO, ApiResponse, PaginatedData, BatchUpdateTodoDTO } from '../features/todos/todo.types'
 import { agentEventScenarios } from './agentFixtures'
 
 export { agentEventScenarios, agentMockDelays } from './agentFixtures'
@@ -129,6 +129,14 @@ function ok<T>(data: T): ApiResponse<T> {
 
 function notFound(): ApiResponse<null> {
   return { code: 40401, message: '待办不存在', data: null }
+}
+
+function validBatch(values: unknown[]): boolean { return values.length >= 1 && values.length <= 100 }
+function validBatchIds(ids: unknown[]): ids is number[] {
+  return validBatch(ids) && ids.every((id) => Number.isInteger(id) && Number(id) > 0) && new Set(ids).size === ids.length
+}
+function batchBad(index?: number, id?: number, field = 'items', message = '批量请求无效') {
+  return HttpResponse.json({ code: index === undefined ? 40001 : 40002, message, data: index === undefined ? null : { index, id, field } }, { status: 400 })
 }
 
 interface MockAuthAccount {
@@ -823,6 +831,66 @@ export const handlers = [
 
     const paginated: PaginatedData<Todo> = { items, total, page, page_size }
     return HttpResponse.json(ok(paginated))
+  }),
+
+  http.post('/api/todos/batch', async ({ request }) => {
+    const body = await request.json() as { items?: CreateTodoDTO[] }
+    if (!Array.isArray(body.items) || !validBatch(body.items)) return batchBad()
+    const now = new Date().toISOString()
+    const created: Todo[] = []
+    for (const [index, item] of body.items.entries()) {
+      if (!item.title?.trim()) return batchBad(index, undefined, 'title', '待办标题不能为空')
+      if (item.title.trim().length > 200) return batchBad(index, undefined, 'title', '待办标题不能超过200字符')
+      if (item.priority && !['high', 'medium', 'low'].includes(item.priority)) return batchBad(index, undefined, 'priority', '优先级无效')
+      created.push({ id: nextId + index, title: item.title.trim(), description: item.description ?? '', priority: item.priority ?? 'medium', completed: false, due_date: item.due_date ?? null, created_at: now, updated_at: now })
+    }
+    nextId += created.length
+    todos = [...created].reverse().concat(todos)
+    persistTodos()
+    return HttpResponse.json(ok({ items: created, count: created.length }), { status: 201 })
+  }),
+
+  http.post('/api/todos/batch/get', async ({ request }) => {
+    const body = await request.json() as { ids?: unknown[] }
+    if (!Array.isArray(body.ids) || !validBatchIds(body.ids)) return batchBad()
+    const items = body.ids.map((id) => todos.find((todo) => todo.id === id))
+    if (items.some((todo) => !todo)) return HttpResponse.json(notFound(), { status: 404 })
+    return HttpResponse.json(ok({ items, count: items.length }))
+  }),
+
+  http.put('/api/todos/batch', async ({ request }) => {
+    const body = await request.json() as { items?: BatchUpdateTodoDTO[] }
+    if (!Array.isArray(body.items) || !validBatch(body.items) || !validBatchIds(body.items.map((item) => item.id))) return batchBad()
+    const next = todos.map((todo) => ({ ...todo }))
+    const result: Todo[] = []
+    for (const [index, item] of body.items.entries()) {
+      const target = next.find((todo) => todo.id === item.id)
+      if (!target) return HttpResponse.json(notFound(), { status: 404 })
+      if (item.title !== undefined && !item.title.trim()) return batchBad(index, item.id, 'title', '待办标题不能为空')
+      if (item.priority !== undefined && !['high', 'medium', 'low'].includes(item.priority)) return batchBad(index, item.id, 'priority', '优先级无效')
+      Object.assign(target, { ...(item.title !== undefined ? { title: item.title.trim() } : {}), ...(item.description !== undefined ? { description: item.description } : {}), ...(item.priority !== undefined ? { priority: item.priority } : {}), ...(item.due_date !== undefined ? { due_date: item.due_date } : {}), ...(item.completed !== undefined ? { completed: item.completed } : {}), updated_at: new Date().toISOString() })
+      result.push(target)
+    }
+    todos = next; persistTodos()
+    return HttpResponse.json(ok({ items: result, count: result.length }))
+  }),
+
+  http.patch('/api/todos/batch/status', async ({ request }) => {
+    const body = await request.json() as { ids?: unknown[]; completed?: unknown }
+    if (!Array.isArray(body.ids) || !validBatchIds(body.ids) || typeof body.completed !== 'boolean') return batchBad()
+    if (body.ids.some((id) => !todos.some((todo) => todo.id === id))) return HttpResponse.json(notFound(), { status: 404 })
+    const result = body.ids.map((id) => ({ ...todos.find((todo) => todo.id === id)!, completed: body.completed as boolean, updated_at: new Date().toISOString() }))
+    const byId = new Map(result.map((todo) => [todo.id, todo])); todos = todos.map((todo) => byId.get(todo.id) ?? todo); persistTodos()
+    return HttpResponse.json(ok({ items: result, count: result.length }))
+  }),
+
+  http.delete('/api/todos/batch', async ({ request }) => {
+    const body = await request.json() as { ids?: unknown[] }
+    if (!Array.isArray(body.ids) || !validBatchIds(body.ids)) return batchBad()
+    const items = body.ids.map((id) => todos.find((todo) => todo.id === id))
+    if (items.some((todo) => !todo)) return HttpResponse.json(notFound(), { status: 404 })
+    const ids = new Set(body.ids); todos = todos.filter((todo) => !ids.has(todo.id)); persistTodos()
+    return HttpResponse.json(ok({ items, count: items.length }))
   }),
 
   // 2. GET /api/todos/:id - single todo

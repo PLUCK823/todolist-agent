@@ -29,19 +29,26 @@ Go Backend 提供服务端认证。访问和刷新凭据分别写入配置名对
 
 ## Todo API
 
-Todo API 保持 `/api/v1/todos` 合约：
+Todo API 使用 `/api/todos` 合约：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/v1/todos` | 列表、搜索、筛选、排序和分页 |
-| POST | `/api/v1/todos` | 创建 |
-| GET | `/api/v1/todos/{id}` | 详情 |
-| PUT | `/api/v1/todos/{id}` | 更新 |
-| DELETE | `/api/v1/todos/{id}` | 删除 |
-| PATCH | `/api/v1/todos/{id}/complete` | 完成 |
-| PATCH | `/api/v1/todos/{id}/uncomplete` | 恢复 |
+| GET | `/api/todos` | 列表、搜索、筛选、排序和分页 |
+| POST | `/api/todos` | 创建 |
+| GET | `/api/todos/{id}` | 详情 |
+| PUT | `/api/todos/{id}` | 更新 |
+| DELETE | `/api/todos/{id}` | 删除 |
+| PATCH | `/api/todos/{id}/complete` | 完成 |
+| PATCH | `/api/todos/{id}/uncomplete` | 恢复 |
+| POST | `/api/todos/batch` | 原子批量创建 |
+| POST | `/api/todos/batch/get` | 按请求顺序批量读取 |
+| PUT | `/api/todos/batch` | 每项独立补丁的原子批量更新 |
+| PATCH | `/api/todos/batch/status` | 原子批量完成或恢复 |
+| DELETE | `/api/todos/batch` | 原子批量删除并返回删除前快照 |
 
 列表查询支持 `page`、`page_size`、`search`、`completed`、`priority`、`sort_by`、`sort_order`。Todo 数据模型包括 `id`、`title`、`description`、`priority`、`completed`、`due_date`、`created_at`、`updated_at`。
+
+批量请求必须包含 1–100 项；ID 必须是互不重复的正整数。写操作在一个数据库事务内完成，任一项目无效或不存在时整批回滚。成功统一返回 `{ "items": [...], "count": N }`，顺序与请求一致。更新体形如 `{ "items": [{ "id": 7, "title": "新标题" }, { "id": 9, "priority": "high" }] }`；状态体为 `{ "ids": [7,9], "completed": true }`。单项校验失败使用业务码 `40002`，`data` 含 `index`、`id` 和 `field`；缺失目标使用 `40401`。
 
 ## Agent 会话 REST API
 

@@ -137,8 +137,15 @@ def list_todos(filter=None):
 | `update_todo` | 更新待办 | todo_id*, title, priority, description, due_date |
 | `complete_todo` | 标记完成 | todo_id* |
 | `delete_todo` | 删除待办 | todo_id* |
+| `batch_create_todos` | 原子创建 2–100 个待办 | items* |
+| `batch_get_todos` | 按顺序读取 2–100 个待办 | ids* |
+| `batch_update_todos` | 每项独立补丁的原子更新 | items* |
+| `batch_set_todo_status` | 原子批量完成/恢复 | ids*, completed* |
+| `batch_delete_todos` | 经一次确认原子删除多个待办 | ids* |
 
 > `*` 表示必填参数。
+
+工具选择规则：一个目标使用单项工具；两个或更多目标必须使用对应 `batch_*` 工具，禁止在循环中反复调用单项 API。批量删除把完整 ID 集合绑定到同一个确认 ID，只向用户请求一次确认；拒绝时不调用后端，批准时只调用一次。
 
 ---
 

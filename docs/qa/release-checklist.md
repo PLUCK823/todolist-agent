@@ -21,7 +21,7 @@ corepack pnpm build
 
 - [x] Go 全套 race 测试零失败。
 - [x] Agent 全套 pytest 270/270；真实 PostgreSQL repository/API 套件零跳过，coverage 91%。
-- [x] 前端 lint、coverage、build 零失败；单元/组件 45 文件、569 项。
+- [x] 前端 lint、coverage、build 零失败；单元/组件 46 文件、579 项。
 
 ## 3. E2E 门禁
 
@@ -31,8 +31,8 @@ cd .. && ./scripts/e2e-real.sh
 ```
 
 - [x] 2026-07-30 迁移前候选：Playwright context Mock transport 在 C/F/W 原 227 项通过。
-- [x] Cookie-authoritative transport 安全用例加入后，C/F/W 251 项在最终候选全部通过。
-- [x] 2026-07-30 功能分支候选：真实 Compose Chromium 4 项通过。
+- [x] Cookie-authoritative transport 与批量任务用例加入后，C/F/W 254 项在最终候选全部通过。
+- [x] 2026-07-30 功能分支候选：真实 Compose Chromium 5 项通过，包含批量事务与回滚。
 - [x] 最终候选重新运行两套 E2E，零失败、零未解释 console/page error。
 - [x] 真实测试确认注册、owner 隔离、session CRUD、PG 行/顺序/event_id、Agent 重启恢复、级联删除。
 - [x] Markdown 表格、逐轮详情折叠、紧凑 composer、桌面/移动焦点和主题均通过。

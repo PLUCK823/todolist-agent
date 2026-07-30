@@ -408,7 +408,9 @@ test('done from another socket cannot unlock a retry token', async ({ page, logi
   const [slowSession, fastSession] = await Promise.all([
     createOwnedSession(page, '慢会话'), createOwnedSession(page, '快会话'),
   ])
-  await useAgentScenario('readOnlyTimeout', { timeScale: 0.25 })
+  // Keep the originating flow non-terminal so completion from the fast flow
+  // cannot be mistaken for permission to consume the slow flow's retry token.
+  await useAgentScenario('readOnlyDisconnect', { timeScale: 0.25 })
 
   const result = await page.evaluate(({ slowId, fastId }) => new Promise<string>((resolve, reject) => {
     const slow = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(slowId)}`)
