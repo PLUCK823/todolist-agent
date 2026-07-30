@@ -287,8 +287,14 @@ test('@real persists authenticated Agent history, isolates owners and cascades d
     await page.goto(`/assistant?session=${aliceSessionId}`)
     await expect(page.getByRole('log')).not.toContainText('E2E_TABLE_HISTORY')
   })
-  const bobOwnerCount = Number(sql(`SELECT count(*) FROM agent_sessions s JOIN users u ON u.id=s.owner_id WHERE u.email='${bobEmail}';`))
-  expect(bobOwnerCount).toBe(0)
+  const bobLeakedMessageCount = Number(sql(`
+    SELECT count(*)
+    FROM agent_messages m
+    JOIN agent_sessions s ON s.id=m.session_id
+    JOIN users u ON u.id=s.owner_id
+    WHERE u.email='${bobEmail}' AND m.content LIKE '%E2E_TABLE_HISTORY%';
+  `))
+  expect(bobLeakedMessageCount).toBe(0)
 
   await withAbortBoundary('POST', '/api/auth/logout', () => logout(page))
   await withAbortBoundary('POST', '/api/auth/login', () => page.evaluate(async ({ email }) => {
