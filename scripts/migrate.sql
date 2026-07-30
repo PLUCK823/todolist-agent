@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS users (
 ALTER TABLE users
     ADD COLUMN IF NOT EXISTS timezone VARCHAR(100) NOT NULL DEFAULT 'Asia/Shanghai (UTC+8)';
 
+-- Older releases used PostgreSQL's generated constraint name
+-- `users_email_key`. GORM's `uniqueIndex` tag expects the stable index name
+-- below and otherwise attempts to remove a non-existent constraint at startup.
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS uni_users_email;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email
+    ON users(email);
+
 CREATE TABLE IF NOT EXISTS auth_sessions (
     id                  UUID        PRIMARY KEY,
     user_id             UUID        NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -29,6 +37,13 @@ CREATE TABLE IF NOT EXISTS auth_sessions (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_used_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Apply the same normalization to refresh-token uniqueness so retained
+-- volumes and freshly initialized databases share GORM-compatible metadata.
+ALTER TABLE auth_sessions DROP CONSTRAINT IF EXISTS auth_sessions_refresh_token_hash_key;
+ALTER TABLE auth_sessions DROP CONSTRAINT IF EXISTS uni_auth_sessions_refresh_token_hash;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_sessions_refresh_token_hash
+    ON auth_sessions(refresh_token_hash);
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_id
     ON auth_sessions(user_id);
