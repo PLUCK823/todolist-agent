@@ -1,6 +1,6 @@
 # Agent TodoList 项目状态
 
-> 最后更新：2026-07-30。当前为 `codex/assistant-history-workspace` 发布候选；默认分支合并、生产镜像重建和五服务最终健康验收尚未完成。
+> 最后更新：2026-07-30。认证持久化助手工作区已合并并推送到 `master`；本地正式 Compose 栈已完成镜像重建和五服务验收。
 
 ## 进度
 
@@ -9,8 +9,8 @@
 | 1–4 数据库与 Go 认证 | 完成 | 用户/auth session schema，Argon2id，Cookie login/refresh/logout/me，轮换/撤销与 Origin 防护 |
 | 5–7 Agent 持久化 | 完成 | owner 隔离 session CRUD，PostgreSQL turn/message/step，WS 鉴权，重启恢复和异常语义 |
 | 8–12 前端工作区 | 完成 | Cookie auth，多会话，安全 GFM/表格，逐轮折叠详情，紧凑底部 composer |
-| 13 全量 E2E | 功能完成，发布复核中 | Playwright context Mock transport、三浏览器当前发现 251 项；真实 Compose Chromium 4 项 |
-| 14 文档、审计和发布 | 进行中 | 文档更新中；最终全量门禁、迁移、镜像、五服务、合并与推送待执行 |
+| 13 全量 E2E | 完成 | Playwright context Mock transport 三浏览器 251 项；真实 Compose Chromium 4 项；独立规格与质量复审通过 |
+| 14 文档、审计和发布 | 完成 | 全量门禁、保留卷迁移、镜像重建、五服务验收、默认分支合并与推送均完成 |
 
 ## 当前系统边界
 
@@ -24,21 +24,21 @@
 
 | 层 | 2026-07-30 候选证据 | 最终要求 |
 |---|---|---|
-| 前端单元/组件 | 569 项 | lint、coverage、build 全绿 |
-| Mock E2E | 当前发现 251 项，Chromium/Firefox/WebKit | 零失败、无浏览器专用缺陷隐藏 |
-| 真实 E2E | 4 项 real-chromium | Nginx/Go/Agent/PostgreSQL、重启恢复、owner 隔离全绿 |
-| Go | 认证、Todo、handler/repository/service 测试已纳入 | `go test ./... -race` |
-| Agent | pytest 含真实 PostgreSQL repository/API 覆盖 | 最终运行不得因缺少测试数据库跳过持久化套件 |
-| 部署 | 尚未最终验收 | 恰好五个服务 running/healthy |
+| 前端单元/组件 | 45 文件、569 项；coverage 阈值、lint、build 全绿 | 完成 |
+| Mock E2E | 251/251，Chromium 89、Firefox 81、WebKit 81 | 完成 |
+| 真实 E2E | 4/4 real-chromium | Nginx/Go/Agent/PostgreSQL、重启恢复、owner 隔离全绿 |
+| Go | `go test ./... -race` 全绿；合并后 `go test ./...` 再验证 | 完成 |
+| Agent | 真实 PostgreSQL 下 270/270，零跳过，coverage 91% | 完成 |
+| 部署 | postgres、redis、backend、agent、frontend 恰好五个服务 running/healthy | 完成 |
 
 完整映射见 [E2E 矩阵](qa/e2e-matrix.md)，发布步骤见 [检查清单](qa/release-checklist.md)。
 
-## 剩余节点
+## 发布结果
 
-- [ ] 完成质量复审后的全量静态、单元、集成和 E2E 门禁。
-- [ ] 对保留 PostgreSQL 卷执行幂等迁移并核对六张新表、外键和索引。
-- [ ] 重建 backend、agent、frontend 镜像并启动 postgres、redis、backend、agent、frontend。
-- [ ] 验证桌面/移动、亮/暗主题、浏览器 console 和 Agent 重启后历史恢复。
-- [ ] 合并到默认分支并推送，核对远端提交和最终运行状态。
+- [x] 全量静态、单元、集成和 E2E 门禁通过，规格与质量复审通过。
+- [x] 保留 PostgreSQL 卷已先备份，再连续执行两次幂等迁移；六张认证/Agent 表、级联外键、约束和索引已核对。
+- [x] backend、agent、frontend 镜像已重建；postgres、redis、backend、agent、frontend 五个服务全部健康。
+- [x] 桌面/移动、亮/暗主题、浏览器错误门禁和 Agent 重启历史恢复由 Mock/真实 E2E 覆盖。
+- [x] 默认分支已 fast-forward 合并并推送，本地与 `origin/master` 一致；最终真实 HTTP 冒烟通过。
 
-上述项目完成前，不得把本状态改为“已发布”或勾选发布检查清单中的合并/部署项。
+本地 Compose 发布已完成。若部署到公网 HTTPS，仍须按发布检查清单启用 Secure Cookie，并将 Origin allowlist 改为实际 HTTPS 域名。

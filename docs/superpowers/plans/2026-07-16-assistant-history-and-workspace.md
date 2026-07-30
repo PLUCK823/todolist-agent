@@ -874,11 +874,11 @@ git push origin codex/assistant-history-workspace
 - Modify: `docker-compose.e2e.yml`
 - Modify: `data/e2e-init.sql`
 
-- [ ] **Step 1: Add failing mock E2E stories**
+- [x] **Step 1: Add failing mock E2E stories**
 
 Cover safe Markdown table, fixed compact composer at 1280×720 and 390×844, completed details collapse, failed details expand, session CRUD and refresh restore. Assertions use roles and computed boxes, not screenshots alone.
 
-- [ ] **Step 2: Add failing real-stack stories**
+- [x] **Step 2: Add failing real-stack stories**
 
 Real E2E must:
 
@@ -890,11 +890,11 @@ Real E2E must:
 6. query PostgreSQL for owner/session/turn/message/step rows;
 7. verify Markdown table and per-turn disclosure in Chromium.
 
-- [ ] **Step 3: Update MSW and fixtures**
+- [x] **Step 3: Update MSW and fixtures**
 
 Mock Cookie auth behavior, session list/detail endpoints, and turn-oriented WebSocket events with stable `event_id` values. Login fixture must register/login via public UI or API rather than injecting localStorage auth keys.
 
-- [ ] **Step 4: Run E2E suites**
+- [x] **Step 4: Run E2E suites**
 
 Run:
 
@@ -906,7 +906,7 @@ E2E_REAL=true corepack pnpm playwright test e2e/real/assistant-history.spec.ts -
 
 Expected: all targeted scenarios PASS with no console/page errors.
 
-- [ ] **Step 5: Commit and push**
+- [x] **Step 5: Commit and push**
 
 ```bash
 git add frontend/src/mocks frontend/e2e docker-compose.e2e.yml data/e2e-init.sql
@@ -916,7 +916,7 @@ git push origin codex/assistant-history-workspace
 
 ## Task 14: Update documentation and execute the completion audit
 
-**Progress (2026-07-30):** Documentation contracts have been updated for the implemented server-side Cookie authentication, owner-isolated durable sessions, PostgreSQL turn history, Playwright context Mock transport, and the release runbook. The completion audit, retained-volume migration, image rebuild, five-service health check, default-branch merge, and remote verification remain intentionally unchecked until executed successfully.
+**Progress (2026-07-30):** Complete. Documentation, all quality gates, retained-volume migration, fresh-schema compatibility, image rebuild, five-service health check, default-branch merge/push, remote verification, and final HTTP smoke have succeeded.
 
 **Files:**
 - Modify: `docs/API.md`
@@ -929,7 +929,7 @@ git push origin codex/assistant-history-workspace
 
 Document Cookie auth, refresh behavior, Origin validation, session CRUD, turn response schema, persistence ordering, interruption semantics, result truncation, database migration, local re-registration and required environment variables. Remove claims that history is only in-memory.
 
-- [ ] **Step 2: Run all static and unit/integration gates**
+- [x] **Step 2: Run all static and unit/integration gates**
 
 ```bash
 cd backend && go fmt ./... && go test ./... -race
@@ -939,7 +939,7 @@ cd ../frontend && corepack pnpm lint && corepack pnpm test:coverage -- --run && 
 
 Expected: zero failures; coverage thresholds remain satisfied.
 
-- [ ] **Step 3: Run database migration against the retained local volume**
+- [x] **Step 3: Run database migration against the retained local volume**
 
 ```bash
 docker compose -p todolist-agent exec -T postgres psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" < scripts/migrate.sql
@@ -947,7 +947,7 @@ docker compose -p todolist-agent exec -T postgres psql -v ON_ERROR_STOP=1 -U "$P
 
 Then verify all six tables, foreign keys and indexes from `pg_catalog`.
 
-- [ ] **Step 4: Rebuild affected images and start the full stack**
+- [x] **Step 4: Rebuild affected images and start the full stack**
 
 ```bash
 docker compose -p todolist-agent build backend agent frontend
@@ -956,15 +956,15 @@ docker compose -p todolist-agent up -d --force-recreate --wait
 
 Expected: PostgreSQL, Redis, Backend, Agent and Frontend are `running (healthy)`.
 
-- [ ] **Step 5: Run real browser acceptance and restart persistence**
+- [x] **Step 5: Run real browser acceptance and restart persistence**
 
 Execute the real Playwright story from Task 13, inspect dark/light screenshots at desktop/mobile sizes, then restart `agent` and rerun history restore. Confirm no browser console errors.
 
-- [ ] **Step 6: Perform requirement-by-requirement audit**
+- [x] **Step 6: Perform requirement-by-requirement audit**
 
 Record evidence for: compact bottom composer; safe GFM/table; details under the corresponding reply and collapsible; trusted server auth; cross-user isolation; session CRUD; durable full steps after restart; full tests; docs; image rebuild; five healthy services.
 
-- [ ] **Step 7: Commit documentation, merge and push default branch**
+- [x] **Step 7: Commit documentation, merge and push default branch**
 
 ```bash
 git add README.md docs .env.example
@@ -976,6 +976,6 @@ git merge --ff-only codex/assistant-history-workspace
 git push origin master
 ```
 
-- [ ] **Step 8: Verify remote and runtime state after push**
+- [x] **Step 8: Verify remote and runtime state after push**
 
 Run `git rev-list --count origin/master..HEAD` and expect `0`; run `docker compose -p todolist-agent ps --format json` and expect exactly five running healthy services. Only then mark the goal complete.
