@@ -294,7 +294,13 @@ export function useAgentSession(options: UseAgentSessionOptions = {}): AgentSess
     try {
       const listed = await sessionsApi.list(controller.signal)
       if (!mountedRef.current || generation !== listGenerationRef.current) return
-      const visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
+      let visible = listed.filter((item) => !deletedIdsRef.current.has(item.id))
+      if (!visible.length) {
+        const created = await sessionsApi.create({})
+        if (!mountedRef.current || generation !== listGenerationRef.current) return
+        confirmedSessionsRef.current.set(created.id, created)
+        visible = [created]
+      }
       for (const item of visible) confirmedSessionsRef.current.set(item.id, item)
       sessionsRef.current = visible
       setSessions(visible)

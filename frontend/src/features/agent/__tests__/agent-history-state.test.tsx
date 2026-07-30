@@ -298,6 +298,27 @@ describe('durable Agent session state', () => {
     expect(hook.current().steps[0]).toMatchObject({ id: 'step', label: '第一轮' })
   })
 
+  it('bootstraps an empty account so the first message can start immediately', async () => {
+    const created = { ...first, title: '新对话' }
+    const create = vi.fn().mockResolvedValue(created)
+    const client = new ControlledClient()
+    const hook = renderHistory(api({
+      list: vi.fn().mockResolvedValue([]),
+      create,
+      detail: vi.fn().mockResolvedValue({ ...created, turns: [] }),
+    }), client)
+
+    await waitFor(() => expect(hook.current().canSend).toBe(true))
+    expect(create).toHaveBeenCalledWith({})
+    expect(hook.current().selectedSessionId).toBe(created.id)
+    expect(hook.current().displayedSessionId).toBe(created.id)
+
+    let accepted = false
+    act(() => { accepted = hook.current().send('查看未完成任务') })
+    expect(accepted).toBe(true)
+    expect(client.requests).toEqual([{ message: '查看未完成任务', session_id: created.id }])
+  })
+
   it('keeps the old view while loading and a slow stale detail cannot overwrite a later selection', async () => {
     const slowFirst = deferred<AgentSessionDetail>()
     const slowSecond = deferred<AgentSessionDetail>()
