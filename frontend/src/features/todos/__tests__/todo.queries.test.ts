@@ -4,12 +4,49 @@ import { renderHook } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it, vi } from 'vitest'
 import { server } from '../../../mocks/server'
-import { applyTodoCompletion, fetchUpcomingTodos, matchesNonCompletionFilters, restoreTodoCompletion, todoKeys, useCompleteTodo } from '../todo.queries'
+import { applyTodoCompletion, fetchUpcomingTodos, matchesNonCompletionFilters, restoreTodoCompletion, todoKeys, useBatchDeleteTodos, useCompleteTodo } from '../todo.queries'
+import { ApiError, batchCreateTodos, batchDeleteTodos, batchGetTodos, batchSetTodoStatus, batchUpdateTodos } from '../todo.api'
 import type { PaginatedData, Todo } from '../todo.types'
 
 const active: Todo = { id: 1, title: 'active', description: '', priority: 'medium', completed: false, due_date: null, created_at: '2026-07-10T08:00:00Z', updated_at: '2026-07-10T08:00:00Z' }
 const done: Todo = { ...active, id: 2, title: 'done', completed: true }
 const page = (items: Todo[], total = items.length): PaginatedData<Todo> => ({ items, total, page: 1, page_size: 10 })
+
+describe('batch todo API', () => {
+  it('calls all five dedicated endpoints and validates ordered results', async () => {
+    const seen: string[] = []
+    server.use(
+      http.post('/api/todos/batch', async ({ request }) => { seen.push(`POST ${(await request.json() as { items: unknown[] }).items.length}`); return HttpResponse.json({ code: 0, message: 'ok', data: { items: [active], count: 1 } }, { status: 201 }) }),
+      http.post('/api/todos/batch/get', () => { seen.push('GET-BATCH'); return HttpResponse.json({ code: 0, message: 'ok', data: { items: [done, active], count: 2 } }) }),
+      http.put('/api/todos/batch', () => { seen.push('PUT'); return HttpResponse.json({ code: 0, message: 'ok', data: { items: [active], count: 1 } }) }),
+      http.patch('/api/todos/batch/status', () => { seen.push('PATCH'); return HttpResponse.json({ code: 0, message: 'ok', data: { items: [{ ...active, completed: true }], count: 1 } }) }),
+      http.delete('/api/todos/batch', () => { seen.push('DELETE'); return HttpResponse.json({ code: 0, message: 'ok', data: { items: [active], count: 1 } }) }),
+    )
+    await batchCreateTodos([{ title: 'active' }])
+    expect((await batchGetTodos([2, 1])).items.map((todo) => todo.id)).toEqual([2, 1])
+    await batchUpdateTodos([{ id: 1, title: 'renamed' }])
+    await batchSetTodoStatus([1], true)
+    await batchDeleteTodos([1])
+    expect(seen).toEqual(['POST 1', 'GET-BATCH', 'PUT', 'PATCH', 'DELETE'])
+  })
+
+  it('retains validated structured item error data', async () => {
+    server.use(http.put('/api/todos/batch', () => HttpResponse.json({ code: 40002, message: 'bad title', data: { index: 1, id: 7, field: 'title' } }, { status: 400 })))
+    await expect(batchUpdateTodos([{ id: 7, title: '' }])).rejects.toMatchObject<ApiError>({ code: 40002, data: { index: 1, id: 7, field: 'title' } })
+  })
+
+  it('invalidates lists and affected details only after successful batch delete', async () => {
+    server.use(http.delete('/api/todos/batch', () => HttpResponse.json({ code: 0, message: 'ok', data: { items: [active, done], count: 2 } })))
+    const client = seededClient()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+    const { result } = renderHook(() => useBatchDeleteTodos(), { wrapper })
+    await result.current.mutateAsync([1, 2])
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: todoKeys.lists() })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: todoKeys.detail(1) })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: todoKeys.detail(2) })
+  })
+})
 
 function seededClient() {
   const client = new QueryClient()

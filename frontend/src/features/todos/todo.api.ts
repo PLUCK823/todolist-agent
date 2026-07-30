@@ -1,6 +1,9 @@
 import axios, { AxiosError } from 'axios'
 import type {
   ApiErrorPayload,
+  BatchErrorData,
+  BatchTodoResponse,
+  BatchUpdateTodoDTO,
   ApiResponse,
   CreateTodoDTO,
   PaginatedData,
@@ -13,12 +16,14 @@ import { isRfc3339WithOffset } from './time-contract'
 export class ApiError extends Error {
   readonly code: number
   readonly status: number
+  readonly data: BatchErrorData | null
 
-  constructor(code: number, message: string, status: number) {
+  constructor(code: number, message: string, status: number, data: BatchErrorData | null = null) {
     super(message)
     this.name = 'ApiError'
     this.code = code
     this.status = status
+    this.data = data
   }
 }
 
@@ -28,8 +33,16 @@ function isErrorPayload(value: unknown): value is ApiErrorPayload {
   return (
     typeof payload.code === 'number' &&
     typeof payload.message === 'string' &&
-    payload.data === null
+    (payload.data === null || isBatchErrorData(payload.data))
   )
+}
+
+function isBatchErrorData(value: unknown): value is BatchErrorData {
+  if (!value || typeof value !== 'object') return false
+  const data = value as Record<string, unknown>
+  return Number.isInteger(data.index) && data.index! >= 0 &&
+    (data.id === undefined || (Number.isInteger(data.id) && (data.id as number) >= 0)) &&
+    typeof data.field === 'string'
 }
 
 function normalizeError(error: unknown): Error {
@@ -44,6 +57,7 @@ function normalizeError(error: unknown): Error {
         error.response.data.code,
         error.response.data.message,
         error.response.status,
+        error.response.data.data,
       )
     }
     return new ApiError(-2, '服务响应异常，请稍后重试', error.response.status)
@@ -110,6 +124,15 @@ function validatePage(value: unknown, status: number): PaginatedData<Todo> {
   return { ...page, items: page.items.map((todo) => validateTodo(todo, status)) } as PaginatedData<Todo>
 }
 
+function validateBatch(value: unknown, status: number): BatchTodoResponse {
+  if (!value || typeof value !== 'object') throw contractError(status)
+  const batch = value as Partial<BatchTodoResponse>
+  if (!Array.isArray(batch.items) || !Number.isInteger(batch.count) || batch.count! < 1 || batch.count! > 100 || batch.items.length !== batch.count) {
+    throw contractError(status)
+  }
+  return { count: batch.count, items: batch.items.map((todo) => validateTodo(todo, status)) } as BatchTodoResponse
+}
+
 export async function fetchTodos(filters: TodoFilters = {}, signal?: AbortSignal): Promise<PaginatedData<Todo>> {
   const response = await client.get<ApiResponse<PaginatedData<Todo>>>('/todos', {
     params: toParams(filters),
@@ -145,4 +168,29 @@ export async function completeTodo(id: number): Promise<Todo> {
 export async function uncompleteTodo(id: number): Promise<Todo> {
   const response = await client.patch<ApiResponse<Todo>>(`/todos/${id}/uncomplete`)
   return validateTodo(response.data.data, response.status)
+}
+
+export async function batchCreateTodos(items: CreateTodoDTO[]): Promise<BatchTodoResponse> {
+  const response = await client.post<ApiResponse<BatchTodoResponse>>('/todos/batch', { items })
+  return validateBatch(response.data.data, response.status)
+}
+
+export async function batchGetTodos(ids: number[]): Promise<BatchTodoResponse> {
+  const response = await client.post<ApiResponse<BatchTodoResponse>>('/todos/batch/get', { ids })
+  return validateBatch(response.data.data, response.status)
+}
+
+export async function batchUpdateTodos(items: BatchUpdateTodoDTO[]): Promise<BatchTodoResponse> {
+  const response = await client.put<ApiResponse<BatchTodoResponse>>('/todos/batch', { items })
+  return validateBatch(response.data.data, response.status)
+}
+
+export async function batchSetTodoStatus(ids: number[], completed: boolean): Promise<BatchTodoResponse> {
+  const response = await client.patch<ApiResponse<BatchTodoResponse>>('/todos/batch/status', { ids, completed })
+  return validateBatch(response.data.data, response.status)
+}
+
+export async function batchDeleteTodos(ids: number[]): Promise<BatchTodoResponse> {
+  const response = await client.delete<ApiResponse<BatchTodoResponse>>('/todos/batch', { data: { ids } })
+  return validateBatch(response.data.data, response.status)
 }

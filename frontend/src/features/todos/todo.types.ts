@@ -23,7 +23,12 @@ export interface UpdateTodoDTO {
   description?: string
   priority?: TodoPriority
   due_date?: string | null
+  completed?: boolean
 }
+
+export interface BatchUpdateTodoDTO extends UpdateTodoDTO { id: number }
+export interface BatchTodoResponse { items: Todo[]; count: number }
+export interface BatchErrorData { index: number; id?: number; field: string }
 
 export interface TodoFormDTO {
   title: string
@@ -41,7 +46,7 @@ export interface ApiResponse<T> {
 export interface ApiErrorPayload {
   code: number
   message: string
-  data: null
+  data: null | BatchErrorData
 }
 
 export interface PaginatedData<T> {

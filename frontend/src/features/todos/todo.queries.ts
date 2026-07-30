@@ -1,6 +1,11 @@
 import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import {
   ApiError,
+  batchCreateTodos,
+  batchDeleteTodos,
+  batchGetTodos,
+  batchSetTodoStatus,
+  batchUpdateTodos,
   completeTodo,
   createTodo,
   deleteTodo,
@@ -9,7 +14,7 @@ import {
   uncompleteTodo,
   updateTodo,
 } from './todo.api'
-import type { PaginatedData, Todo, TodoFilters, UpdateTodoDTO } from './todo.types'
+import type { BatchUpdateTodoDTO, CreateTodoDTO, PaginatedData, Todo, TodoFilters, UpdateTodoDTO } from './todo.types'
 
 export const todoKeys = {
   all: ['todos'] as const,
@@ -252,4 +257,51 @@ export function useCompleteTodo() {
 
 export function useUncompleteTodo() {
   return useToggleTodo(false)
+}
+
+async function invalidateBatch(client: QueryClient, ids: number[]) {
+  await client.invalidateQueries({ queryKey: todoKeys.lists() })
+  await Promise.all(ids.map((id) => client.invalidateQueries({ queryKey: todoKeys.detail(id) })))
+}
+
+export function useBatchCreateTodos() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (items: CreateTodoDTO[]) => batchCreateTodos(items),
+    onSuccess: () => client.invalidateQueries({ queryKey: todoKeys.lists() }),
+  })
+}
+
+export function useBatchGetTodos() {
+  return useMutation({ mutationFn: (ids: number[]) => batchGetTodos(ids) })
+}
+
+export function useBatchUpdateTodos() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (items: BatchUpdateTodoDTO[]) => batchUpdateTodos(items),
+    onSuccess: (result) => {
+      result.items.forEach((todo) => client.setQueryData(todoKeys.detail(todo.id), todo))
+      return invalidateBatch(client, result.items.map((todo) => todo.id))
+    },
+  })
+}
+
+export function useBatchSetTodoStatus() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ ids, completed }: { ids: number[]; completed: boolean }) => batchSetTodoStatus(ids, completed),
+    onSuccess: (result) => {
+      result.items.forEach((todo) => client.setQueryData(todoKeys.detail(todo.id), todo))
+      return invalidateBatch(client, result.items.map((todo) => todo.id))
+    },
+  })
+}
+
+export function useBatchDeleteTodos() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (ids: number[]) => batchDeleteTodos(ids),
+    onSuccess: (result) => invalidateBatch(client, result.items.map((todo) => todo.id)),
+  })
 }
