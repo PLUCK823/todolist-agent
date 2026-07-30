@@ -25,7 +25,7 @@ export default defineConfig({
     reducedMotion: 'reduce',
   },
   webServer: runRealOnly ? undefined : {
-    command: 'VITE_ENABLE_MSW=true pnpm dev --host 127.0.0.1',
+    command: 'pnpm dev --host 127.0.0.1',
     url: mockBaseURL,
     reuseExistingServer: false,
     timeout: 120_000,

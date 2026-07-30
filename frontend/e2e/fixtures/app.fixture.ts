@@ -1,4 +1,5 @@
 import { expect, test as base, type Page } from '@playwright/test'
+import { installMockTransport } from './mock-transport'
 
 export const FIXED_NOW = '2026-07-13T10:00:00+08:00'
 const CONTEXT_INITIALIZED_COOKIE = 'todolist_e2e_initialized'
@@ -31,6 +32,7 @@ export interface AppFixtures {
   login: (options?: LoginOptions) => Promise<void>
   enableMotion: () => Promise<void>
   _appState: void
+  _mockTransport: void
 }
 
 async function installTestState(page: Page) {
@@ -73,6 +75,11 @@ export async function reloadMockPage(page: Page) {
 }
 
 export const test = base.extend<AppFixtures>({
+  _mockTransport: [async ({ context }, provide) => {
+    await installMockTransport(context)
+    await provide()
+  }, { auto: true }],
+
   _appState: [async ({ page }, provide) => {
     await installTestState(page)
     await provide()
@@ -94,11 +101,6 @@ export const test = base.extend<AppFixtures>({
           body: JSON.stringify({ email: accountValue.email, password }),
         })
         if (!login.ok) throw new Error(`mock login failed: ${login.status}`)
-        // Service-worker mock responses cannot mutate the browser Cookie jar.
-        // Mirror the HttpOnly session effect with a mock-only Cookie after the
-        // real login request succeeds; no account identity is stored locally.
-        const mockSession = JSON.stringify({ email: accountValue.email.toLowerCase(), name: accountValue.name })
-        document.cookie = `todolist_mock_session=${encodeURIComponent(mockSession)}; Path=/; SameSite=Lax`
       }, { accountValue: account })
     })
   },
