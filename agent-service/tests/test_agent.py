@@ -581,6 +581,49 @@ async def test_delete_rejection_never_calls_backend():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("approved", [True, False])
+async def test_batch_delete_uses_one_confirmation_and_one_or_zero_tool_calls(approved):
+    from app.agent import _tools_by_name, process_message, resolve_confirmation
+
+    confirmation_ready = asyncio.Event()
+    events: list[dict[str, Any]] = []
+
+    async def record_event(event: dict[str, Any]) -> None:
+        events.append(event)
+        if event["type"] == "confirmation_required":
+            confirmation_ready.set()
+
+    llm = FakeToolCallingLLM(
+        responses=[
+            _aim(tool_calls=[_tc("batch_delete_todos", {"ids": [8, 3, 5]})]),
+            _aim("处理完成"),
+        ]
+    )
+    tool = StubTool(result={"items": [], "count": 3})
+    with (
+        patch("app.agent._build_llm", return_value=llm),
+        patch.dict(_tools_by_name, {"batch_delete_todos": tool}),
+    ):
+        task = asyncio.create_task(process_message("batch-delete", "删除三个待办", record_event))
+        await asyncio.wait_for(confirmation_ready.wait(), timeout=1)
+        confirmations = [event for event in events if event["type"] == "confirmation_required"]
+        assert len(confirmations) == 1
+        confirmation = confirmations[0]
+        assert "3" in confirmation["message"]
+        assert "8、3、5" in confirmation["message"]
+        assert resolve_confirmation("batch-delete", confirmation["confirmation_id"], approved=approved)
+        await task
+
+    if approved:
+        tool.ainvoke.assert_awaited_once_with({"ids": [8, 3, 5]})
+    else:
+        tool.ainvoke.assert_not_awaited()
+    completed = [event for event in events if event.get("action") == "batch_delete_todos"]
+    assert completed[-1]["confirmation_id"] == confirmation["confirmation_id"]
+    assert completed[-1]["confirmation_approved"] is approved
+
+
+@pytest.mark.asyncio
 async def test_delete_confirmation_is_bound_to_session_and_consumed_once():
     """A confirmation cannot cross sessions or execute a tool twice."""
     from app.agent import (

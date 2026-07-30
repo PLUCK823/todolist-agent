@@ -52,6 +52,16 @@ MAX_MESSAGES_PER_SESSION = int(os.getenv("AGENT_MAX_MESSAGES_PER_SESSION", "200"
 MAX_TOOL_ROUNDS = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "8"))
 MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "32"))
 READ_ONLY_RETRY_TOOLS = frozenset({"list_todos", "get_todo", "batch_get_todos"})
+DESTRUCTIVE_TOOLS = frozenset({"delete_todo", "batch_delete_todos"})
+
+
+def _confirmation_message(name: str, args: dict[str, Any]) -> str:
+    if name == "batch_delete_todos":
+        ids = list(args.get("ids") or [])
+        preview = "、".join(str(todo_id) for todo_id in ids[:8])
+        suffix = "…" if len(ids) > 8 else ""
+        return f"确认删除这 {len(ids)} 个待办（ID：{preview}{suffix}）吗？此操作不可撤销。"
+    return "确认删除这个待办吗？此操作不可撤销。"
 
 _tool_defs: list[BaseTool] = [
     langchain_tool(create_todo),
@@ -1340,8 +1350,9 @@ async def process_message(
                             "duration_ms": 0,
                         }
                     else:
-                        approved = name != "delete_todo"
-                        if name == "delete_todo" and event_sink is not None:
+                        approved = name not in DESTRUCTIVE_TOOLS
+                        confirmation_message = _confirmation_message(name, args)
+                        if name in DESTRUCTIVE_TOOLS and event_sink is not None:
                             confirmation = state["confirmations"].setdefault(
                                 journal_key,
                                 {
@@ -1353,9 +1364,9 @@ async def process_message(
                             binding = PendingConfirmation(
                                 confirmation_id=confirmation_id,
                                 session_id=session_id,
-                                tool="delete_todo",
+                                tool=name,
                                 args=dict(args),
-                                message="确认删除这个待办吗？此操作不可撤销。",
+                                message=confirmation_message,
                             )
                             if confirmation["event"] is None:
                                 confirmation["event"] = {
@@ -1546,9 +1557,7 @@ async def process_message(
                     )
                     if confirmation_id is not None:
                         event["confirmation_id"] = confirmation_id
-                        event["confirmation_message"] = (
-                            "确认删除这个待办吗？此操作不可撤销。"
-                        )
+                        event["confirmation_message"] = confirmation_message
                         event["confirmation_approved"] = approved
 
                     # Journal before emitting: a send/model failure can resume
