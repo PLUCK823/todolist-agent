@@ -75,6 +75,20 @@ class StubTool:
         self.ainvoke = AsyncMock(return_value=result, side_effect=side_effect)
 
 
+def test_batch_tools_are_bound_and_batch_get_is_retry_safe():
+    import app.agent
+
+    names = {tool.name for tool in app.agent._tool_defs}
+    assert {
+        "batch_create_todos",
+        "batch_get_todos",
+        "batch_update_todos",
+        "batch_set_todo_status",
+        "batch_delete_todos",
+    } <= names
+    assert "batch_get_todos" in app.agent.READ_ONLY_RETRY_TOOLS
+
+
 @pytest.fixture(autouse=True)
 def _reset_agent():
     """Reset the agent graph and conversation state before every test."""

@@ -29,6 +29,11 @@ from .llm import ModelConfig, create_model
 from .prompts import SYSTEM_PROMPT
 from .schemas import PendingConfirmation
 from .tools import (
+    batch_create_todos,
+    batch_delete_todos,
+    batch_get_todos,
+    batch_set_todo_status,
+    batch_update_todos,
     complete_todo,
     create_todo,
     delete_todo,
@@ -46,7 +51,7 @@ MAX_SESSIONS = int(os.getenv("AGENT_MAX_SESSIONS", "1000"))
 MAX_MESSAGES_PER_SESSION = int(os.getenv("AGENT_MAX_MESSAGES_PER_SESSION", "200"))
 MAX_TOOL_ROUNDS = int(os.getenv("AGENT_MAX_TOOL_ROUNDS", "8"))
 MAX_TOOL_CALLS = int(os.getenv("AGENT_MAX_TOOL_CALLS", "32"))
-READ_ONLY_RETRY_TOOLS = frozenset({"list_todos", "get_todo"})
+READ_ONLY_RETRY_TOOLS = frozenset({"list_todos", "get_todo", "batch_get_todos"})
 
 _tool_defs: list[BaseTool] = [
     langchain_tool(create_todo),
@@ -55,6 +60,11 @@ _tool_defs: list[BaseTool] = [
     langchain_tool(update_todo),
     langchain_tool(complete_todo),
     langchain_tool(delete_todo),
+    langchain_tool(batch_create_todos),
+    langchain_tool(batch_get_todos),
+    langchain_tool(batch_update_todos),
+    langchain_tool(batch_set_todo_status),
+    langchain_tool(batch_delete_todos),
 ]
 _tools_by_name: dict[str, BaseTool] = {tool.name: tool for tool in _tool_defs}
 

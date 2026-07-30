@@ -10,8 +10,51 @@ from app.tools import (
     update_todo,
     complete_todo,
     delete_todo,
+    batch_create_todos,
+    batch_get_todos,
+    batch_update_todos,
+    batch_set_todo_status,
+    batch_delete_todos,
     BACKEND_URL,
 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("function", "method", "path", "argument", "body"),
+    [
+        (batch_create_todos, "POST", "/todos/batch", "items", [{"title": "one"}, {"title": "two"}]),
+        (batch_get_todos, "POST", "/todos/batch/get", "ids", [2, 1]),
+        (batch_update_todos, "PUT", "/todos/batch", "items", [{"id": 2, "title": "two+"}, {"id": 1, "priority": "high"}]),
+        (batch_delete_todos, "DELETE", "/todos/batch", "ids", [2, 1]),
+    ],
+)
+async def test_batch_tool_makes_exactly_one_request(httpx_mock, function, method, path, argument, body):
+    httpx_mock.add_response(url=f"{BACKEND_URL}{path}", method=method, json=_ok({"items": [], "count": len(body)}))
+    result = await function(**{argument: body})
+    assert result["count"] == len(body)
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    assert requests[0].method == method
+    assert requests[0].url.path.endswith(path)
+    assert requests[0].read()
+
+
+@pytest.mark.asyncio
+async def test_batch_status_makes_exactly_one_request(httpx_mock):
+    httpx_mock.add_response(url=f"{BACKEND_URL}/todos/batch/status", method="PATCH", json=_ok({"items": [], "count": 2}))
+    await batch_set_todo_status(ids=[1, 2], completed=True)
+    request = httpx_mock.get_request()
+    assert request.method == "PATCH"
+    assert b'"completed":true' in request.read()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [0, 101])
+async def test_batch_tools_reject_out_of_range_before_http(size, httpx_mock):
+    with pytest.raises(ValueError, match="1 到 100"):
+        await batch_get_todos(ids=list(range(1, size + 1)))
+    assert httpx_mock.get_requests() == []
 
 
 # ---------------------------------------------------------------------------

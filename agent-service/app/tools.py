@@ -209,3 +209,44 @@ async def delete_todo(todo_id: int) -> dict:
     """
     await _request("DELETE", f"/todos/{todo_id}")
     return {"deleted": True, "id": todo_id}
+
+
+def _validate_batch(items: list[Any], *, ids: Optional[list[int]] = None) -> None:
+    if not 1 <= len(items) <= 100:
+        raise ValueError("批量操作必须包含 1 到 100 个项目")
+    if ids is not None:
+        if any(todo_id <= 0 for todo_id in ids) or len(set(ids)) != len(ids):
+            raise ValueError("批量操作的 ID 必须为不重复的正整数")
+
+
+async def batch_create_todos(items: list[dict[str, Any]]) -> dict:
+    """一次原子创建 1 到 100 个待办；任一项目无效时全部不创建。"""
+    _validate_batch(items)
+    return await _request("POST", "/todos/batch", json_body={"items": items})
+
+
+async def batch_get_todos(ids: list[int]) -> dict:
+    """一次按给定 ID 顺序查询 1 到 100 个待办。"""
+    _validate_batch(ids, ids=ids)
+    return await _request("POST", "/todos/batch/get", json_body={"ids": ids})
+
+
+async def batch_update_todos(items: list[dict[str, Any]]) -> dict:
+    """一次原子更新 1 到 100 个待办，每个项目可提供不同字段。"""
+    ids = [int(item.get("id", 0)) for item in items]
+    _validate_batch(items, ids=ids)
+    return await _request("PUT", "/todos/batch", json_body={"items": items})
+
+
+async def batch_set_todo_status(ids: list[int], completed: bool) -> dict:
+    """一次原子将 1 到 100 个待办设为完成或未完成。"""
+    _validate_batch(ids, ids=ids)
+    return await _request(
+        "PATCH", "/todos/batch/status", json_body={"ids": ids, "completed": completed}
+    )
+
+
+async def batch_delete_todos(ids: list[int]) -> dict:
+    """一次原子删除 1 到 100 个待办；此不可逆操作必须先获得用户确认。"""
+    _validate_batch(ids, ids=ids)
+    return await _request("DELETE", "/todos/batch", json_body={"ids": ids})
