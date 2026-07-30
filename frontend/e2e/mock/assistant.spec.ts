@@ -228,8 +228,9 @@ test('shows waiting time and completion in the standalone Agent workspace', asyn
   const timeline = page.getByRole('list', { name: 'Agent 执行步骤' })
   await expect(timeline).toContainText('运行中')
   await expect(timeline.locator('time')).toBeVisible()
-  await expect(timeline).toContainText('1.4 秒')
   await expect(page.getByRole('log')).toContainText('已查询到 4 项任务。')
+  await page.getByRole('button', { name: /执行详情/ }).click()
+  await expect(timeline).toContainText('1.4 秒')
 })
 
 test('confirms deletion in the standalone workspace and refreshes cached Todos', async ({ page, seedTodos, useAgentScenario }) => {
