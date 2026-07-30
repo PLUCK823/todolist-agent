@@ -36,8 +36,8 @@ class MockTransport {
   retries = new Map<string, PendingRetry>()
   authenticatedEmail: string | undefined
 
-  async email(_route: Route) { return this.authenticatedEmail }
-  async account(route: Route) { const email = await this.email(route); return email ? this.accounts.get(email)?.account : undefined }
+  async email() { return this.authenticatedEmail }
+  async account() { const email = await this.email(); return email ? this.accounts.get(email)?.account : undefined }
   userSessions(email: string) { let own = this.sessions.get(email); if (!own) { own = new Map(); this.sessions.set(email, own) }; return own }
   async body(route: Route) { try { return JSON.parse(route.request().postData() || '{}') as Record<string, unknown> } catch { return {} } }
   async send(route: Route, status: number, body?: unknown, headers: Record<string, string> = {}) {
@@ -100,7 +100,7 @@ class MockTransport {
       return this.send(route, 200, ok(stored.account), { 'set-cookie': `${sessionCookie}=${encodeURIComponent(email)}; Path=/; HttpOnly; SameSite=Lax` })
     }
     if (method === 'POST' && pathname === '/api/auth/logout') { await this.clearSessionCookie(); return this.send(route, 204, undefined, { 'set-cookie': `${sessionCookie}=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax` }) }
-    const account = await this.account(route); if (!account) return this.unauthorized(route)
+    const account = await this.account(); if (!account) return this.unauthorized(route)
     if ((method === 'GET' && pathname === '/api/auth/me') || (method === 'POST' && pathname === '/api/auth/refresh')) return this.send(route, 200, ok(account))
     if (method === 'PATCH' && pathname === '/api/auth/me') {
       if (typeof body.avatar === 'object') return this.send(route, 400, { code: 40001, message: '请求参数不合法', data: null })
@@ -117,7 +117,7 @@ class MockTransport {
     if (pathname === '/api/__e2e__/todos/fail-next') { this.failure = { method: typeof body.method === 'string' ? body.method.toUpperCase() : undefined, path: typeof body.path === 'string' ? body.path : undefined, query: typeof body.query === 'string' ? body.query : undefined, remaining: Math.max(1, Math.min(10, Number(body.times) || 1)), status: Number(body.status) || 500, message: typeof body.message === 'string' ? body.message : '模拟 Todo API 失败' }; return this.send(route, 200, { armed: true }) }
     if (pathname === '/api/__e2e__/todos/delay-next') { this.delay = { method: typeof body.method === 'string' ? body.method.toUpperCase() : undefined, path: typeof body.path === 'string' ? body.path : undefined, query: typeof body.query === 'string' ? body.query : undefined, remaining: Math.max(1, Math.min(10, Number(body.times) || 1)), status: 0, message: '', delayMs: Math.max(0, Math.min(10_000, Number(body.delayMs) || 250)) }; return this.send(route, 200, { armed: true }) }
     if (pathname === '/api/__e2e__/agent/scenario') { const name = body.name; if (typeof name !== 'string' || !(name in agentEventScenarios) && name !== 'disconnect' && name !== 'readOnlyDisconnect') return this.send(route, 400, { message: 'unknown Agent scenario' }); this.scenario = { name: name as Scenario, timeScale: Math.max(0, Number(body.timeScale) || 0) }; return this.send(route, 200, { armed: true }) }
-    if (pathname === '/api/__e2e__/agent/history') { const account = await this.account(route); if (!account) return this.unauthorized(route); if (!Array.isArray(body.sessions)) return this.send(route, 400, { message: 'sessions must be an array' }); const sessions = this.userSessions(account.email); sessions.clear(); for (const session of body.sessions as Session[]) sessions.set(session.id, structuredClone(session)); return this.send(route, 200, { seeded: sessions.size }) }
+    if (pathname === '/api/__e2e__/agent/history') { const account = await this.account(); if (!account) return this.unauthorized(route); if (!Array.isArray(body.sessions)) return this.send(route, 400, { message: 'sessions must be an array' }); const sessions = this.userSessions(account.email); sessions.clear(); for (const session of body.sessions as Session[]) sessions.set(session.id, structuredClone(session)); return this.send(route, 200, { seeded: sessions.size }) }
     return this.send(route, 501, { code: 50101, message: `Unhandled mock control route: ${pathname}`, data: null })
   }
 
@@ -131,7 +131,7 @@ class MockTransport {
   }
 
   async agent(route: Route, pathname: string) {
-    const account = await this.account(route); if (!account) return this.unauthorized(route); const sessions = this.userSessions(account.email); const method = route.request().method(); const body = await this.body(route); const id = pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/)?.[1]
+    const account = await this.account(); if (!account) return this.unauthorized(route); const sessions = this.userSessions(account.email); const method = route.request().method(); const body = await this.body(route); const id = pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/)?.[1]
     if (method === 'GET' && pathname === '/api/agent/sessions') return this.send(route, 200, ok({ items: [...sessions.values()].sort((a, b) => b.last_message_at.localeCompare(a.last_message_at)).map((session) => this.summary(session)) }))
     if (method === 'POST' && pathname === '/api/agent/sessions') { const now = iso(); const session: Session = { id: uuid(), title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '新会话', created_at: now, updated_at: now, last_message_at: now, turns: [] }; sessions.set(session.id, session); return this.send(route, 201, ok(this.summary(session))) }
     if (id) { const session = sessions.get(id); if (!session) return this.send(route, 404, { code: 40401, message: '会话不存在', data: null }); if (method === 'GET') return this.send(route, 200, ok({ session: this.summary(session), turns: session.turns })); if (method === 'PATCH') { if (typeof body.title !== 'string' || !body.title.trim()) return this.send(route, 400, { code: 40001, message: '会话名称不能为空', data: null }); session.title = body.title.trim(); session.updated_at = iso(); return this.send(route, 200, ok(this.summary(session))) }; if (method === 'DELETE') { sessions.delete(id); return this.send(route, 200, ok({ deleted: true, session_id: id })) } }
