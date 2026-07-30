@@ -1,133 +1,93 @@
 # Agent TodoList
 
-融合传统待办界面与 AI 自然语言操作的全栈 MVP。用户可以直接创建、筛选和安排任务，也可以通过右侧 Agent、独立助手页或快捷输入框让 Agent 执行任务操作。
+一个可运行的智能待办系统：React 前端、Go API、Python Agent、PostgreSQL、Redis 和 Nginx 由 Docker Compose 统一编排。当前功能分支已实现服务端 Cookie 认证、按用户隔离的持久化 Agent 多会话、完整消息/步骤历史、安全 GFM 渲染和紧凑的助手工作区。
 
-## 当前交付范围
+## 当前能力
 
-- React 前端：任务、近期安排、智能助手、个人资料、登录和注册六个页面，以及任务、筛选、设置、头像、快捷询问和退出确认等完整浮层。
-- Go API：Todo CRUD、搜索、筛选、排序、分页和健康检查。
-- Python Agent：WebSocket 流式事件、工具调用、危险操作确认、失败与安全重试。
-- 质量门禁：前端单元覆盖率、三浏览器 Mock E2E、Chromium 视觉回归、axe/键盘测试，以及真实 Compose 栈 E2E。
-
-> **认证边界：** 登录、注册、资料、头像和退出是浏览器端的本地原型 adapter，用于验证产品闭环。它不是服务端认证，不提供真实的身份校验、授权、会话吊销或多用户数据隔离。密码不会明文写入 localStorage，但这仍不能替代服务端认证。
+- 待办 CRUD、搜索、筛选、排序、分页、完成/恢复和近期安排。
+- Go 服务端注册、登录、刷新、退出和个人资料接口；访问与刷新凭据均使用 `HttpOnly` Cookie。
+- 刷新凭据单次轮换、退出撤销、精确 Origin allowlist 和跨用户资源隐藏。
+- Agent 会话创建、列表、读取、重命名、删除；会话归属由服务端从 Cookie 身份推导。
+- Agent turn、用户/助手消息、执行步骤和稳定 `event_id` 持久化到 PostgreSQL，重启 Agent 后仍可恢复。
+- 安全 GFM Markdown/表格、每轮可折叠执行详情、底部紧凑输入区及桌面/移动布局。
+- OpenAI、Anthropic、Gemini、DeepSeek 和 OpenAI-compatible 模型适配器。
 
 ## 快速开始
 
-### 完整本地栈
-
 ```bash
-git clone <repo-url> todolist-agent
-cd todolist-agent
 cp .env.example .env
-# 在 .env 中配置 LLM_API_KEY（真实 Agent 对话需要）
-docker compose up -d --build
+# 填写 AUTH_JWT_SECRET（至少 32 字节）和所选模型的 LLM_API_KEY
+docker compose -p todolist-agent up -d --build --wait
+docker compose -p todolist-agent ps
 ```
 
-访问：
-
-- 前端：<http://localhost:3000>
-- Go API：<http://localhost:8080/api/health>
-- Agent：<http://localhost:8000/api/agent/health>
-
-停止并清理：
+访问 <http://localhost:3000>。首次使用需要注册账号；升级已有数据卷时，先执行：
 
 ```bash
-docker compose down
+docker compose -p todolist-agent exec -T postgres \
+  psql -v ON_ERROR_STOP=1 -U todolist -d todolist < scripts/migrate.sql
 ```
 
-该命令不删除数据卷；需要清除本地数据时显式运行 `docker compose down -v`。
+迁移是幂等的并保留既有 Todo 数据。旧浏览器本地原型账号不是服务端账号，升级后需要重新注册。
 
-### 模型提供商
+## 必要安全配置
 
-Agent 通过统一适配器支持以下提供商，切换 `.env` 后重启 `agent` 容器即可生效：
+- `AUTH_JWT_SECRET` 必填且至少 32 字节；每个环境使用独立随机值，不得复用 API Key、数据库密码或示例值。
+- 生产环境必须使用 HTTPS，并设置 `AUTH_COOKIE_SECURE=true`。
+- `AUTH_ALLOWED_ORIGINS` 只填写实际前端的完整 Origin，禁止 `*`；多个 Origin 用逗号分隔。
+- `.env`、真实模型密钥、登录 Cookie、数据库备份和 E2E trace 均不得提交。
+- 浏览器 WebSocket 只携带 Cookie 和 `session_id`，不会把 JWT 放进 URL 或 localStorage。
 
-| `LLM_PROVIDER` | 默认模型 | `LLM_BASE_URL` |
-|---|---|---|
-| `openai` | `gpt-4o` | 通常留空 |
-| `anthropic` | `claude-sonnet-4-5` | 通常留空 |
-| `google` / `gemini` | `gemini-2.5-flash` | 留空 |
-| `deepseek` | `deepseek-v4-flash` | 默认 `https://api.deepseek.com` |
-| `openai-compatible` | 必填 | 必填，指向兼容 API 的 `/v1` 端点 |
+## 模型提供商
 
-统一变量为 `LLM_PROVIDER`、`LLM_API_KEY`、`LLM_MODEL`、`LLM_BASE_URL` 和 `LLM_TEMPERATURE`。旧的 `OPENAI_MODEL`、`OPENAI_BASE_URL`、`ANTHROPIC_API_KEY` 不再读取。服务启动时只校验配置，不会为健康检查发起付费模型请求；密钥只应放在已被 Git 忽略的 `.env` 或部署平台的 Secret 中。
-
-### 只运行高保真前端
-
-不启动 Go、PostgreSQL 或 Agent 服务时，可使用 MSW 查看和操作完整前端：
-
-```bash
-cd frontend
-corepack enable
-pnpm install
-VITE_ENABLE_MSW=true pnpm dev --host 127.0.0.1
+```env
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-chat
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=replace-with-provider-api-key
 ```
 
-打开 <http://127.0.0.1:3000>，先在注册页创建本地原型账号，再登录进入应用。该模式的数据和认证状态只保存在当前浏览器中。
+`LLM_PROVIDER` 可选 `openai`、`anthropic`、`google`、`deepseek` 或 `openai-compatible`。兼容 OpenAI 协议的服务需要同时设置 `LLM_BASE_URL`。测试环境使用确定性的 fake provider，不代表生产模型质量或 SLA。
 
-## 为不知情的 AI 或开发者复现原型
-
-不要只依据文字猜测界面。按以下顺序读取并核对：
-
-1. [UI 高保真设计规格](docs/superpowers/specs/2026-07-13-agent-todolist-prototype-design.md)：产品规则、组件边界和八条验收路径。
-2. [V6 可交互原型](.superpowers/brainstorm/40507-1783945975/content/workspace-full-flow-v6.html)：页面构图、动效、弹窗和 Agent 交互基准；可直接在浏览器中打开。
-3. [视觉回归基准与签核](docs/qa/visual-review.md)：固定视口、设计量尺、14 张基线截图和允许的可访问性差异。
-4. [产品需求](docs/PRD.md) 与 [API 文档](docs/API.md)：业务范围和真实接口契约。
-5. [E2E 覆盖矩阵](docs/qa/e2e-matrix.md) 与 [发布检查清单](docs/qa/release-checklist.md)：确认实现不是只有静态外观。
-
-视觉权威顺序为：设计规格明确规则 → V6 原型 → 已签核视觉基线（仅用于回归）→ PRD/API。WCAG 2.2 AA 可以覆盖原型低对比色，但必须在视觉签核中记录；生产实现不得直接复制单文件 HTML。
-
-## 验证
+## 开发与验证
 
 ```bash
-cd frontend
-pnpm lint
-pnpm test:coverage
-pnpm build
-pnpm e2e:mock
-
-cd ../backend
-go test ./...
-
-cd ../agent-service
-uv sync --frozen --extra dev
-uv run --frozen --extra dev pytest -q
-
-cd ..
+cd backend && go test ./... -race
+cd ../agent-service && uv run pytest
+cd ../frontend && corepack pnpm lint && corepack pnpm test:coverage -- --run && corepack pnpm build
+cd .. && corepack pnpm --dir frontend e2e:mock
 ./scripts/e2e-real.sh
 ```
 
-`e2e:mock` 在 Chromium、Firefox 和 WebKit 上运行功能、键盘和 axe 检查；像素视觉基线只在 Chromium 上比较。`scripts/e2e-real.sh` 使用隔离的 `todolist-agent-e2e` Compose 项目、独立端口和数据卷，完成后自动清理。真实栈 Agent E2E 使用确定性的 fake LLM provider，但经过真实 Nginx、WebSocket、Agent 服务、Go API 和数据库链路。
+Mock E2E 使用 Playwright context transport 隔离 HTTP/WebSocket，不注册 Service Worker；当前 Chromium、Firefox、WebKit 共发现 251 项。真实 E2E 通过 Nginx → Go/Python → PostgreSQL 的 Compose 栈运行 4 项 Chromium 故事。前端当前单元/组件测试为 569 项。最终发布证据以 [发布检查清单](docs/qa/release-checklist.md) 的当次结果为准。
 
-Playwright Mock context 会自动销毁；若曾在普通浏览器手工打开 `VITE_ENABLE_MSW=true` 页面，结束后请在 DevTools → Application → Storage 执行 **Clear site data** 并注销 Service Worker，或在该 origin 控制台执行 `localStorage.clear(); navigator.serviceWorker.getRegistrations().then((items) => Promise.all(items.map((item) => item.unregister())))`，避免 Mock 数据影响后续真实栈检查。
+## 原型和实现依据
 
-完整命令、预期结果和视觉审批记录见 [发布检查清单](docs/qa/release-checklist.md)。
+不了解前期讨论的开发者或 AI 应同时阅读：
+
+1. [V6 设计规格](docs/superpowers/specs/2026-07-13-agent-todolist-prototype-design.md)
+2. [可交互 V6 原型](.superpowers/brainstorm/40507-1783945975/content/workspace-full-flow-v6.html)
+3. [架构文档](docs/ARCHITECTURE.md)
+4. [API 合约](docs/API.md)
+5. [E2E 覆盖矩阵](docs/qa/e2e-matrix.md)
+
+原型用于视觉与交互参照，生产实现和安全边界以当前代码、API/架构文档及自动化测试为准。
 
 ## 技术栈
 
-| 层 | 技术 |
-|---|---|
-| 前端 | React 19、TypeScript 6、Vite 8、Tailwind CSS 4、TanStack Query |
-| 后端 | Go 1.21+、Gin、GORM |
-| Agent | Python 3.12、FastAPI、LangChain、LangGraph |
-| 数据 | PostgreSQL 16、Redis 7 |
-| 测试 | Vitest、Testing Library、Playwright、axe-core、pytest |
-| 运行 | Docker、Docker Compose、Nginx |
+- React 19、TypeScript、Vite、TanStack Query、Playwright、Vitest
+- Go、Gin、GORM、Argon2id、JWT HS256
+- Python 3.12、FastAPI、asyncpg、WebSocket
+- PostgreSQL 16、Redis 7、Nginx、Docker Compose
 
-## 文档导航
+## 文档
 
-| 文档 | 用途 |
-|---|---|
-| [产品需求](docs/PRD.md) | MVP 功能与非 MVP 范围 |
-| [UI 原型设计](docs/superpowers/specs/2026-07-13-agent-todolist-prototype-design.md) | 高保真实施蓝图 |
-| [V6 可交互原型](.superpowers/brainstorm/40507-1783945975/content/workspace-full-flow-v6.html) | 可运行视觉与交互参考 |
-| [视觉回归基准](docs/qa/visual-review.md) | 截图量尺与逐文件签核 |
-| [E2E 覆盖矩阵](docs/qa/e2e-matrix.md) | 功能到测试和浏览器的映射 |
-| [发布检查清单](docs/qa/release-checklist.md) | 发布前命令、审批与边界 |
-| [开发状态](docs/STATUS.md) | 当前实现完成度 |
-| [架构文档](docs/ARCHITECTURE.md) | 系统设计 |
-| [API 文档](docs/API.md) | HTTP 与 WebSocket 契约 |
-| [Agent 提示词](docs/AGENT_PROMPT.md) | 提示词与工具规范 |
-| [部署指南](docs/DEPLOY.md) | 部署说明 |
+- [项目状态](docs/STATUS.md)
+- [架构](docs/ARCHITECTURE.md)
+- [API](docs/API.md)
+- [数据库](docs/DATABASE.md)
+- [部署](docs/DEPLOY.md)
+- [发布检查清单](docs/qa/release-checklist.md)
 
 ## License
 

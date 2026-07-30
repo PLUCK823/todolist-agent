@@ -1,97 +1,44 @@
-# Agent TodoList 项目开发状态
+# Agent TodoList 项目状态
 
-> 最后更新：2026-07-15。当前状态为 V6 前端重构发布候选；最终可发布性以 [发布检查清单](qa/release-checklist.md) 的当次执行结果为准。
+> 最后更新：2026-07-30。当前为 `codex/assistant-history-workspace` 发布候选；默认分支合并、生产镜像重建和五服务最终健康验收尚未完成。
 
-## 总体进度
+## 进度
 
-| 模块 | 状态 | 当前交付 |
+| 节点 | 状态 | 交付 |
 |---|---|---|
-| 产品与设计 | 🟢 完成 | PRD、V6 设计规格、可交互原型、14 张视觉基线与逐文件签核 |
-| Go 后端 | 🟢 MVP 完成 | Todo CRUD、搜索、筛选、排序、分页、健康检查 |
-| React 前端 | 🟢 V6 重构完成 | 六页面、十类弹窗/浮层、三种 Agent 入口、响应式布局 |
-| Python Agent | 🟢 MVP 完成 | WebSocket 流式步骤、工具调用、确认、超时、失败和受控重试 |
-| E2E 与无障碍 | 🟢 门禁就绪 | C/F/W Mock E2E、Chromium 视觉、axe/键盘、真实 Compose 栈 Chromium |
-| 认证 | 🟡 仅原型闭环 | 浏览器本地 adapter；服务端认证与授权未实现 |
+| 1–4 数据库与 Go 认证 | 完成 | 用户/auth session schema，Argon2id，Cookie login/refresh/logout/me，轮换/撤销与 Origin 防护 |
+| 5–7 Agent 持久化 | 完成 | owner 隔离 session CRUD，PostgreSQL turn/message/step，WS 鉴权，重启恢复和异常语义 |
+| 8–12 前端工作区 | 完成 | Cookie auth，多会话，安全 GFM/表格，逐轮折叠详情，紧凑底部 composer |
+| 13 全量 E2E | 功能完成，发布复核中 | Playwright context Mock transport、三浏览器当前发现 251 项；真实 Compose Chromium 4 项 |
+| 14 文档、审计和发布 | 进行中 | 文档更新中；最终全量门禁、迁移、镜像、五服务、合并与推送待执行 |
 
-## 前端页面与交互
+## 当前系统边界
 
-| 范围 | 完成度 | 说明 |
-|---|---:|---|
-| 我的任务 | 100% | CRUD、完成/恢复、详情、搜索、状态/优先级筛选、排序、分页和错误恢复 |
-| 近期安排 | 100% | 七日选择、空日状态、已完成切换、创建、查看与完成 |
-| 智能助手 | 100% | 右侧可折叠面板、独立工作区、Command/Alt+K 快捷询问共享同一会话 |
-| 个人资料 | 100% | 资料保存、头像预设/上传、统计展示和退出确认 |
-| 登录与注册 | 100% 原型 | 表单验证、注册后回填、受保护路由、原目标回跳和退出闭环 |
-| 设置 | 100% | 主题、减少动效、简体中文选项和 Agent 启动偏好持久化 |
-| 响应式与可访问性 | 100% MVP | 桌面三栏、移动抽屉、焦点管理、键盘路径、axe 与 WCAG AA 对比度 |
+- 认证已是 Go 服务端真实认证，不再是浏览器本地 adapter。access/refresh 均为 `HttpOnly` Cookie；refresh 轮换、logout 撤销和 Agent auth-session 回查已实现。
+- Agent 会话按登录用户隔离，其他用户无法读取、重命名、删除或连接该会话。
+- PostgreSQL 保存 session、turn、message 和 step；内存只协调活跃执行、确认/重试和有限恢复。
+- 成功终态为 `reply → DB complete → done`；中断、结果不确定和超大结果截断都有持久化状态。
+- Todo API 保持当前 MVP 合约；生产 LLM 质量、SLA、成本和高并发评估不在本发布候选的自动化证明范围内。
 
-### 认证范围声明
+## 测试证据
 
-登录、注册、资料、头像和会话由 `frontend/src/features/auth/auth.storage.ts` 的可替换本地 adapter 驱动。凭据不是明文存储，但数据仍位于浏览器端；当前没有服务端用户表、授权中间件、令牌、会话吊销、多用户 Todo 隔离或跨设备同步。因此文档和产品展示不得称其为“已完成服务端认证”。
-
-## Agent 前端联调
-
-- WebSocket 客户端验证服务端事件 schema，并维护连接、运行、等待、确认、完成、失败和断开状态。
-- 多步工具时间线在面板、快捷询问和独立助手页共享；任务变更会刷新 Todo 查询缓存。
-- 删除等危险操作要求确认；只读失败仅在服务端签发且完成当前 turn 后允许安全重试。
-- 写操作超时、客户端断线或伪造 retry 不提供危险重放路径。
-- 真实栈 E2E 经过 Nginx → Agent WebSocket → Go API → PostgreSQL；为了确定性使用 fake LLM provider，不代表生产模型质量评估。
-
-## 测试与浏览器矩阵
-
-| 层 | 门禁 | 状态 |
+| 层 | 2026-07-30 候选证据 | 最终要求 |
 |---|---|---|
-| 前端单元/组件 | 402 项；语句 89.96%、分支 84.57%、函数 90.92%、行 93.82% | 🟢 超过 85/80/85/85 门禁 |
-| Mock 功能 E2E | Chromium、Firefox、WebKit，不用 browser-specific skip 隐藏缺陷 | 🟢 197 项全绿 |
-| 视觉回归 | Chromium，1223×1227，`maxDiffPixelRatio: 0.01` | 🟢 14 张基线已签核 |
-| 无障碍与键盘 | axe WCAG 2.2 AA + 关键纯键盘路径 | 🟢 覆盖页面、Dialog、Popover 与退出流程 |
-| 真实栈 | real-chromium：健康、Todo 生命周期、Agent 创建 Todo | 🟢 3 项全绿，隔离 Compose 自动清理 |
-| Go | `go test ./...` | 🟢 纳入最终矩阵 |
-| Agent | `uv run --frozen --extra dev pytest -q`：139 项，94% 覆盖率 | 🟢 全绿；`uv.lock` 已纳入版本控制，尚未配置独立 fail-under |
-| Production 体验 | 入口 gzip 85,133B；全新 context cold FTI 5/5 <2s；桌面/移动零横溢；8 条路径证据 | 🟢 `pnpm verify:experience` 可复现 |
+| 前端单元/组件 | 569 项 | lint、coverage、build 全绿 |
+| Mock E2E | 当前发现 251 项，Chromium/Firefox/WebKit | 零失败、无浏览器专用缺陷隐藏 |
+| 真实 E2E | 4 项 real-chromium | Nginx/Go/Agent/PostgreSQL、重启恢复、owner 隔离全绿 |
+| Go | 认证、Todo、handler/repository/service 测试已纳入 | `go test ./... -race` |
+| Agent | pytest 含真实 PostgreSQL repository/API 覆盖 | 最终运行不得因缺少测试数据库跳过持久化套件 |
+| 部署 | 尚未最终验收 | 恰好五个服务 running/healthy |
 
-逐功能映射见 [全量 E2E 覆盖矩阵](qa/e2e-matrix.md)，执行命令、性能检查和非 MVP 边界见 [发布检查清单](qa/release-checklist.md)。
+完整映射见 [E2E 矩阵](qa/e2e-matrix.md)，发布步骤见 [检查清单](qa/release-checklist.md)。
 
-## 原型复现入口
+## 剩余节点
 
-不了解前期讨论的 AI 或开发者应同时使用以下三类权威参考：
+- [ ] 完成质量复审后的全量静态、单元、集成和 E2E 门禁。
+- [ ] 对保留 PostgreSQL 卷执行幂等迁移并核对六张新表、外键和索引。
+- [ ] 重建 backend、agent、frontend 镜像并启动 postgres、redis、backend、agent、frontend。
+- [ ] 验证桌面/移动、亮/暗主题、浏览器 console 和 Agent 重启后历史恢复。
+- [ ] 合并到默认分支并推送，核对远端提交和最终运行状态。
 
-1. [V6 设计规格](superpowers/specs/2026-07-13-agent-todolist-prototype-design.md)：产品规则与八条完整验收路径。
-2. [V6 可交互原型](../.superpowers/brainstorm/40507-1783945975/content/workspace-full-flow-v6.html)：页面构图、弹窗、动效和交互顺序。
-3. [视觉回归基准](qa/visual-review.md)：固定视口、设计量尺、基线截图与已批准差异。
-
-只运行前端原型：
-
-```bash
-cd frontend
-pnpm install
-VITE_ENABLE_MSW=true pnpm dev --host 127.0.0.1
-```
-
-打开 <http://127.0.0.1:3000>，注册本地账号后登录。
-
-真实栈验证：
-
-```bash
-./scripts/e2e-real.sh
-```
-
-该脚本使用隔离 Compose 项目、独立端口与数据卷，完成后自动清理。
-
-## 已知非 MVP
-
-- 服务端认证、授权、多用户隔离和跨设备同步。
-- 团队协作、提醒通知、日历集成和统计看板。
-- 自定义任务标签与富文本。
-- 生产 LLM 质量/SLA、大规模并发和成本评估。
-- 原生移动应用与离线优先/PWA。
-
-## 更新日志
-
-| 日期 | 更新内容 |
-|---|---|
-| 2026-07-15 | 增加 production build/preview 体验门禁、机器可读报告和八条完整路径证据 |
-| 2026-07-14 | 完成 V6 前端全量重构、Agent 多步交互、认证原型闭环与完整测试矩阵 |
-| 2026-07-14 | 建立 Chromium 视觉基线并完成 14 张逐文件签核 |
-| 2026-07-14 | 增加 C/F/W Mock E2E、axe/键盘测试和隔离真实栈 Chromium E2E |
-| 2026-07-13 | 完成初始 MVP、设计规格和 V6 可交互原型 |
+上述项目完成前，不得把本状态改为“已发布”或勾选发布检查清单中的合并/部署项。

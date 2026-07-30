@@ -916,6 +916,8 @@ git push origin codex/assistant-history-workspace
 
 ## Task 14: Update documentation and execute the completion audit
 
+**Progress (2026-07-30):** Documentation contracts have been updated for the implemented server-side Cookie authentication, owner-isolated durable sessions, PostgreSQL turn history, Playwright context Mock transport, and the release runbook. The completion audit, retained-volume migration, image rebuild, five-service health check, default-branch merge, and remote verification remain intentionally unchecked until executed successfully.
+
 **Files:**
 - Modify: `docs/API.md`
 - Modify: `docs/ARCHITECTURE.md`
@@ -923,7 +925,7 @@ git push origin codex/assistant-history-workspace
 - Modify: `.env.example`
 - Modify: `docs/qa/` applicable runbook files
 
-- [ ] **Step 1: Update contracts and operations docs**
+- [x] **Step 1: Update contracts and operations docs**
 
 Document Cookie auth, refresh behavior, Origin validation, session CRUD, turn response schema, persistence ordering, interruption semantics, result truncation, database migration, local re-registration and required environment variables. Remove claims that history is only in-memory.
 
