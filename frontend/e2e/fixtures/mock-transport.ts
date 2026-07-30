@@ -10,6 +10,7 @@ type Scenario = keyof typeof agentEventScenarios | 'disconnect' | 'readOnlyDisco
 type StoredTurn = { owner: string; session: Session; turn: Record<string, unknown> }
 type SocketFlow = { id: string; owner: string; sessionId: string; retryTokens: Set<string> }
 type PendingRetry = { owner: string; sessionId: string; stepId: string; turnId: string; flowId: string; terminal: boolean; stored: StoredTurn }
+type TodoState = { todos: Todo[]; nextId: number; failure?: Failure; delay?: Failure & { delayMs: number } }
 
 const sessionCookie = 'todolist_mock_session'
 const jsonHeaders = { 'content-type': 'application/json' }
@@ -26,25 +27,34 @@ function accountFor(name: string, email: string, tasks: number): Account {
 /** Test-only state. One instance is installed for each BrowserContext. */
 class MockTransport {
   constructor(private readonly context: BrowserContext) {}
-  todos = defaultTodos.map((todo) => ({ ...todo }))
-  nextTodoId = Math.max(...this.todos.map((todo) => todo.id)) + 1
   accounts = new Map<string, { account: Account; password: string }>()
   sessions = new Map<string, Map<string, Session>>()
-  failure: Failure | undefined
-  delay: (Failure & { delayMs: number }) | undefined
+  todoStates = new Map<string, TodoState>()
   scenario: { name: Scenario; timeScale: number } = { name: 'success', timeScale: 0 }
   retries = new Map<string, PendingRetry>()
-  authenticatedEmail: string | undefined
 
-  async email() { return this.authenticatedEmail }
-  async account() { const email = await this.email(); return email ? this.accounts.get(email)?.account : undefined }
+  async email(url: string) {
+    const cookie = (await this.context.cookies(url)).find((item) => item.name === sessionCookie)
+    if (!cookie) return undefined
+    const email = decodeURIComponent(cookie.value).trim().toLowerCase()
+    return this.accounts.has(email) ? email : undefined
+  }
+  async account(route: Route) { const email = await this.email(route.request().url()); return email ? this.accounts.get(email)?.account : undefined }
   userSessions(email: string) { let own = this.sessions.get(email); if (!own) { own = new Map(); this.sessions.set(email, own) }; return own }
+  userTodos(email: string) {
+    let own = this.todoStates.get(email)
+    if (!own) {
+      const todos = defaultTodos.map((todo) => ({ ...todo }))
+      own = { todos, nextId: Math.max(0, ...todos.map((todo) => todo.id)) + 1 }
+      this.todoStates.set(email, own)
+    }
+    return own
+  }
   async body(route: Route) { try { return JSON.parse(route.request().postData() || '{}') as Record<string, unknown> } catch { return {} } }
   async send(route: Route, status: number, body?: unknown, headers: Record<string, string> = {}) {
     await route.fulfill({ status, headers: { ...jsonHeaders, ...headers }, body: body === undefined ? '' : JSON.stringify(body) })
   }
   async setSessionCookie(email: string) {
-    this.authenticatedEmail = email
     await this.context.addCookies([{
       name: sessionCookie,
       value: email,
@@ -56,20 +66,19 @@ class MockTransport {
     }])
   }
   async clearSessionCookie() {
-    this.authenticatedEmail = undefined
     await this.context.clearCookies({ name: sessionCookie, domain: '127.0.0.1', path: '/' })
   }
   async unauthorized(route: Route) { await this.send(route, 401, { code: 40102, message: '登录已失效', data: null }) }
   summary(session: Session) { return { id: session.id, title: session.title, created_at: session.created_at, updated_at: session.updated_at, last_message_at: session.last_message_at } }
-  async controlled(route: Route) {
-    const request = route.request(); const url = new URL(request.url()); const control = this.delay
+  async controlled(route: Route, state: TodoState) {
+    const request = route.request(); const url = new URL(request.url()); const control = state.delay
     if (control && (!control.method || control.method === request.method()) && (!control.path || url.pathname.includes(control.path)) && (!control.query || url.search.includes(control.query))) {
-      control.remaining--; if (control.remaining <= 0) this.delay = undefined
+      control.remaining--; if (control.remaining <= 0) state.delay = undefined
       await new Promise((resolve) => setTimeout(resolve, control.delayMs))
     }
-    const failure = this.failure
+    const failure = state.failure
     if (failure && (!failure.method || failure.method === request.method()) && (!failure.path || url.pathname.includes(failure.path)) && (!failure.query || url.search.includes(failure.query))) {
-      failure.remaining--; if (failure.remaining <= 0) this.failure = undefined
+      failure.remaining--; if (failure.remaining <= 0) state.failure = undefined
       await this.send(route, failure.status, { code: failure.status * 100 + 1, message: failure.message, data: null }); return true
     }
     return false
@@ -91,7 +100,7 @@ class MockTransport {
       const name = typeof body.name === 'string' ? body.name.trim() : ''; const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''; const password = typeof body.password === 'string' ? body.password : ''
       if (!name || !email || !password) return this.send(route, 400, { code: 40001, message: '请求参数格式错误', data: null })
       if (this.accounts.has(email)) return this.send(route, 409, { code: 40901, message: '邮箱已被使用', data: null })
-      const account = accountFor(name, email, this.todos.length); this.accounts.set(email, { account, password }); return this.send(route, 201, ok(account))
+      const account = accountFor(name, email, defaultTodos.length); this.accounts.set(email, { account, password }); return this.send(route, 201, ok(account))
     }
     if (method === 'POST' && pathname === '/api/auth/login') {
       const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''; const stored = this.accounts.get(email)
@@ -100,38 +109,49 @@ class MockTransport {
       return this.send(route, 200, ok(stored.account), { 'set-cookie': `${sessionCookie}=${encodeURIComponent(email)}; Path=/; HttpOnly; SameSite=Lax` })
     }
     if (method === 'POST' && pathname === '/api/auth/logout') { await this.clearSessionCookie(); return this.send(route, 204, undefined, { 'set-cookie': `${sessionCookie}=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax` }) }
-    const account = await this.account(); if (!account) return this.unauthorized(route)
+    const account = await this.account(route); if (!account) return this.unauthorized(route)
     if ((method === 'GET' && pathname === '/api/auth/me') || (method === 'POST' && pathname === '/api/auth/refresh')) return this.send(route, 200, ok(account))
     if (method === 'PATCH' && pathname === '/api/auth/me') {
       if (typeof body.avatar === 'object') return this.send(route, 400, { code: 40001, message: '请求参数不合法', data: null })
       const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : account.email
       const stored = this.accounts.get(account.email)!; const next = { ...account, email, ...(typeof body.name === 'string' ? { name: body.name.trim() } : {}), ...(typeof body.timezone === 'string' ? { timezone: body.timezone } : {}) }
-      this.accounts.delete(account.email); this.accounts.set(email, { account: next, password: stored.password }); await this.setSessionCookie(email); return this.send(route, 200, ok(next), { 'set-cookie': `${sessionCookie}=${encodeURIComponent(email)}; Path=/; HttpOnly; SameSite=Lax` })
+      this.accounts.delete(account.email); this.accounts.set(email, { account: next, password: stored.password })
+      if (email !== account.email) {
+        const todos = this.todoStates.get(account.email); if (todos) { this.todoStates.delete(account.email); this.todoStates.set(email, todos) }
+        const sessions = this.sessions.get(account.email); if (sessions) { this.sessions.delete(account.email); this.sessions.set(email, sessions) }
+      }
+      await this.setSessionCookie(email); return this.send(route, 200, ok(next), { 'set-cookie': `${sessionCookie}=${encodeURIComponent(email)}; Path=/; HttpOnly; SameSite=Lax` })
     }
     return this.send(route, 501, { code: 50101, message: `Unhandled mock auth route: ${method} ${pathname}`, data: null })
   }
 
   async control(route: Route, pathname: string) {
     const body = await this.body(route)
-    if (pathname === '/api/__e2e__/todos/seed') { if (!Array.isArray(body.todos)) return this.send(route, 400, { message: 'todos must be an array' }); this.todos = structuredClone(body.todos) as Todo[]; this.nextTodoId = Math.max(0, ...this.todos.map((todo) => todo.id)) + 1; this.failure = undefined; this.delay = undefined; return this.send(route, 200, { seeded: this.todos.length }) }
-    if (pathname === '/api/__e2e__/todos/fail-next') { this.failure = { method: typeof body.method === 'string' ? body.method.toUpperCase() : undefined, path: typeof body.path === 'string' ? body.path : undefined, query: typeof body.query === 'string' ? body.query : undefined, remaining: Math.max(1, Math.min(10, Number(body.times) || 1)), status: Number(body.status) || 500, message: typeof body.message === 'string' ? body.message : '模拟 Todo API 失败' }; return this.send(route, 200, { armed: true }) }
-    if (pathname === '/api/__e2e__/todos/delay-next') { this.delay = { method: typeof body.method === 'string' ? body.method.toUpperCase() : undefined, path: typeof body.path === 'string' ? body.path : undefined, query: typeof body.query === 'string' ? body.query : undefined, remaining: Math.max(1, Math.min(10, Number(body.times) || 1)), status: 0, message: '', delayMs: Math.max(0, Math.min(10_000, Number(body.delayMs) || 250)) }; return this.send(route, 200, { armed: true }) }
+    if (pathname.startsWith('/api/__e2e__/todos/')) {
+      const account = await this.account(route); if (!account) return this.unauthorized(route)
+      const state = this.userTodos(account.email)
+      if (pathname === '/api/__e2e__/todos/seed') { if (!Array.isArray(body.todos)) return this.send(route, 400, { message: 'todos must be an array' }); state.todos = structuredClone(body.todos) as Todo[]; state.nextId = Math.max(0, ...state.todos.map((todo) => todo.id)) + 1; state.failure = undefined; state.delay = undefined; return this.send(route, 200, { seeded: state.todos.length }) }
+      if (pathname === '/api/__e2e__/todos/fail-next') { state.failure = { method: typeof body.method === 'string' ? body.method.toUpperCase() : undefined, path: typeof body.path === 'string' ? body.path : undefined, query: typeof body.query === 'string' ? body.query : undefined, remaining: Math.max(1, Math.min(10, Number(body.times) || 1)), status: Number(body.status) || 500, message: typeof body.message === 'string' ? body.message : '模拟 Todo API 失败' }; return this.send(route, 200, { armed: true }) }
+      if (pathname === '/api/__e2e__/todos/delay-next') { state.delay = { method: typeof body.method === 'string' ? body.method.toUpperCase() : undefined, path: typeof body.path === 'string' ? body.path : undefined, query: typeof body.query === 'string' ? body.query : undefined, remaining: Math.max(1, Math.min(10, Number(body.times) || 1)), status: 0, message: '', delayMs: Math.max(0, Math.min(10_000, Number(body.delayMs) || 250)) }; return this.send(route, 200, { armed: true }) }
+    }
     if (pathname === '/api/__e2e__/agent/scenario') { const name = body.name; if (typeof name !== 'string' || !(name in agentEventScenarios) && name !== 'disconnect' && name !== 'readOnlyDisconnect') return this.send(route, 400, { message: 'unknown Agent scenario' }); this.scenario = { name: name as Scenario, timeScale: Math.max(0, Number(body.timeScale) || 0) }; return this.send(route, 200, { armed: true }) }
-    if (pathname === '/api/__e2e__/agent/history') { const account = await this.account(); if (!account) return this.unauthorized(route); if (!Array.isArray(body.sessions)) return this.send(route, 400, { message: 'sessions must be an array' }); const sessions = this.userSessions(account.email); sessions.clear(); for (const session of body.sessions as Session[]) sessions.set(session.id, structuredClone(session)); return this.send(route, 200, { seeded: sessions.size }) }
+    if (pathname === '/api/__e2e__/agent/history') { const account = await this.account(route); if (!account) return this.unauthorized(route); if (!Array.isArray(body.sessions)) return this.send(route, 400, { message: 'sessions must be an array' }); const sessions = this.userSessions(account.email); sessions.clear(); for (const session of body.sessions as Session[]) sessions.set(session.id, structuredClone(session)); return this.send(route, 200, { seeded: sessions.size }) }
     return this.send(route, 501, { code: 50101, message: `Unhandled mock control route: ${pathname}`, data: null })
   }
 
   async todo(route: Route, pathname: string) {
-    if (await this.controlled(route)) return
+    const account = await this.account(route); if (!account) return this.unauthorized(route)
+    const state = this.userTodos(account.email)
+    if (await this.controlled(route, state)) return
     const method = route.request().method(); const body = await this.body(route); const idMatch = pathname.match(/^\/api\/todos\/(\d+)(?:\/(complete|uncomplete))?$/); const notFound = () => this.send(route, 404, { code: 40401, message: '待办不存在', data: null })
-    if (method === 'GET' && pathname === '/api/todos') { const url = new URL(route.request().url()); let items = [...this.todos]; const completed = url.searchParams.get('completed'); const priority = url.searchParams.get('priority'); const keyword = (url.searchParams.get('keyword') ?? '').toLowerCase(); if (completed !== null) items = items.filter((todo) => todo.completed === (completed === 'true')); if (priority) items = items.filter((todo) => todo.priority === priority); if (keyword) items = items.filter((todo) => todo.title.toLowerCase().includes(keyword)); const sort = url.searchParams.get('sort_by') ?? 'created_at'; const order = url.searchParams.get('order') ?? 'desc'; items.sort((a, b) => { const priorityWeight: Record<string, number> = { high: 3, medium: 2, low: 1 }; const value = sort === 'priority' ? priorityWeight[a.priority] - priorityWeight[b.priority] : sort === 'due_date' ? (a.due_date ?? '').localeCompare(b.due_date ?? '') : a.created_at.localeCompare(b.created_at); return order === 'asc' ? value : -value }); const page = Number(url.searchParams.get('page')) || 1; const pageSize = Number(url.searchParams.get('page_size')) || 20; return this.send(route, 200, ok({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, page_size: pageSize })) }
-    if (method === 'POST' && pathname === '/api/todos') { if (typeof body.title !== 'string' || !body.title.trim()) return this.send(route, 400, { code: 40001, message: '待办标题不能为空', data: null }); const now = iso(); const todo: Todo = { id: this.nextTodoId++, title: body.title.trim(), description: typeof body.description === 'string' ? body.description : '', priority: body.priority === 'high' || body.priority === 'low' ? body.priority : 'medium', completed: false, due_date: typeof body.due_date === 'string' ? body.due_date : null, created_at: now, updated_at: now }; this.todos.unshift(todo); return this.send(route, 201, ok(todo)) }
-    if (!idMatch) return this.send(route, 501, { code: 50101, message: `Unhandled mock todo route: ${method} ${pathname}`, data: null }); const id = Number(idMatch[1]); const index = this.todos.findIndex((todo) => todo.id === id); if (index < 0) return notFound(); const todo = this.todos[index]
-    if (method === 'GET') return this.send(route, 200, ok(todo)); if (method === 'DELETE') { this.todos.splice(index, 1); return this.send(route, 204) }; if (method === 'PUT') { this.todos[index] = { ...todo, ...(typeof body.title === 'string' ? { title: body.title.trim() } : {}), ...(typeof body.description === 'string' ? { description: body.description } : {}), ...(body.priority === 'high' || body.priority === 'medium' || body.priority === 'low' ? { priority: body.priority } : {}), ...(typeof body.due_date === 'string' || body.due_date === null ? { due_date: body.due_date as string | null } : {}), updated_at: iso() }; return this.send(route, 200, ok(this.todos[index])) }; if (method === 'PATCH' && idMatch[2]) { this.todos[index] = { ...todo, completed: idMatch[2] === 'complete', updated_at: iso() }; return this.send(route, 200, ok(this.todos[index])) }; return this.send(route, 501, { code: 50101, message: `Unhandled mock todo method: ${method}`, data: null })
+    if (method === 'GET' && pathname === '/api/todos') { const url = new URL(route.request().url()); let items = [...state.todos]; const completed = url.searchParams.get('completed'); const priority = url.searchParams.get('priority'); const keyword = (url.searchParams.get('keyword') ?? '').toLowerCase(); if (completed !== null) items = items.filter((todo) => todo.completed === (completed === 'true')); if (priority) items = items.filter((todo) => todo.priority === priority); if (keyword) items = items.filter((todo) => todo.title.toLowerCase().includes(keyword)); const sort = url.searchParams.get('sort_by') ?? 'created_at'; const order = url.searchParams.get('order') ?? 'desc'; items.sort((a, b) => { const priorityWeight: Record<string, number> = { high: 3, medium: 2, low: 1 }; const value = sort === 'priority' ? priorityWeight[a.priority] - priorityWeight[b.priority] : sort === 'due_date' ? (a.due_date ?? '').localeCompare(b.due_date ?? '') : a.created_at.localeCompare(b.created_at); return order === 'asc' ? value : -value }); const page = Number(url.searchParams.get('page')) || 1; const pageSize = Number(url.searchParams.get('page_size')) || 20; return this.send(route, 200, ok({ items: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, page_size: pageSize })) }
+    if (method === 'POST' && pathname === '/api/todos') { if (typeof body.title !== 'string' || !body.title.trim()) return this.send(route, 400, { code: 40001, message: '待办标题不能为空', data: null }); const now = iso(); const todo: Todo = { id: state.nextId++, title: body.title.trim(), description: typeof body.description === 'string' ? body.description : '', priority: body.priority === 'high' || body.priority === 'low' ? body.priority : 'medium', completed: false, due_date: typeof body.due_date === 'string' ? body.due_date : null, created_at: now, updated_at: now }; state.todos.unshift(todo); return this.send(route, 201, ok(todo)) }
+    if (!idMatch) return this.send(route, 501, { code: 50101, message: `Unhandled mock todo route: ${method} ${pathname}`, data: null }); const id = Number(idMatch[1]); const index = state.todos.findIndex((todo) => todo.id === id); if (index < 0) return notFound(); const todo = state.todos[index]
+    if (method === 'GET') return this.send(route, 200, ok(todo)); if (method === 'DELETE') { state.todos.splice(index, 1); return this.send(route, 204) }; if (method === 'PUT') { state.todos[index] = { ...todo, ...(typeof body.title === 'string' ? { title: body.title.trim() } : {}), ...(typeof body.description === 'string' ? { description: body.description } : {}), ...(body.priority === 'high' || body.priority === 'medium' || body.priority === 'low' ? { priority: body.priority } : {}), ...(typeof body.due_date === 'string' || body.due_date === null ? { due_date: body.due_date as string | null } : {}), updated_at: iso() }; return this.send(route, 200, ok(state.todos[index])) }; if (method === 'PATCH' && idMatch[2]) { state.todos[index] = { ...todo, completed: idMatch[2] === 'complete', updated_at: iso() }; return this.send(route, 200, ok(state.todos[index])) }; return this.send(route, 501, { code: 50101, message: `Unhandled mock todo method: ${method}`, data: null })
   }
 
   async agent(route: Route, pathname: string) {
-    const account = await this.account(); if (!account) return this.unauthorized(route); const sessions = this.userSessions(account.email); const method = route.request().method(); const body = await this.body(route); const id = pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/)?.[1]
+    const account = await this.account(route); if (!account) return this.unauthorized(route); const sessions = this.userSessions(account.email); const method = route.request().method(); const body = await this.body(route); const id = pathname.match(/^\/api\/agent\/sessions\/([^/]+)$/)?.[1]
     if (method === 'GET' && pathname === '/api/agent/sessions') return this.send(route, 200, ok({ items: [...sessions.values()].sort((a, b) => b.last_message_at.localeCompare(a.last_message_at)).map((session) => this.summary(session)) }))
     if (method === 'POST' && pathname === '/api/agent/sessions') { const now = iso(); const session: Session = { id: uuid(), title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : '新会话', created_at: now, updated_at: now, last_message_at: now, turns: [] }; sessions.set(session.id, session); return this.send(route, 201, ok(this.summary(session))) }
     if (id) { const session = sessions.get(id); if (!session) return this.send(route, 404, { code: 40401, message: '会话不存在', data: null }); if (method === 'GET') return this.send(route, 200, ok({ session: this.summary(session), turns: session.turns })); if (method === 'PATCH') { if (typeof body.title !== 'string' || !body.title.trim()) return this.send(route, 400, { code: 40001, message: '会话名称不能为空', data: null }); session.title = body.title.trim(); session.updated_at = iso(); return this.send(route, 200, ok(this.summary(session))) }; if (method === 'DELETE') { sessions.delete(id); return this.send(route, 200, ok({ deleted: true, session_id: id })) } }
@@ -147,23 +167,30 @@ class MockTransport {
     session.turns.push(turn); session.title = session.title === '新会话' ? message.trim().slice(0, 40) || '新会话' : session.title; session.updated_at = now; session.last_message_at = now
     return { owner, session, turn }
   }
-  websocket(ws: WebSocketRoute) {
+  hasOnlyAppOrigins() {
+    const origins = this.context.pages()
+      .map((page) => page.url())
+      .filter((url) => url !== 'about:blank')
+      .map((url) => { try { return new URL(url).origin } catch { return 'invalid' } })
+    return origins.length > 0 && origins.every((origin) => origin === 'http://127.0.0.1:3000')
+  }
+  async websocket(ws: WebSocketRoute) {
     const url = new URL(ws.url())
-    const owner = this.authenticatedEmail
+    const owner = await this.email(ws.url())
     const sessionId = url.searchParams.get('session_id') ?? ''
     const validUrl = url.protocol === 'ws:' && url.host === '127.0.0.1:3000' && url.pathname === '/api/agent/stream'
       && [...url.searchParams.keys()].every((key) => key === 'session_id')
       && url.searchParams.getAll('session_id').length === 1
-    if (!validUrl || !owner || !sessionId || !this.sessions.get(owner)?.has(sessionId)) {
+    if (!validUrl || !this.hasOnlyAppOrigins() || !owner || !sessionId || !this.sessions.get(owner)?.has(sessionId)) {
       void ws.close({ code: 1008, reason: 'unauthorized mock agent session' })
       return
     }
     const flow: SocketFlow = { id: uuid(), owner, sessionId, retryTokens: new Set() }
     let started = false
     let waitingConfirmation: { id: string; owner: string; sessionId: string; socketId: string; turnId: string; stored: StoredTurn; events: typeof agentEventScenarios.success.events; confirmationAt: number } | undefined
-    ws.onMessage((raw) => {
+    ws.onMessage(async (raw) => {
       let frame: Record<string, unknown>; try { frame = JSON.parse(asText(raw)) as Record<string, unknown> } catch { ws.close({ code: 1003, reason: 'invalid mock frame' }); return }
-      if (this.authenticatedEmail !== owner) { void ws.close({ code: 1008, reason: 'mock agent identity changed' }); return }
+      if (!this.hasOnlyAppOrigins() || await this.email(ws.url()) !== owner) { void ws.close({ code: 1008, reason: 'mock agent identity changed' }); return }
       if (frame.type === 'retry_step') { const token = typeof frame.retry_token === 'string' ? frame.retry_token : ''; const pending = this.retries.get(token); const validKeys = Object.keys(frame).every((key) => ['type', 'session_id', 'step_id', 'retry_token'].includes(key)); if (!validKeys || !pending || !pending.terminal || pending.owner !== owner || pending.sessionId !== sessionId || pending.sessionId !== frame.session_id || pending.stepId !== frame.step_id || pending.turnId !== pending.stored.turn.id) { ws.send(JSON.stringify({ type: 'step_failed', step_id: frame.step_id ?? 'retry', error_code: 'INVALID_RETRY_STEP', message: '重试步骤不存在、已使用或不属于当前会话', retryable: false, duration_ms: 0 })); ws.send(JSON.stringify({ type: 'done' })); return }; this.retries.delete(token); this.emit(ws, agentEventScenarios.readOnlySuccess.events.filter(({ event }) => event.type !== 'step_completed'), pending.stored, flow); return }
       if (waitingConfirmation && frame.type === 'confirmation_response') {
         const pending = waitingConfirmation; waitingConfirmation = undefined
@@ -205,8 +232,8 @@ class MockTransport {
     if (event.type === 'step_failed') { Object.assign(find() ?? {}, { status: 'failed', error_code: event.error_code, error_message: event.message, retryable: event.retryable, duration_ms: event.duration_ms, completed_at: iso() }); Object.assign(stored.turn, { status: 'failed', failure_code: event.error_code, failure_message: event.message, completed_at: iso() }) }
     if (event.type === 'confirmation_required') Object.assign(find() ?? {}, { status: 'waiting_confirmation', confirmation_id: event.confirmation_id, confirmation_message: event.message })
     if (event.type === 'reply') messages.push({ id: uuid(), role: 'assistant', content: event.content, ordinal: (stored.turn.ordinal as number) * 2, created_at: iso() })
-    if (event.type === 'action_completed' && event.action === 'create_todo') { const result = event.result as { title?: unknown; priority?: unknown }; const now = iso(); this.todos.unshift({ id: this.nextTodoId++, title: typeof result.title === 'string' ? result.title : 'Agent 创建的任务', description: '', priority: result.priority === 'high' || result.priority === 'low' ? result.priority : 'medium', completed: false, due_date: null, created_at: now, updated_at: now }) }
-    if (event.type === 'action_completed' && event.action === 'delete_todo') { const result = event.result as { id?: unknown }; if (typeof result.id === 'number') this.todos = this.todos.filter((todo) => todo.id !== result.id) }
+    if (event.type === 'action_completed' && event.action === 'create_todo') { const state = this.userTodos(stored.owner); const result = event.result as { title?: unknown; priority?: unknown }; const now = iso(); state.todos.unshift({ id: state.nextId++, title: typeof result.title === 'string' ? result.title : 'Agent 创建的任务', description: '', priority: result.priority === 'high' || result.priority === 'low' ? result.priority : 'medium', completed: false, due_date: null, created_at: now, updated_at: now }) }
+    if (event.type === 'action_completed' && event.action === 'delete_todo') { const state = this.userTodos(stored.owner); const result = event.result as { id?: unknown }; if (typeof result.id === 'number') state.todos = state.todos.filter((todo) => todo.id !== result.id) }
     if (event.type === 'done') { if (stored.turn.status === 'running') Object.assign(stored.turn, { status: 'completed', failure_code: null, failure_message: null }); stored.turn.completed_at = iso(); stored.session.updated_at = iso(); stored.session.last_message_at = stored.session.updated_at }
   }
 }

@@ -60,7 +60,7 @@ export const test = appTest.extend<ApiFixtures>({
   },
 
   _apiState: [async ({ page }, provide) => {
-    await postE2EControl(page, '/api/__e2e__/todos/seed', { todos: defaultTodos })
+    await ensureMockPage(page)
     await provide()
   }, { auto: true }],
 })

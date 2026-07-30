@@ -1,5 +1,6 @@
 import { expect, test } from '../fixtures/agent.fixture'
 import { shouldInstallMockTransport } from '../fixtures/app.fixture'
+import { postE2EControl } from '../fixtures/api.fixture'
 import type { Page } from '@playwright/test'
 
 async function createOwnedSession(page: Page, title = '测试会话') {
@@ -20,6 +21,7 @@ test('mock routing is disabled for the real project and explicit real mode', () 
 })
 
 test('API fixture seeds todos independently', async ({ page, login, seedTodos }) => {
+  await login()
   await seedTodos([{
     id: 91,
     title: 'fixture seeded task',
@@ -30,14 +32,13 @@ test('API fixture seeds todos independently', async ({ page, login, seedTodos })
     created_at: '2026-07-13T02:00:00Z',
     updated_at: '2026-07-13T02:00:00Z',
   }])
-  await login()
   await page.goto('/tasks')
   await expect(page.getByText('fixture seeded task')).toBeVisible()
 })
 
 test('API fixture fails only the next todo request', async ({ page, login, failNextTodoRequest }) => {
-  await failNextTodoRequest({ status: 503, message: 'fixture failure' })
   await login()
+  await failNextTodoRequest({ status: 503, message: 'fixture failure' })
   const statuses = await page.evaluate(async () => {
     const first = await fetch('/api/todos')
     const second = await fetch('/api/todos')
@@ -47,8 +48,8 @@ test('API fixture fails only the next todo request', async ({ page, login, failN
 })
 
 test('API fixture preserves a created todo for the following GET', async ({ page, login, seedTodos }) => {
-  await seedTodos([])
   await login()
+  await seedTodos([])
   const result = await page.evaluate(async () => {
     const created = await fetch('/api/todos', {
       method: 'POST',
@@ -64,6 +65,7 @@ test('API fixture preserves a created todo for the following GET', async ({ page
 })
 
 test('API fixture preserves updates, completion and deletion for following GETs', async ({ page, login, seedTodos }) => {
+  await login()
   await seedTodos([{
     id: 7,
     title: 'before update',
@@ -74,7 +76,6 @@ test('API fixture preserves updates, completion and deletion for following GETs'
     created_at: '2026-07-13T02:00:00Z',
     updated_at: '2026-07-13T02:00:00Z',
   }])
-  await login()
   const result = await page.evaluate(async () => {
     await fetch('/api/todos/7', {
       method: 'PUT',
@@ -111,6 +112,176 @@ test('app fixture shares the Cookie session without injecting localStorage ident
   await expect(secondPage.getByRole('heading', { name: '今天，保持专注' })).toBeVisible()
   await expect.poll(() => secondPage.evaluate(() => localStorage.getItem('todolist.auth.session'))).toBeNull()
   await secondPage.close()
+})
+
+test('Cookie is authoritative for every protected HTTP surface', async ({ page, context, login }) => {
+  await login()
+  await context.clearCookies({ name: 'todolist_mock_session' })
+
+  const statuses = await page.evaluate(async () => Promise.all([
+    fetch('/api/auth/me').then((response) => response.status),
+    fetch('/api/todos').then((response) => response.status),
+    fetch('/api/agent/sessions').then((response) => response.status),
+  ]))
+
+  expect(statuses).toEqual([401, 401, 401])
+})
+
+test('an unknown Cookie identity cannot authorize protected APIs', async ({ page, context, login }) => {
+  await login()
+  await context.clearCookies({ name: 'todolist_mock_session' })
+  await context.addCookies([{
+    name: 'todolist_mock_session', value: 'unknown@example.com', domain: '127.0.0.1', path: '/',
+    httpOnly: true, secure: false, sameSite: 'Lax',
+  }])
+
+  const status = await page.evaluate(() => fetch('/api/todos').then((response) => response.status))
+  expect(status).toBe(401)
+})
+
+test('clearing the Cookie rejects a new Agent socket', async ({ page, context, login }) => {
+  await login()
+  const sessionId = await createOwnedSession(page, '即将失效的会话')
+  await context.clearCookies({ name: 'todolist_mock_session' })
+
+  const result = await page.evaluate((ownedSession) => new Promise<{ closeCode?: number; eventType?: string }>((resolve) => {
+    const socket = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
+    socket.onopen = () => socket.send(JSON.stringify({ message: '不应执行', session_id: ownedSession }))
+    socket.onmessage = (message) => resolve({ eventType: (JSON.parse(String(message.data)) as { type: string }).type })
+    socket.onclose = (event) => resolve({ closeCode: event.code })
+  }), sessionId)
+
+  expect(result).toEqual({ closeCode: 1008 })
+})
+
+test('clearing the Cookie invalidates an already connected Agent socket before its first frame', async ({ page, context, login }) => {
+  await login()
+  const sessionId = await createOwnedSession(page, '连接后失效的会话')
+  await page.evaluate((ownedSession) => new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
+    ;(window as typeof window & { __e2eSocket?: WebSocket }).__e2eSocket = socket
+    socket.onerror = () => reject(new Error('mock socket failed before opening'))
+    socket.onopen = () => resolve()
+  }), sessionId)
+  await context.clearCookies({ name: 'todolist_mock_session' })
+
+  const closeCode = await page.evaluate((ownedSession) => new Promise<number>((resolve, reject) => {
+    const socket = (window as typeof window & { __e2eSocket?: WebSocket }).__e2eSocket
+    if (!socket) { reject(new Error('expected connected mock socket')); return }
+    socket.onclose = (event) => resolve(event.code)
+    socket.send(JSON.stringify({ message: 'Cookie 已失效', session_id: ownedSession }))
+  }), sessionId)
+  expect(closeCode).toBe(1008)
+})
+
+test('a page on another origin cannot initiate the mocked Agent socket', async ({ page, login }) => {
+  await login()
+  const sessionId = await createOwnedSession(page, '同源限定会话')
+  await page.goto('http://localhost:3000/login')
+
+  const result = await page.evaluate((ownedSession) => new Promise<{ closeCode?: number; eventType?: string }>((resolve) => {
+    const socket = new WebSocket(`ws://127.0.0.1:3000/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
+    socket.onopen = () => socket.send(JSON.stringify({ message: '跨源请求', session_id: ownedSession }))
+    socket.onmessage = (message) => resolve({ eventType: (JSON.parse(String(message.data)) as { type: string }).type })
+    socket.onclose = (event) => resolve({ closeCode: event.code })
+  }), sessionId)
+
+  expect(result).toEqual({ closeCode: 1008 })
+})
+
+test('Todo data and mutations are isolated by Cookie owner', async ({ page, login }) => {
+  await login()
+  await postE2EControl(page, '/api/__e2e__/todos/seed', { todos: [{
+    id: 91, title: 'Alice 私有任务', description: '', priority: 'high', completed: false,
+    due_date: null, created_at: '2026-07-13T02:00:00Z', updated_at: '2026-07-13T02:00:00Z',
+  }] })
+
+  await login({ account: {
+    id: 'bob', name: 'Bob', email: 'bob@example.com', timezone: 'Asia/Shanghai (UTC+8)',
+    avatar: { kind: 'preset', value: 'amber' }, taskCount: 0, agentSessionCount: 0,
+  } })
+  await postE2EControl(page, '/api/__e2e__/todos/seed', { todos: [] })
+  const bob = await page.evaluate(async () => {
+    const list = await fetch('/api/todos').then((response) => response.json()) as { data: { items: Array<{ title: string }> } }
+    const mutation = await fetch('/api/todos/91', {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Bob 越权修改' }),
+    })
+    return { titles: list.data.items.map((todo) => todo.title), mutationStatus: mutation.status }
+  })
+
+  await login()
+  const aliceTitles = await page.evaluate(async () => {
+    const payload = await fetch('/api/todos').then((response) => response.json()) as { data: { items: Array<{ title: string }> } }
+    return payload.data.items.map((todo) => todo.title)
+  })
+  expect(bob).toEqual({ titles: [], mutationStatus: 404 })
+  expect(aliceTitles).toEqual(['Alice 私有任务'])
+})
+
+test('anonymous Todo controls cannot inject fixture state', async ({ page }) => {
+  await page.goto('/login')
+  const status = await page.evaluate(() => fetch('/api/__e2e__/todos/seed', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ todos: [] }),
+  }).then((response) => response.status))
+  expect(status).toBe(401)
+})
+
+test('Agent create and delete actions mutate only the stored turn owner', async ({ page, login, useAgentScenario }) => {
+  const runAgent = async (sessionId: string, message: string, approve = false) => page.evaluate(({ ownedSession, prompt, shouldApprove }) => new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(`/api/agent/stream?session_id=${encodeURIComponent(ownedSession)}`)
+    socket.onerror = () => reject(new Error('mock socket failed'))
+    socket.onopen = () => socket.send(JSON.stringify({ message: prompt, session_id: ownedSession }))
+    socket.onmessage = (raw) => {
+      const event = JSON.parse(String(raw.data)) as { type: string; confirmation_id?: string }
+      if (event.type === 'confirmation_required' && shouldApprove) socket.send(JSON.stringify({
+        type: 'confirmation_response', confirmation_id: event.confirmation_id, approved: true,
+      }))
+      if (event.type === 'done') resolve()
+    }
+  }), { ownedSession: sessionId, prompt: message, shouldApprove: approve })
+
+  await login()
+  await postE2EControl(page, '/api/__e2e__/todos/seed', { todos: [] })
+  await useAgentScenario('success')
+  await runAgent(await createOwnedSession(page, 'Alice 创建'), '创建 Alice 任务')
+
+  await login({ account: {
+    id: 'bob', name: 'Bob', email: 'bob@example.com', timezone: 'Asia/Shanghai (UTC+8)',
+    avatar: { kind: 'preset', value: 'amber' }, taskCount: 0, agentSessionCount: 0,
+  } })
+  await postE2EControl(page, '/api/__e2e__/todos/seed', { todos: [{
+    id: 1, title: 'Bob 私有任务', description: '', priority: 'medium', completed: false,
+    due_date: null, created_at: '2026-07-13T02:00:00Z', updated_at: '2026-07-13T02:00:00Z',
+  }] })
+
+  await login()
+  let aliceTitles = await page.evaluate(async () => {
+    const payload = await fetch('/api/todos').then((response) => response.json()) as { data: { items: Array<{ title: string }> } }
+    return payload.data.items.map((todo) => todo.title)
+  })
+  expect(aliceTitles).toEqual(['完成前端原型'])
+
+  await postE2EControl(page, '/api/__e2e__/todos/seed', { todos: [{
+    id: 1, title: 'Alice 待删除', description: '', priority: 'medium', completed: false,
+    due_date: null, created_at: '2026-07-13T02:00:00Z', updated_at: '2026-07-13T02:00:00Z',
+  }] })
+  await useAgentScenario('confirmationRequired')
+  await runAgent(await createOwnedSession(page, 'Alice 删除'), '删除 Alice 任务', true)
+  aliceTitles = await page.evaluate(async () => {
+    const payload = await fetch('/api/todos').then((response) => response.json()) as { data: { items: Array<{ title: string }> } }
+    return payload.data.items.map((todo) => todo.title)
+  })
+  expect(aliceTitles).toEqual([])
+
+  await login({ account: {
+    id: 'bob', name: 'Bob', email: 'bob@example.com', timezone: 'Asia/Shanghai (UTC+8)',
+    avatar: { kind: 'preset', value: 'amber' }, taskCount: 0, agentSessionCount: 0,
+  } })
+  const bobTitles = await page.evaluate(async () => {
+    const payload = await fetch('/api/todos').then((response) => response.json()) as { data: { items: Array<{ title: string }> } }
+    return payload.data.items.map((todo) => todo.title)
+  })
+  expect(bobTitles).toEqual(['Bob 私有任务'])
 })
 
 test('Agent fixture streams a deterministic success sequence', async ({ page, login, useAgentScenario }) => {

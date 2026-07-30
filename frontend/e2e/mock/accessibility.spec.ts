@@ -121,8 +121,9 @@ test.describe('WCAG 2.2 AA automated checks', () => {
 })
 
 test('completes the primary task controls with keyboard only', async ({ page, login, seedTodos }) => {
+  await login()
   await seedTodos([])
-  await openAuthenticated(page, login, '/tasks')
+  await page.goto('/tasks')
 
   const newTask = page.locator('header').getByRole('button', { name: '新建任务' })
   await tabTo(page, newTask)
