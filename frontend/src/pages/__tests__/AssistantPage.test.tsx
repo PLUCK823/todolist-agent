@@ -195,7 +195,7 @@ describe('AssistantPage', () => {
     expect(within(markdownTurn).getByRole('table')).toHaveTextContent('原型')
     expect(document.querySelector('script')).toBeNull()
     expect(Array.from(markdownTurn.children).map((node) => node.getAttribute('data-role') ?? node.getAttribute('data-part')))
-      .toEqual(['user', 'assistant', 'execution-details'])
+      .toEqual(['user', 'execution-details', 'assistant'])
     expect(screen.getAllByLabelText('Agent 执行步骤')).toHaveLength(2)
     expect(screen.queryByText('当前任务轨迹')).not.toBeInTheDocument()
   })

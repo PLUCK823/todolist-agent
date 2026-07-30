@@ -137,11 +137,6 @@ export default function AgentTurn({
           <p>{message.content}</p>
         </article>
       ))}
-      {assistantMessages.map((message) => (
-        <article key={message.id} className="agent-turn__message agent-turn__message--assistant" data-role="assistant" aria-label="助手回复">
-          <AgentMarkdown content={message.content} />
-        </article>
-      ))}
       <div className="agent-turn__details" data-part="execution-details">
         {turn.resultUncertain ? (
           <p className="agent-turn__uncertain" role="alert">操作可能已生效，请检查任务状态。</p>
@@ -185,6 +180,11 @@ export default function AgentTurn({
           />
         </div>
       </div>
+      {assistantMessages.map((message) => (
+        <article key={message.id} className="agent-turn__message agent-turn__message--assistant" data-role="assistant" aria-label="助手回复">
+          <AgentMarkdown content={message.content} />
+        </article>
+      ))}
     </section>
   )
 }

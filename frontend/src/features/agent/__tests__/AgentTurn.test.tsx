@@ -22,12 +22,12 @@ function makeTurn(overrides: Partial<AgentTurnModel> = {}): AgentTurnModel {
 }
 
 describe('AgentTurn', () => {
-  it('renders user, assistant, then its execution disclosure in DOM order', () => {
+  it('renders execution details between the user message and assistant reply', () => {
     render(<AgentTurn turn={makeTurn()} />)
 
     const turn = screen.getByTestId('agent-turn-turn-1')
     expect(Array.from(turn.children).map((node) => node.getAttribute('data-role') ?? node.getAttribute('data-part')))
-      .toEqual(['user', 'assistant', 'execution-details'])
+      .toEqual(['user', 'execution-details', 'assistant'])
     expect(within(turn).getAllByRole('article').map((node) => node.dataset.role)).toEqual(['user', 'assistant'])
   })
 
