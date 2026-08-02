@@ -246,7 +246,7 @@ func TestAuthPatchPersistsProfileCountsAndRejectsDuplicateEmail(t *testing.T) {
 	fixture := setupAuthFixture(t, handler.CookieConfig{AccessName: "access", RefreshName: "refresh"})
 	first, firstAccess, _ := registerAndLogin(t, fixture, "Alice", "alice@example.com")
 	_, _, _ = registerAndLogin(t, fixture, "Bob", "bob@example.com")
-	if err := fixture.db.Create(&model.Todo{Title: "Task"}).Error; err != nil {
+	if err := fixture.db.Create(&model.Todo{Title: "Task", OwnerID: first["id"].(string)}).Error; err != nil {
 		t.Fatalf("create todo fixture: %v", err)
 	}
 	if err := fixture.db.Exec("INSERT INTO agent_sessions (id, owner_id, title) VALUES (?, ?, ?)", uuid.NewString(), first["id"], "Session").Error; err != nil {

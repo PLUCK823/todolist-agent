@@ -64,7 +64,7 @@ type AuthRepository interface {
 	FindUserByEmail(context.Context, string) (*model.User, error)
 	FindUserByID(context.Context, string) (*model.User, error)
 	UpdateUserProfile(context.Context, string, model.ProfilePatch) error
-	CountTodos(context.Context) (int64, error)
+	CountTodos(context.Context, string) (int64, error)
 	CountAgentSessions(context.Context, string) (int64, error)
 	CreateSession(context.Context, *model.AuthSession) error
 	FindActiveSessionByID(context.Context, string, time.Time) (*model.AuthSession, error)
@@ -374,7 +374,7 @@ func (s *AuthService) UpdateAccount(ctx context.Context, userID string, req Acco
 }
 
 func (s *AuthService) accountFromUser(ctx context.Context, user *model.User) (*Account, error) {
-	taskCount, err := s.repo.CountTodos(ctx)
+	taskCount, err := s.repo.CountTodos(ctx, user.ID)
 	if err != nil {
 		return nil, fmt.Errorf("%w: count todos: %v", ErrAuthenticationStore, err)
 	}

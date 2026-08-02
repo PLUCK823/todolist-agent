@@ -76,9 +76,9 @@ func (r *AuthRepository) UpdateUserProfile(
 	return nil
 }
 
-func (r *AuthRepository) CountTodos(ctx context.Context) (int64, error) {
+func (r *AuthRepository) CountTodos(ctx context.Context, ownerID string) (int64, error) {
 	var count int64
-	if err := r.db.WithContext(ctx).Model(&model.Todo{}).Count(&count).Error; err != nil {
+	if err := r.db.WithContext(ctx).Model(&model.Todo{}).Where("owner_id = ?", ownerID).Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return count, nil

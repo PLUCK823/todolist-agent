@@ -9,12 +9,11 @@ import logging
 import os
 import signal
 import uuid
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
-from uuid import UUID
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 import asyncpg
 from fastapi import (
@@ -28,8 +27,8 @@ from fastapi import (
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from pydantic import ValidationError
 
 from .agent import (
     AgentEventSink,
@@ -65,7 +64,7 @@ from .schemas import (
     SessionCreateRequest,
     SessionRenameRequest,
 )
-
+from .tools import backend_auth_context
 
 logger = logging.getLogger(__name__)
 AGENT_RECOVERY_LOCK_KEY = 0x4147454E54524543  # Stable bigint key: "AGENTREC".
@@ -517,6 +516,8 @@ async def _execute_durable_message(
     on_event: AgentEventSink | None = None,
     on_terminal: Callable[[ProcessResult], Awaitable[None]] | None = None,
     lease: SessionRuntimeLease | None = None,
+    backend_access_token: str | None = None,
+    backend_origin: str | None = None,
 ) -> ProcessResult:
     """Run the production turn lifecycle shared by HTTP and WebSocket."""
     active_lease = lease or await coordinator.acquire(owner_id, session_id)
@@ -537,7 +538,13 @@ async def _execute_durable_message(
         await coordinator.attach(active_lease, current)
         attached = True
         try:
-            result = await process_message(str(session_id), message, **kwargs)
+            delegated_auth = (
+                backend_auth_context(backend_access_token, backend_origin)
+                if backend_access_token and backend_origin
+                else nullcontext()
+            )
+            with delegated_auth:
+                result = await process_message(str(session_id), message, **kwargs)
             if durable_enabled:
                 await persistence.complete(result.reply)
         except asyncio.CancelledError:
@@ -1149,6 +1156,8 @@ def create_app(
                 session_id,
                 req.message,
                 detail,
+                backend_access_token=request.cookies.get(request.app.state.auth_settings.access_cookie),
+                backend_origin=request.headers.get("origin"),
             )
             reply, actions, sid = result
         except HistoryPersistenceError as exc:
@@ -1286,13 +1295,17 @@ def create_app(
                 )
                 if durable_retry:
                     retry_kwargs["persistence"] = retry_persistence
-                await retry_failed_step(
-                    session_id,
-                    request.step_id,
-                    request.retry_token,
-                    writer.send_json,
-                    **retry_kwargs,
-                )
+                with backend_auth_context(
+                    ws.cookies.get(settings_.access_cookie, ""),
+                    ws.headers.get("origin", ""),
+                ):
+                    await retry_failed_step(
+                        session_id,
+                        request.step_id,
+                        request.retry_token,
+                        writer.send_json,
+                        **retry_kwargs,
+                    )
                 await _finish_successful_stream(writer, ws)
             except InvalidRetryStep:
                 await writer.send_json(
@@ -1365,6 +1378,8 @@ def create_app(
             on_event=writer.send_json,
             on_terminal=send_reply,
             lease=lease,
+            backend_access_token=ws.cookies.get(settings_.access_cookie),
+            backend_origin=ws.headers.get("origin"),
         )
         try:
             process_task = asyncio.create_task(execution)

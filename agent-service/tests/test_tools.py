@@ -3,20 +3,38 @@
 import pytest
 from httpx import RequestError
 
+import app.tools as tools_module
 from app.tools import (
-    create_todo,
-    list_todos,
-    get_todo,
-    update_todo,
-    complete_todo,
-    delete_todo,
-    batch_create_todos,
-    batch_get_todos,
-    batch_update_todos,
-    batch_set_todo_status,
-    batch_delete_todos,
     BACKEND_URL,
+    batch_create_todos,
+    batch_delete_todos,
+    batch_get_todos,
+    batch_set_todo_status,
+    batch_update_todos,
+    complete_todo,
+    create_todo,
+    delete_todo,
+    get_todo,
+    list_todos,
+    update_todo,
 )
+
+
+@pytest.mark.asyncio
+async def test_backend_requests_delegate_the_authenticated_browser_credential(httpx_mock):
+    assert hasattr(tools_module, "backend_auth_context"), "Agent tools need a request-scoped backend credential"
+    httpx_mock.add_response(
+        url=f"{BACKEND_URL}/todos?page_size=20",
+        method="GET",
+        json={"code": 0, "message": "ok", "data": {"items": [], "total": 0}},
+    )
+
+    with tools_module.backend_auth_context("signed-access-token", "http://localhost:3000"):
+        await list_todos()
+
+    request = httpx_mock.get_request()
+    assert request.headers["cookie"] == "todolist_access=signed-access-token"
+    assert request.headers["origin"] == "http://localhost:3000"
 
 
 @pytest.mark.asyncio

@@ -162,8 +162,25 @@ func (m *mockFailingService) Uncomplete(id uint) (*model.Todo, error) {
 func setupTestRouter(svc TodoServiceInterface) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	RegisterRoutes(router, svc)
+	registerUnprotectedTestTodoRoutes(router, NewTodoHandler(svc))
 	return router
+}
+
+func registerUnprotectedTestTodoRoutes(router *gin.Engine, h *TodoHandler) {
+	router.GET("/api/health", HealthCheck)
+	group := router.Group("/api/todos")
+	group.GET("", h.ListTodos)
+	group.POST("", h.CreateTodo)
+	group.POST("/batch", h.BatchCreateTodos)
+	group.POST("/batch/get", h.BatchGetTodos)
+	group.PUT("/batch", h.BatchUpdateTodos)
+	group.PATCH("/batch/status", h.BatchSetTodoStatus)
+	group.DELETE("/batch", h.BatchDeleteTodos)
+	group.GET("/:id", h.GetTodo)
+	group.PUT("/:id", h.UpdateTodo)
+	group.DELETE("/:id", h.DeleteTodo)
+	group.PATCH("/:id/complete", h.CompleteTodo)
+	group.PATCH("/:id/uncomplete", h.UncompleteTodo)
 }
 
 // Helper to make request and get response

@@ -23,21 +23,31 @@ type TodoFilter struct {
 }
 
 type TodoRepository struct {
-	db *gorm.DB
+	db      *gorm.DB
+	ownerID string
 }
 
 func NewTodoRepository(db *gorm.DB) *TodoRepository {
 	return &TodoRepository{db: db}
 }
 
+func (r *TodoRepository) ForOwner(ownerID string) *TodoRepository {
+	return &TodoRepository{db: r.db, ownerID: ownerID}
+}
+
+func (r *TodoRepository) owned(query *gorm.DB) *gorm.DB {
+	return query.Where("owner_id = ?", r.ownerID)
+}
+
 func (r *TodoRepository) Create(todo *model.Todo) error {
+	todo.OwnerID = r.ownerID
 	result := r.db.Create(todo)
 	return result.Error
 }
 
 func (r *TodoRepository) GetByID(id uint) (*model.Todo, error) {
 	var todo model.Todo
-	result := r.db.First(&todo, id)
+	result := r.owned(r.db).First(&todo, id)
 	if result.Error != nil {
 		if result.Error == gorm.ErrRecordNotFound {
 			return nil, nil
@@ -51,7 +61,7 @@ func (r *TodoRepository) List(filter TodoFilter) ([]model.Todo, int64, error) {
 	var todos []model.Todo
 	var total int64
 
-	query := r.db.Model(&model.Todo{})
+	query := r.owned(r.db.Model(&model.Todo{}))
 
 	// Apply filters
 	if filter.Completed != nil {
@@ -130,12 +140,19 @@ func (r *TodoRepository) List(filter TodoFilter) ([]model.Todo, int64, error) {
 }
 
 func (r *TodoRepository) Update(todo *model.Todo) error {
-	result := r.db.Save(todo)
-	return result.Error
+	todo.OwnerID = r.ownerID
+	result := r.owned(r.db.Model(&model.Todo{})).Where("id = ?", todo.ID).Select("*").Updates(todo)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *TodoRepository) Delete(id uint) error {
-	result := r.db.Delete(&model.Todo{}, id)
+	result := r.owned(r.db).Delete(&model.Todo{}, id)
 	if result.Error != nil {
 		return result.Error
 	}

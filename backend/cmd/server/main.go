@@ -110,7 +110,9 @@ func SetupApp() (*gin.Engine, *zap.Logger, error) {
 	router.Use(middleware.CORS())
 	router.Use(middleware.Logger(logger))
 	router.Use(gin.Recovery())
-	handler.RegisterRoutes(router, todoSvc)
+	handler.RegisterRoutes(router, func(ownerID string) handler.TodoServiceInterface {
+		return todoSvc.ForOwner(ownerID)
+	}, viper.GetString("AUTH_ACCESS_COOKIE"), authSvc, viper.GetString("AUTH_ALLOWED_ORIGINS"))
 	handler.RegisterAuthRoutes(router, authHandler, viper.GetString("AUTH_ALLOWED_ORIGINS"))
 
 	return router, logger, nil

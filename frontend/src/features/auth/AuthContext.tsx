@@ -4,13 +4,13 @@ import { authApi } from './auth.api'
 import type { Account, AuthApi, LoginInput, ProfileUpdate, RegisterInput } from './auth.types'
 import { AuthContext, type AuthStatus } from './auth-context'
 
-export function AuthProvider({ children, api = authApi, initialAccount }: { children: ReactNode; api?: AuthApi; initialAccount?: Account }) {
-  const [status, setStatus] = useState<AuthStatus>(initialAccount ? 'authenticated' : 'loading')
+export function AuthProvider({ children, api = authApi, initialAccount, bootstrapSession = true }: { children: ReactNode; api?: AuthApi; initialAccount?: Account; bootstrapSession?: boolean }) {
+  const [status, setStatus] = useState<AuthStatus>(initialAccount ? 'authenticated' : bootstrapSession ? 'loading' : 'anonymous')
   const [account, setAccount] = useState<Account | null>(initialAccount ?? null)
   const operation = useRef(0)
 
   useEffect(() => {
-    if (initialAccount) return
+    if (initialAccount || !bootstrapSession) return
     let active = true
     const currentOperation = operation.current
     api.getSession()
@@ -25,7 +25,7 @@ export function AuthProvider({ children, api = authApi, initialAccount }: { chil
         setStatus('anonymous')
       })
     return () => { active = false }
-  }, [api, initialAccount])
+  }, [api, bootstrapSession, initialAccount])
 
   useEffect(() => {
     const onAuthExpired = (event: Event) => {

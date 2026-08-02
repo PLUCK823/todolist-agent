@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"backend/internal/middleware"
 	"backend/internal/model"
 	"backend/internal/service"
 
@@ -30,10 +31,28 @@ type TodoHandler struct {
 	batchSvc TodoBatchServiceInterface
 }
 
+const scopedTodoServiceKey = "todo.scoped-service"
+
 // NewTodoHandler creates a new TodoHandler
 func NewTodoHandler(svc TodoServiceInterface) *TodoHandler {
 	batchSvc, _ := svc.(TodoBatchServiceInterface)
 	return &TodoHandler{svc: svc, batchSvc: batchSvc}
+}
+
+func (h *TodoHandler) service(c *gin.Context) TodoServiceInterface {
+	if value, ok := c.Get(scopedTodoServiceKey); ok {
+		if scoped, ok := value.(TodoServiceInterface); ok {
+			return scoped
+		}
+	}
+	return h.svc
+}
+
+func (h *TodoHandler) batchService(c *gin.Context) TodoBatchServiceInterface {
+	if scoped, ok := h.service(c).(TodoBatchServiceInterface); ok {
+		return scoped
+	}
+	return h.batchSvc
 }
 
 // response helpers
@@ -66,7 +85,7 @@ func (h *TodoHandler) CreateTodo(c *gin.Context) {
 		return
 	}
 
-	todo, err := h.svc.Create(req)
+	todo, err := h.service(c).Create(req)
 	if err != nil {
 		if errors.Is(err, model.ErrEmptyTitle) {
 			errorResponse(c, http.StatusBadRequest, 40001, err.Error())
@@ -95,7 +114,7 @@ func (h *TodoHandler) GetTodo(c *gin.Context) {
 		return
 	}
 
-	todo, err := h.svc.GetByID(id)
+	todo, err := h.service(c).GetByID(id)
 	if err != nil {
 		if errors.Is(err, service.ErrTodoNotFound) {
 			errorResponse(c, http.StatusNotFound, 40401, "待办不存在")
@@ -146,7 +165,7 @@ func (h *TodoHandler) ListTodos(c *gin.Context) {
 		return
 	}
 
-	result, err := h.svc.List(req)
+	result, err := h.service(c).List(req)
 	if err != nil {
 		errorResponse(c, http.StatusInternalServerError, 50001, "服务器内部错误")
 		return
@@ -169,7 +188,7 @@ func (h *TodoHandler) UpdateTodo(c *gin.Context) {
 		return
 	}
 
-	todo, err := h.svc.Update(id, req)
+	todo, err := h.service(c).Update(id, req)
 	if err != nil {
 		if errors.Is(err, service.ErrTodoNotFound) {
 			errorResponse(c, http.StatusNotFound, 40401, "待办不存在")
@@ -198,7 +217,7 @@ func (h *TodoHandler) DeleteTodo(c *gin.Context) {
 		return
 	}
 
-	err = h.svc.Delete(id)
+	err = h.service(c).Delete(id)
 	if err != nil {
 		if errors.Is(err, service.ErrTodoNotFound) {
 			errorResponse(c, http.StatusNotFound, 40401, "待办不存在")
@@ -219,7 +238,7 @@ func (h *TodoHandler) CompleteTodo(c *gin.Context) {
 		return
 	}
 
-	todo, err := h.svc.Complete(id)
+	todo, err := h.service(c).Complete(id)
 	if err != nil {
 		if errors.Is(err, service.ErrTodoNotFound) {
 			errorResponse(c, http.StatusNotFound, 40401, "待办不存在")
@@ -240,7 +259,7 @@ func (h *TodoHandler) UncompleteTodo(c *gin.Context) {
 		return
 	}
 
-	todo, err := h.svc.Uncomplete(id)
+	todo, err := h.service(c).Uncomplete(id)
 	if err != nil {
 		if errors.Is(err, service.ErrTodoNotFound) {
 			errorResponse(c, http.StatusNotFound, 40401, "待办不存在")
@@ -264,12 +283,28 @@ func parseIDParam(c *gin.Context) (uint, error) {
 }
 
 // RegisterRoutes registers all todo routes on the given router
-func RegisterRoutes(r *gin.Engine, svc TodoServiceInterface) {
-	h := NewTodoHandler(svc)
+func RegisterRoutes(r *gin.Engine, resolve func(string) TodoServiceInterface, accessCookieName string, validator middleware.AccessValidator, allowedOrigins string) {
+	h := NewTodoHandler(nil)
 
 	r.GET("/api/health", HealthCheck)
 
 	todoGroup := r.Group("/api/todos")
+	todoGroup.Use(middleware.Authenticate(accessCookieName, validator))
+	todoGroup.Use(middleware.OriginGuard(allowedOrigins))
+	todoGroup.Use(func(c *gin.Context) {
+		principal, ok := middleware.PrincipalFromContext(c)
+		if !ok {
+			errorResponse(c, http.StatusUnauthorized, 40101, "未登录或登录已失效")
+			return
+		}
+		scoped := resolve(principal.UserID)
+		if scoped == nil {
+			errorResponse(c, http.StatusServiceUnavailable, 50301, "认证服务暂时不可用")
+			return
+		}
+		c.Set(scopedTodoServiceKey, scoped)
+		c.Next()
+	})
 	{
 		todoGroup.GET("", h.ListTodos)
 		todoGroup.POST("", h.CreateTodo)

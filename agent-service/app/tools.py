@@ -8,11 +8,24 @@ docstring so the LLM can correctly infer when and how to use it.
 from __future__ import annotations
 
 import os
-from typing import Any, Optional, Literal
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Literal, Optional
 
 import httpx
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8080/api")
+BACKEND_ACCESS_COOKIE = os.getenv("AUTH_ACCESS_COOKIE", "todolist_access")
+_backend_auth: ContextVar[tuple[str, str] | None] = ContextVar("backend_auth", default=None)
+
+
+@contextmanager
+def backend_auth_context(access_token: str, origin: str):
+    token = _backend_auth.set((access_token, origin))
+    try:
+        yield
+    finally:
+        _backend_auth.reset(token)
 
 
 # ---------------------------------------------------------------------------
@@ -36,10 +49,13 @@ async def _request(
         If the backend is unreachable or times out.
     """
     url = f"{BACKEND_URL}{path}"
+    delegated = _backend_auth.get()
+    headers = {"Origin": delegated[1]} if delegated else None
+    cookies = {BACKEND_ACCESS_COOKIE: delegated[0]} if delegated else None
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, cookies=cookies) as client:
             resp = await client.request(
-                method, url, json=json_body, params=params
+                method, url, json=json_body, params=params, headers=headers
             )
 
             # DELETE returns 204 with no body — success

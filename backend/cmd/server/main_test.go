@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"backend/internal/database"
 )
+
+var integrationHTTPClients sync.Map
 
 func setupIntegrationApp(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -37,7 +40,11 @@ func setupIntegrationApp(t *testing.T) *httptest.Server {
 		t.Fatalf("SetupApp() failed: %v", err)
 	}
 
-	return httptest.NewServer(router)
+	server := httptest.NewServer(router)
+	client := authenticatedClient(t, server.URL, "Integration User", "integration@example.com")
+	integrationHTTPClients.Store(server.URL, client)
+	t.Cleanup(func() { integrationHTTPClients.Delete(server.URL) })
+	return server
 }
 
 func doRequest(ts *httptest.Server, method, path string, body io.Reader) *http.Response {
@@ -45,7 +52,14 @@ func doRequest(ts *httptest.Server, method, path string, body io.Reader) *http.R
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := http.DefaultClient
+	if configured, ok := integrationHTTPClients.Load(ts.URL); ok {
+		client = configured.(*http.Client)
+		if method == http.MethodPost || method == http.MethodPut || method == http.MethodPatch || method == http.MethodDelete {
+			req.Header.Set("Origin", browserOrigin)
+		}
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		panic(fmt.Sprintf("request failed: %v", err))
 	}

@@ -29,7 +29,7 @@ func (r accessSessionRepository) FindUserByID(context.Context, string) (*model.U
 func (r accessSessionRepository) UpdateUserProfile(context.Context, string, model.ProfilePatch) error {
 	return nil
 }
-func (r accessSessionRepository) CountTodos(context.Context) (int64, error) { return 0, nil }
+func (r accessSessionRepository) CountTodos(context.Context, string) (int64, error) { return 0, nil }
 func (r accessSessionRepository) CountAgentSessions(context.Context, string) (int64, error) {
 	return 0, nil
 }

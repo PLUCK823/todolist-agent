@@ -74,6 +74,16 @@ func NewTodoService(repo TodoRepository) *TodoService {
 	return &TodoService{repo: repo, batchRepo: batchRepo}
 }
 
+func (s *TodoService) ForOwner(ownerID string) *TodoService {
+	scoper, ok := s.repo.(interface {
+		ForOwner(string) *repository.TodoRepository
+	})
+	if !ok || ownerID == "" {
+		return nil
+	}
+	return NewTodoService(scoper.ForOwner(ownerID))
+}
+
 // Create validates and creates a new todo
 func (s *TodoService) Create(req CreateTodoRequest) (*model.Todo, error) {
 	// Set default priority

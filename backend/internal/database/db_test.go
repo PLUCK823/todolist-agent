@@ -1,7 +1,10 @@
 package database
 
 import (
+	"path/filepath"
 	"testing"
+
+	"backend/internal/model"
 )
 
 func TestInitDB_SQLite(t *testing.T) {
@@ -66,6 +69,39 @@ func TestInitDBMigratesAuthModels(t *testing.T) {
 		if !db.Migrator().HasTable(table) {
 			t.Errorf("expected %s table to exist", table)
 		}
+	}
+}
+
+func TestInitDBBackfillsLegacyTodosWhenThereIsExactlyOneOwner(t *testing.T) {
+	dsn := filepath.Join(t.TempDir(), "legacy.db")
+	db, err := InitDB(Config{Driver: "sqlite", DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := model.User{ID: "11111111-1111-1111-1111-111111111111", Email: "owner@example.com", DisplayName: "Owner", Timezone: "UTC", PasswordHash: "hash"}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacy := model.Todo{Title: "legacy", Priority: "medium"}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("UPDATE todos SET owner_id = NULL WHERE id = ?", legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	sqlDB, _ := db.DB()
+	_ = sqlDB.Close()
+
+	reopened, err := InitDB(Config{Driver: "sqlite", DSN: dsn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var migrated model.Todo
+	if err := reopened.First(&migrated, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migrated.OwnerID != user.ID {
+		t.Fatalf("expected legacy todo owner %q, got %q", user.ID, migrated.OwnerID)
 	}
 }
 

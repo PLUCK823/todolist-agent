@@ -41,7 +41,7 @@ func (missingUserAuthRepository) FindUserByID(context.Context, string) (*model.U
 func (missingUserAuthRepository) UpdateUserProfile(context.Context, string, model.ProfilePatch) error {
 	return nil
 }
-func (missingUserAuthRepository) CountTodos(context.Context) (int64, error) { return 0, nil }
+func (missingUserAuthRepository) CountTodos(context.Context, string) (int64, error) { return 0, nil }
 func (missingUserAuthRepository) CountAgentSessions(context.Context, string) (int64, error) {
 	return 0, nil
 }
@@ -80,11 +80,11 @@ type faultingAuthRepository struct {
 	countAgentSessionsErr error
 }
 
-func (r *faultingAuthRepository) CountTodos(ctx context.Context) (int64, error) {
+func (r *faultingAuthRepository) CountTodos(ctx context.Context, ownerID string) (int64, error) {
 	if r.countTodosErr != nil {
 		return 0, r.countTodosErr
 	}
-	return r.AuthRepository.CountTodos(ctx)
+	return r.AuthRepository.CountTodos(ctx, ownerID)
 }
 
 func (r *faultingAuthRepository) CountAgentSessions(ctx context.Context, ownerID string) (int64, error) {

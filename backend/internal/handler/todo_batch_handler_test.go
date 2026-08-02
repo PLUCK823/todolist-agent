@@ -34,7 +34,7 @@ func setupBatchRouter(t *testing.T) *gin.Engine {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	RegisterRoutes(router, service.NewTodoService(repository.NewTodoRepository(db)))
+	registerUnprotectedTestTodoRoutes(router, NewTodoHandler(service.NewTodoService(repository.NewTodoRepository(db))))
 	return router
 }
 

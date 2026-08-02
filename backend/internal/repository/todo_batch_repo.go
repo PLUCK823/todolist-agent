@@ -9,6 +9,9 @@ import (
 )
 
 func (r *TodoRepository) CreateBatch(todos []*model.Todo) error {
+	for _, todo := range todos {
+		todo.OwnerID = r.ownerID
+	}
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		return tx.Create(&todos).Error
 	})
@@ -35,7 +38,7 @@ func reorderTodos(ids []uint, rows []model.Todo) ([]model.Todo, error) {
 
 func (r *TodoRepository) GetByIDs(ids []uint) ([]model.Todo, error) {
 	var rows []model.Todo
-	if err := r.db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+	if err := r.owned(r.db).Where("id IN ?", ids).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return reorderTodos(ids, rows)
@@ -47,9 +50,9 @@ func sortedIDs(ids []uint) []uint {
 	return ordered
 }
 
-func loadBatchForUpdate(tx *gorm.DB, ids []uint) (map[uint]*model.Todo, error) {
+func loadBatchForUpdate(tx *gorm.DB, ownerID string, ids []uint) (map[uint]*model.Todo, error) {
 	var rows []model.Todo
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", sortedIDs(ids)).Order("id ASC").Find(&rows).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("owner_id = ? AND id IN ?", ownerID, sortedIDs(ids)).Order("id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	if len(rows) != len(ids) {
@@ -78,7 +81,7 @@ func saveBatch(tx *gorm.DB, ids []uint, items map[uint]*model.Todo) ([]model.Tod
 func (r *TodoRepository) UpdateBatch(ids []uint, mutate func(map[uint]*model.Todo) error) ([]model.Todo, error) {
 	var result []model.Todo
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		items, err := loadBatchForUpdate(tx, ids)
+		items, err := loadBatchForUpdate(tx, r.ownerID, ids)
 		if err != nil {
 			return err
 		}
@@ -103,7 +106,7 @@ func (r *TodoRepository) SetCompletedBatch(ids []uint, completed bool) ([]model.
 func (r *TodoRepository) DeleteBatch(ids []uint) ([]model.Todo, error) {
 	var result []model.Todo
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		items, err := loadBatchForUpdate(tx, ids)
+		items, err := loadBatchForUpdate(tx, r.ownerID, ids)
 		if err != nil {
 			return err
 		}
@@ -111,7 +114,7 @@ func (r *TodoRepository) DeleteBatch(ids []uint) ([]model.Todo, error) {
 		for index, id := range ids {
 			result[index] = *items[id]
 		}
-		deleteResult := tx.Delete(&model.Todo{}, sortedIDs(ids))
+		deleteResult := tx.Where("owner_id = ?", r.ownerID).Delete(&model.Todo{}, sortedIDs(ids))
 		if deleteResult.Error != nil {
 			return deleteResult.Error
 		}

@@ -46,7 +46,7 @@ func bindBatchJSON(c *gin.Context, target any) bool {
 }
 
 func (h *TodoHandler) unavailableBatch(c *gin.Context) bool {
-	if h.batchSvc == nil {
+	if h.batchService(c) == nil {
 		errorResponse(c, http.StatusInternalServerError, 50001, "服务器内部错误")
 		return true
 	}
@@ -61,7 +61,7 @@ func (h *TodoHandler) BatchCreateTodos(c *gin.Context) {
 	if !bindBatchJSON(c, &req) {
 		return
 	}
-	result, err := h.batchSvc.BatchCreate(req)
+	result, err := h.batchService(c).BatchCreate(req)
 	if err != nil {
 		h.handleBatchError(c, err)
 		return
@@ -77,7 +77,7 @@ func (h *TodoHandler) BatchGetTodos(c *gin.Context) {
 	if !bindBatchJSON(c, &req) {
 		return
 	}
-	result, err := h.batchSvc.BatchGet(req)
+	result, err := h.batchService(c).BatchGet(req)
 	if err != nil {
 		h.handleBatchError(c, err)
 		return
@@ -93,7 +93,7 @@ func (h *TodoHandler) BatchUpdateTodos(c *gin.Context) {
 	if !bindBatchJSON(c, &req) {
 		return
 	}
-	result, err := h.batchSvc.BatchUpdate(req)
+	result, err := h.batchService(c).BatchUpdate(req)
 	if err != nil {
 		h.handleBatchError(c, err)
 		return
@@ -109,7 +109,7 @@ func (h *TodoHandler) BatchSetTodoStatus(c *gin.Context) {
 	if !bindBatchJSON(c, &req) {
 		return
 	}
-	result, err := h.batchSvc.BatchSetStatus(req)
+	result, err := h.batchService(c).BatchSetStatus(req)
 	if err != nil {
 		h.handleBatchError(c, err)
 		return
@@ -125,7 +125,7 @@ func (h *TodoHandler) BatchDeleteTodos(c *gin.Context) {
 	if !bindBatchJSON(c, &req) {
 		return
 	}
-	result, err := h.batchSvc.BatchDelete(req)
+	result, err := h.batchService(c).BatchDelete(req)
 	if err != nil {
 		h.handleBatchError(c, err)
 		return
