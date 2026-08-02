@@ -9,7 +9,7 @@ import { ShellProvider } from '../../shell/ShellContext'
 import { TaskDashboard } from '../../todos/TaskDashboard'
 import { AgentSessionProvider } from '../AgentSessionContext'
 import AgentStepTimeline from '../AgentStepTimeline'
-import type { AgentSessionValue, AgentStep } from '../agent.types'
+import type { AgentSessionValue, AgentStep, AgentTurn } from '../agent.types'
 
 function session(overrides: Partial<AgentSessionValue> = {}): AgentSessionValue {
   return {
@@ -135,6 +135,29 @@ describe('AgentStepTimeline', () => {
     expect(card).not.toHaveTextContent('[object Object]')
   })
 
+  it('keeps action results collapsed until their disclosure is opened', async () => {
+    const user = userEvent.setup()
+    render(<AgentStepTimeline
+      steps={[{
+        id: 'action', label: '创建任务', status: 'completed', action: 'create_todo',
+        result: { title: '默认隐藏的结果' },
+      }]}
+      onRetry={vi.fn()}
+      onConfirm={vi.fn()}
+      onReject={vi.fn()}
+    />)
+
+    const card = screen.getByLabelText('create_todo 执行结果')
+    const disclosure = within(card).getByRole('button', { name: 'create_todo 执行结果详情' })
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    expect(within(card).getByText(/默认隐藏的结果/)).not.toBeVisible()
+
+    await user.click(disclosure)
+
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(within(card).getByText(/默认隐藏的结果/)).toBeVisible()
+  })
+
   it('safely renders cyclic results and hides invalid elapsed timers', () => {
     const interval = vi.spyOn(window, 'setInterval')
     const cyclic: Record<string, unknown> = { title: '结果' }
@@ -153,6 +176,34 @@ describe('AgentStepTimeline', () => {
 })
 
 describe('AgentPanel integration', () => {
+  it('renders durable turns with execution details between the messages and collapsed when completed', () => {
+    const turn: AgentTurn = {
+      id: 'turn-panel',
+      ordinal: 1,
+      status: 'completed',
+      startedAt: '2026-08-02T08:00:00Z',
+      completedAt: '2026-08-02T08:00:02Z',
+      resultUncertain: false,
+      messages: [
+        { id: 'user-panel', role: 'user', content: '删除已完成任务', createdAt: '2026-08-02T08:00:00Z' },
+        { id: 'assistant-panel', role: 'assistant', content: '已经处理完成。', createdAt: '2026-08-02T08:00:02Z' },
+      ],
+      steps: [{ id: 'delete-panel', label: '调用 Todo API', status: 'completed', action: 'batch_delete_todos', result: { count: 10 } }],
+    }
+    render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session({
+      messages: turn.messages,
+      steps: turn.steps,
+      status: 'done',
+      turns: [turn],
+    })}><AgentPanelHarness /></AgentSessionProvider></QueryClientProvider>)
+
+    const renderedTurn = screen.getByTestId('agent-turn-turn-panel')
+    expect(Array.from(renderedTurn.children).map((node) => node.getAttribute('data-role') ?? node.getAttribute('data-part')))
+      .toEqual(['user', 'execution-details', 'assistant'])
+    expect(within(renderedTurn).getByRole('button', { name: /执行详情/ })).toHaveAttribute('aria-expanded', 'false')
+    expect(within(renderedTurn).getByLabelText('Agent 执行步骤')).not.toBeVisible()
+  })
+
   it('renders only assistant messages as safe GFM and keeps user input literal', () => {
     render(<QueryClientProvider client={new QueryClient()}><AgentSessionProvider value={session({
       messages: [

@@ -7,11 +7,13 @@ import { useToast } from '../shared/ui/toast-context'
 import { useAuth } from '../features/auth/auth-context'
 import AvatarDialog, { Avatar } from '../features/profile/AvatarDialog'
 import type { AvatarValue } from '../features/auth/auth.types'
+import { useTodoSummary } from '../features/todos/todo.queries'
 
 export default function ProfilePage() {
   const { account, updateProfile, logout } = useAuth()
   const navigate = useNavigate()
   const { addToast } = useToast()
+  const taskSummary = useTodoSummary()
   const [name, setName] = useState(account?.name ?? '')
   const [email, setEmail] = useState(account?.email ?? '')
   const [timezone, setTimezone] = useState(account?.timezone ?? '')
@@ -55,9 +57,9 @@ export default function ProfilePage() {
       <div className="profile-identity panel-surface"><Avatar avatar={account.avatar} name={account.name} className="profile-identity__avatar" /><div><h2>{account.name}</h2><p>{account.email} · 已登录</p></div><Button variant="secondary" onClick={() => setAvatarOpen(true)}>更换头像</Button></div>
       <div className="profile-grid">
         <form id="profile-form" className="panel-surface profile-form" onSubmit={save} noValidate><h2>账户信息</h2><TextField inputRef={nameRef} name="name" label="显示名称" value={name} error={errors.name} onChange={(event) => setName(event.target.value)} /><TextField inputRef={emailRef} name="email" label="邮箱地址" type="email" spellCheck={false} value={email} error={errors.email} onChange={(event) => setEmail(event.target.value)} /><TextField name="timezone" label="时区" value={timezone} onChange={(event) => setTimezone(event.target.value)} /></form>
-        <section className="panel-surface profile-status"><h2>账户状态</h2><dl><div><dt>登录方式</dt><dd>邮箱登录</dd></div><div><dt>任务总数</dt><dd>{account.taskCount}</dd></div><div><dt>Agent 对话</dt><dd>{account.agentSessionCount} 次</dd></div><div><dt>账户安全</dt><dd className="status-ok">正常</dd></div></dl><Button variant="secondary" onClick={() => setLogoutOpen(true)} className="w-full">退出登录</Button></section>
+        <section className="panel-surface profile-status"><h2>账户状态</h2><dl><div><dt>登录方式</dt><dd>邮箱登录</dd></div><div><dt>任务总数</dt><dd>{taskSummary.total}</dd></div><div><dt>Agent 对话</dt><dd>{account.agentSessionCount} 次</dd></div><div><dt>账户安全</dt><dd className="status-ok">正常</dd></div></dl><Button variant="secondary" onClick={() => setLogoutOpen(true)} className="w-full">退出登录</Button></section>
       </div>
-      <div className="profile-stats" aria-label="使用统计"><div><strong>{account.taskCount}</strong><span>总任务</span></div><div><strong>3</strong><span>已完成</span></div><div><strong>4</strong><span>进行中</span></div><div><strong>{account.agentSessionCount}</strong><span>Agent 对话</span></div></div>
+      <div className="profile-stats" aria-label="使用统计"><div><strong>{taskSummary.total}</strong><span>总任务</span></div><div><strong>{taskSummary.completed}</strong><span>已完成</span></div><div><strong>{taskSummary.active}</strong><span>进行中</span></div><div><strong>{account.agentSessionCount}</strong><span>Agent 对话</span></div></div>
       <AvatarDialog open={avatarOpen} avatar={account.avatar} onOpenChange={setAvatarOpen} onSave={saveAvatar} />
       <ConfirmDialog isOpen={logoutOpen} title="确认退出登录" message="退出后将返回登录页面；当前设备上的头像偏好仍会保留。" confirmLabel="确认退出" onConfirm={confirmLogout} onCancel={() => setLogoutOpen(false)} pending={pending} />
     </section>

@@ -3,6 +3,24 @@ import { reloadMockPage } from '../fixtures/app.fixture'
 
 test.beforeEach(async ({ login }) => { await login() })
 
+test('shows the same live task totals as the tasks dashboard', async ({ page }) => {
+  await page.goto('/tasks')
+  const taskSummary = page.getByRole('region', { name: '任务摘要' })
+  const taskCounts = {
+    total: await taskSummary.getByText('全部任务').locator('..').locator('strong').textContent(),
+    active: await taskSummary.getByText('进行中').locator('..').locator('strong').textContent(),
+    completed: await taskSummary.getByText('已完成').locator('..').locator('strong').textContent(),
+  }
+
+  await page.goto('/profile')
+
+  const profileStats = page.getByLabel('使用统计')
+  await expect(profileStats.getByText('总任务').locator('..').locator('strong')).toHaveText(taskCounts.total ?? '')
+  await expect(profileStats.getByText('进行中').locator('..').locator('strong')).toHaveText(taskCounts.active ?? '')
+  await expect(profileStats.getByText('已完成').locator('..').locator('strong')).toHaveText(taskCounts.completed ?? '')
+  await expect(page.getByText('任务总数').locator('..').locator('dd')).toHaveText(taskCounts.total ?? '')
+})
+
 test('saves display name and timezone and reflects them in the account UI', async ({ page }) => {
   await page.goto('/profile')
   await page.getByLabel('显示名称').fill('更新后的用户')

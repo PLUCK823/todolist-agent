@@ -2,6 +2,7 @@ import { useRef, useState, type KeyboardEvent } from 'react'
 import { IconButton } from '../../shared/ui/IconButton'
 import { AgentMarkdown } from './AgentMarkdown'
 import AgentStepTimeline from './AgentStepTimeline'
+import AgentTurn from './AgentTurn'
 import { useAgentSessionContext } from './agent-session-context'
 import { getAgentStatusPresentation } from './agent-status'
 import { formatAgentMessageTime } from './agent-display'
@@ -22,6 +23,8 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
   const endRef = useRef<HTMLDivElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const status = getAgentStatusPresentation(session.status, session.steps)
+  const turns = [...session.turns].sort((left, right) => left.ordinal - right.ordinal)
+  const currentTurn = turns.at(-1)
 
   const revision = getAgentScrollRevision(session)
   const latestMessage = session.messages.at(-1)
@@ -68,16 +71,35 @@ export default function AgentPanel({ onCollapse, draft: controlledDraft, onDraft
           </section>
         ) : null}
         <div className="agent-panel__suggestions">{suggestions.map((suggestion) => <button type="button" key={suggestion} disabled={!session.canSend} onClick={() => session.send(suggestion)}>{suggestion}</button>)}</div>
-        {session.messages.map((message) => {
-          const time = formatAgentMessageTime(message.createdAt)
-          return (
-          <article key={message.id} className="agent-message" data-role={message.role}>
-            {message.role === 'assistant' ? <AgentMarkdown content={message.content} /> : <p>{message.content}</p>}
-            {time ? <time dateTime={message.createdAt}>{time}</time> : null}
-          </article>
-          )
-        })}
-        <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} canRetry={session.canRetry} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+        {turns.length ? turns.map((turn) => {
+          const isCurrent = turn.id === currentTurn?.id
+          const pendingConfirmationId = isCurrent
+            ? turn.steps.find((step) => step.status === 'waiting_confirmation' && step.confirmationId)?.confirmationId
+            : undefined
+          return <AgentTurn
+            key={turn.id}
+            turn={turn}
+            pendingConfirmationId={pendingConfirmationId}
+            canRetry={isCurrent ? session.canRetry : undefined}
+            canConfirm={isCurrent ? session.canConfirm : undefined}
+            onRetry={isCurrent ? session.retry : undefined}
+            onConfirm={isCurrent ? session.confirm : undefined}
+            onReject={isCurrent ? session.reject : undefined}
+          />
+        }) : (
+          <>
+            {session.messages.map((message) => {
+              const time = formatAgentMessageTime(message.createdAt)
+              return (
+                <article key={message.id} className="agent-message" data-role={message.role}>
+                  {message.role === 'assistant' ? <AgentMarkdown content={message.content} /> : <p>{message.content}</p>}
+                  {time ? <time dateTime={message.createdAt}>{time}</time> : null}
+                </article>
+              )
+            })}
+            <AgentStepTimeline steps={session.steps} capabilities={session.capabilities} canRetry={session.canRetry} onRetry={session.retry} onConfirm={session.confirm} onReject={session.reject} />
+          </>
+        )}
         <div ref={endRef} />
       </div>
 

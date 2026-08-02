@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { screen } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderWithProviders } from '../../test/render'
 import ProfilePage from '../ProfilePage'
@@ -30,6 +30,18 @@ describe('ProfilePage', () => {
     expect(await screen.findByText('总任务')).toBeInTheDocument()
     expect(screen.getByText('已完成')).toBeInTheDocument()
     expect(screen.getByText('进行中')).toBeInTheDocument()
+  })
+
+  it('uses the Todo API summary for all task counts', async () => {
+    renderWithProviders(<ProfilePage />)
+
+    const stats = await screen.findByLabelText('使用统计')
+    await waitFor(() => {
+      expect(within(stats).getByText('总任务').previousElementSibling).toHaveTextContent('4')
+      expect(within(stats).getByText('已完成').previousElementSibling).toHaveTextContent('1')
+      expect(within(stats).getByText('进行中').previousElementSibling).toHaveTextContent('3')
+      expect(screen.getByText('任务总数').nextElementSibling).toHaveTextContent('4')
+    })
   })
 
   it('opens a confirmation before logging out', async () => {

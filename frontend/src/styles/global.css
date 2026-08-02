@@ -753,20 +753,39 @@ figcaption {
 
 .agent-step__result {
   display: grid;
-  gap: 5px;
   margin: 8px 0 0;
   border-radius: 11px;
   padding: 8px;
   background: rgb(103 212 158 / 9%);
 }
 
-.agent-step__result > span {
+.agent-step__result-disclosure {
+  display: flex;
+  width: 100%;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  padding: 3px 5px;
+  background: transparent;
+  color: #8eddb7;
+  text-align: left;
+}
+
+.agent-step__result-disclosure > span:first-child {
   color: #8eddb7;
   font-size: .69rem;
   font-weight: 800;
 }
 
-.agent-step__result pre {
+.agent-step__result-disclosure:hover { background: rgb(103 212 158 / 8%); }
+.agent-step__result-disclosure:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
+.agent-step__result-chevron { font-size: .85rem; transition: transform 160ms ease; }
+.agent-step__result-disclosure[aria-expanded="true"] .agent-step__result-chevron { transform: rotate(180deg); }
+
+.agent-step__result-details pre {
   max-width: 100%;
   margin: 7px 0 0;
   overflow: auto;
@@ -1354,6 +1373,16 @@ figcaption {
 .agent-panel .agent-markdown td { border-color: rgb(255 255 255 / 12%); }
 .agent-panel .agent-markdown tbody tr:hover { background: rgb(113 101 234 / 16%); }
 .agent-panel .agent-markdown a { color: #b8b1ff; }
+.agent-panel .agent-turn__message--assistant {
+  background: rgb(255 255 255 / 8%);
+  color: var(--text-on-dark);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 5%);
+}
+.agent-panel .agent-turn__disclosure { color: rgb(248 248 251 / 72%); }
+.agent-panel .agent-turn__disclosure > span:first-child { color: var(--text-on-dark); }
+.agent-panel .agent-turn__disclosure:hover { background: rgb(255 255 255 / 8%); color: #fff; }
+.agent-panel .agent-turn__region { border-color: rgb(255 255 255 / 12%); }
+.agent-panel .agent-turn__auxiliary { background: rgb(255 255 255 / 7%); color: rgb(248 248 251 / 72%); }
 
 .assistant-conversation .agent-timeline { max-width: 680px; margin: 14px auto; }
 .assistant-conversation .agent-step,
@@ -1370,7 +1399,11 @@ figcaption {
   box-shadow: inset 0 0 0 1px var(--success-surface-border);
 }
 .assistant-conversation .agent-step__result > span,
-.assistant-inspector .agent-step__result > span { color: var(--success-surface-text); }
+.assistant-inspector .agent-step__result > span,
+.assistant-conversation .agent-step__result-disclosure,
+.assistant-conversation .agent-step__result-disclosure > span:first-child,
+.assistant-inspector .agent-step__result-disclosure,
+.assistant-inspector .agent-step__result-disclosure > span:first-child { color: var(--success-surface-text); }
 .assistant-conversation .agent-step__result pre,
 .assistant-inspector .agent-step__result pre { color: var(--success-surface-text); }
 

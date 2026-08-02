@@ -108,6 +108,13 @@ describe('AgentTurn', () => {
 
     await user.click(screen.getByRole('button', { name: /执行详情/ }))
     expect(screen.getAllByLabelText('list_todos 执行结果')[0]).toHaveTextContent('原型')
+    const resultDisclosures = screen.getAllByRole('button', { name: 'list_todos 执行结果详情' })
+    expect(resultDisclosures).toHaveLength(2)
+    expect(resultDisclosures.every((button) => button.getAttribute('aria-expanded') === 'false')).toBe(true)
+    expect(screen.getByText('{"count": 50}')).not.toBeVisible()
+
+    await user.click(resultDisclosures[1])
+
     expect(screen.getByText('{"count": 50}')).toBeVisible()
     expect(screen.getByText('结果已截断')).toBeVisible()
   })

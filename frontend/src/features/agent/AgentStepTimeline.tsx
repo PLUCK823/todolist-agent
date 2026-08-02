@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { Button } from '../../shared/ui/Button'
 import type { AgentCapabilities, AgentStep } from './agent.types'
 import { safeSerializeAgentResult } from './agent-display'
@@ -17,11 +17,25 @@ function formatDuration(durationMs: number) {
 }
 
 function ActionResult({ label, content, truncated }: { label: string; content: string; truncated?: boolean }) {
+  const detailsId = useId()
+  const [expanded, setExpanded] = useState(false)
   return (
     <section className="agent-step__result" aria-label={`${label} 执行结果`}>
-      <span>{label}</span>
-      <pre>{content}</pre>
-      {truncated ? <small>结果已截断</small> : null}
+      <button
+        type="button"
+        className="agent-step__result-disclosure"
+        aria-label={`${label} 执行结果详情`}
+        aria-expanded={expanded}
+        aria-controls={detailsId}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span>{label}</span>
+        <span className="agent-step__result-chevron" aria-hidden="true">⌄</span>
+      </button>
+      <div id={detailsId} className="agent-step__result-details" hidden={!expanded}>
+        <pre>{content}</pre>
+        {truncated ? <small>结果已截断</small> : null}
+      </div>
     </section>
   )
 }

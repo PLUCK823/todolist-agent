@@ -29,13 +29,28 @@ test('renders a successful multi-step run in the collapsible panel', async ({ pa
   await useAgentScenario('success')
   await page.goto('/tasks')
   await sendFromPanel(page, '创建高优先级任务')
-  const timeline = page.getByRole('list', { name: 'Agent 执行步骤' })
+  await expect(page.getByText('好的，已创建高优先级任务。')).toBeVisible()
+  await expect(page.getByRole('status').filter({ hasText: '任务已完成' })).toBeVisible()
+  const turn = page.locator('[data-testid^="agent-turn-"]').last()
+  const executionDisclosure = turn.getByRole('button', { name: /执行详情/ })
+  const timeline = turn.getByRole('list', { name: 'Agent 执行步骤' })
+  await expect(executionDisclosure).toHaveAttribute('aria-expanded', 'false')
+  await expect(timeline).not.toBeVisible()
+
+  await executionDisclosure.click()
+
   await expect(timeline).toContainText('理解请求')
   await expect(timeline).toContainText('调用 Todo API')
   await expect(timeline).toContainText('create_todo')
-  await expect(timeline).toContainText('已完成')
-  await expect(page.getByText('好的，已创建高优先级任务。')).toBeVisible()
-  await expect(page.getByRole('status').filter({ hasText: '任务已完成' })).toBeVisible()
+  const resultDisclosure = turn.getByRole('button', { name: 'create_todo 执行结果详情' })
+  const result = turn.getByLabel('create_todo 执行结果')
+  await expect(resultDisclosure).toHaveAttribute('aria-expanded', 'false')
+  await expect(result.locator('pre')).not.toBeVisible()
+
+  await resultDisclosure.click()
+
+  await expect(result.locator('pre')).toContainText('完成前端原型')
+  await expect(result.locator('pre')).toBeVisible()
   await expect(page.getByRole('button', { name: '查看任务：完成前端原型' })).toBeVisible()
 })
 
@@ -206,6 +221,12 @@ test('shares the same live session with the standalone Agent workspace', async (
   await expect(page.getByRole('log')).toContainText('好的，已创建高优先级任务。')
   await page.getByRole('button', { name: /执行详情/ }).click()
   await expect(page.getByRole('list', { name: 'Agent 执行步骤' })).toBeVisible()
+  const resultDisclosure = page.getByRole('button', { name: 'create_todo 执行结果详情' })
+  const result = page.getByLabel('create_todo 执行结果')
+  await expect(resultDisclosure).toHaveAttribute('aria-expanded', 'false')
+  await expect(result.locator('pre')).not.toBeVisible()
+  await resultDisclosure.click()
+  await expect(result.locator('pre')).toBeVisible()
 })
 
 test('recovers a retryable failure from the standalone Agent workspace', async ({ page, useAgentScenario }) => {

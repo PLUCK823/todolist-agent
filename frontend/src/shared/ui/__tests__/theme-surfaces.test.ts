@@ -59,6 +59,11 @@ describe('theme-aware application surfaces', () => {
     expect(globalStyles).toMatch(/\.assistant-clear-error\s*\{[\s\S]*?background:\s*var\(--danger-surface\)/)
   })
 
+  it('keeps reused Agent turns readable on the dark compact panel', () => {
+    expect(globalStyles).toMatch(/\.agent-panel \.agent-turn__message--assistant\s*\{[\s\S]*?background:\s*rgb\(255 255 255 \/ 8%\)/)
+    expect(globalStyles).toMatch(/\.agent-panel \.agent-turn__disclosure\s*\{[\s\S]*?color:\s*rgb\(248 248 251 \/ 72%\)/)
+  })
+
   it('uses semantic theme surfaces for the quick-question dialog', () => {
     expect(globalStyles).toMatch(
       /\.command-palette\s*\{[\s\S]*?background:\s*var\(--surface\)/,
